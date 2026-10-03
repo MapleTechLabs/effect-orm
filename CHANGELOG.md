@@ -16,6 +16,11 @@
 - Add `onConflictDoNothing` and `onConflictDoUpdate` to an insert (Postgres), with Drizzle's
   options: `target` (columns or `{ constraint }`), `targetWhere`, `set` (a record, or a callback
   over the existing row and `excluded`) and `where`. Add `DialectClauses.onConflict`, optional.
+- Add `select(query)` to an insert: `INSERT ... SELECT` from a query or union, its row checked
+  against the table at the type level. Tenant scope follows the read and where the written
+  tenant comes from.
+- Add `settings(record)` to an insert (ClickHouse): `INSERT ... SETTINGS name = value`. Add
+  `DialectClauses.insertSettings`, optional.
 - Add `CompiledQuery.kind` (`"select"` or `"insert"`); `rawCompiledQuery` takes it as an option.
 - Add `ParamStyle.maxParameters`; Postgres sets 65535, and a statement over it fails to compile.
 - Add `@maple-dev/effect-orm/database`, opt-in (see `docs/database.md`): a `Database` over the

@@ -99,6 +99,41 @@ describe("database", () => {
 			expect(sent[1]).toMatch(/^INSERT INTO events \(OrgId, Id, At, Attrs, Note, Tags\)\nVALUES \('o1', DEFAULT, /)
 		})
 
+		it("runs insert ... select with settings", async () => {
+			const rows = await Effect.runPromise(
+				withDatabase((db) =>
+					Effect.gen(function* () {
+						yield* db.execute(Db.sql`CREATE TABLE spans (OrgId String, Name String, Ms UInt64) ENGINE = MergeTree ORDER BY OrgId`)
+						yield* db.execute(Db.sql`CREATE TABLE daily (OrgId String, Name String, Total UInt64) ENGINE = MergeTree ORDER BY OrgId`)
+						const Spans = CH.table("spans", { OrgId: CH.string, Name: CH.string, Ms: CH.uint64 }, { tenantColumn: "OrgId" })
+						const Daily = CH.table("daily", { OrgId: CH.string, Name: CH.string, Total: CH.uint64 }, { tenantColumn: "OrgId" })
+						yield* db.run(
+							CH.insertInto(Spans)
+								.values([
+									{ OrgId: "o", Name: "a", Ms: 1 },
+									{ OrgId: "o", Name: "a", Ms: 2 },
+									{ OrgId: "p", Name: "b", Ms: 9 },
+								])
+								.settings({ async_insert: 0 }),
+						)
+						yield* db.run(
+							CH.insertInto(Daily)
+								.select(
+									CH.from(Spans)
+										.select(($) => ({ Total: CH.sum($.Ms), OrgId: $.OrgId, Name: $.Name }))
+										.where(($) => [$.OrgId.eq(CH.param.string("org"))])
+										.groupBy("OrgId", "Name"),
+								)
+								.settings({ max_threads: 1 }),
+							{ org: "o" },
+						)
+						return yield* db.run(CH.from(Daily).select("OrgId", "Name", "Total"))
+					}),
+				),
+			)
+			expect(rows).toEqual([{ OrgId: "o", Name: "a", Total: 3 }])
+		})
+
 		it("refuses a transaction before sending anything", async () => {
 			const result = await Effect.runPromise(
 				withDatabase((db, sent) =>

@@ -62,7 +62,7 @@ Note `/sql` exports a `compile` (fragment → string) distinct from the root `co
 | `fromQuery` | `(query, alias) => CHQuery`               |
 | `fromUnion` | `(union, alias) => CHQuery`               |
 | `unionAll`  | `(...queries) => CHUnionQuery`            |
-| `insertInto` | `(table) => CHInsert`; `.values(row \| rows)` sets its rows, `.returning(...)` the RETURNING list, `.onConflictDoNothing(options?)` / `.onConflictDoUpdate(options)` the ON CONFLICT clause (Postgres). See [Inserting rows](./inserts.md) |
+| `insertInto` | `(table) => CHInsert`; `.values(row \| rows)` or `.select(query)` sets its rows, `.settings(record)` ClickHouse `SETTINGS`, `.returning(...)` the RETURNING list, `.onConflictDoNothing(options?)` / `.onConflictDoUpdate(options)` the ON CONFLICT clause (Postgres). See [Inserting rows](./inserts.md) |
 
 ### `CHQuery` methods
 
@@ -279,7 +279,7 @@ Types: `WindowSpec`, `CompiledWindowSpec`, `WindowFrameBound`, `WindowRowsFrame`
 
 **Everything else** — `Table`, `TableOptions`, `Expr`, `ColumnRef`, `Condition`, `Comparable`
 (what a value of a type may be compared against), `MapValueOf`, `Subquery`, `ParamMarker`,
-`ParamKind`, `CHQuery`, `CHUnionQuery`, `CHInsert`, `InsertRow`, `InsertRowOf`, `InsertValue`, `ConflictTarget`, `ConflictSet`, `OnConflictDoNothing`, `OnConflictDoUpdate`, `ColumnAccessor`, `JoinedColumnAccessor`,
+`ParamKind`, `CHQuery`, `CHUnionQuery`, `CHInsert`, `InsertRow`, `InsertRowOf`, `InsertValue`, `InsertSelectMisfits`, `InsertSelectMissing`, `InsertSettingValue`, `ConflictTarget`, `ConflictSet`, `OnConflictDoNothing`, `OnConflictDoUpdate`, `ColumnAccessor`, `JoinedColumnAccessor`,
 `JoinOnCallback`, `CompiledQuery`, `CompiledQueryInput`, `CompiledQueryRowSchema`, `RowSchemaMismatch`, `TenantScope`, `Dialect`, `DialectClauses`, `DialectTransactions`, `IsolationLevel`, `TransactionSettings`, `ParamStyle`, `FnResult`,
 `WindowFunnelMode`, `WindowSpec`, `WindowRowsFrame`, `WindowFrameBound`,
 `WindowOrderDirection`, `CompiledWindowSpec`.

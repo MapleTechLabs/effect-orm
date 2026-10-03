@@ -455,6 +455,26 @@ layer(Live, { excludeTestServices: true })("Database on PGlite", (it) => {
 		}),
 	)
 
+	it.effect("insert ... select copies rows, with ON CONFLICT and RETURNING", () =>
+		Effect.gen(function* () {
+			yield* Db.execute(Db.sql`CREATE TABLE src (org text NOT NULL, n int4 NOT NULL)`)
+			yield* Db.execute(Db.sql`CREATE TABLE dst (org text PRIMARY KEY, total int8 NOT NULL)`)
+			yield* Db.execute(Db.sql`INSERT INTO src VALUES ('a', 1), ('a', 2), ('b', 5)`)
+			const Src = CH.table("src", { org: PG.text, n: PG.int4 })
+			const Dst = CH.table("dst", { org: PG.text, total: PG.int8 })
+			const rollup = CH.insertInto(Dst)
+				.select(CH.from(Src).select(($) => ({ org: $.org, total: CH.coalesce(PG.sum($.n), CH.lit(0)) })).groupBy("org"))
+				.onConflictDoUpdate({ target: ["org"], set: ($, excluded) => ({ total: $.total.add(excluded.total) }) })
+				.returning("org", "total")
+			expect(yield* Db.run(rollup)).toHaveLength(2)
+			const again = yield* Db.run(rollup)
+			expect([...again].sort((x, y) => x.org.localeCompare(y.org))).toEqual([
+				{ org: "a", total: 6 },
+				{ org: "b", total: 10 },
+			])
+		}),
+	)
+
 	it.effect("an insert inside a failed transaction rolls back", () =>
 		Effect.gen(function* () {
 			const table = yield* freshTable

@@ -14,8 +14,9 @@
 //   yield* Database.run(insert, { id, orgId })
 
 import type { Comparable, Condition, Expr, Widen } from "./expr"
-import type { ColumnAccessor, InferOutput } from "./query"
+import type { CHQuery, ColumnAccessor, InferOutput } from "./query"
 import type { Table } from "./table"
+import type { CHUnionQuery } from "./union"
 import type { CHType, ColumnDefs, InferTS } from "./types"
 
 /**
@@ -60,6 +61,47 @@ export type InsertRow<Cols extends ColumnDefs, Defaulted extends string = never,
 		readonly [K in Exclude<OptionalKeys<Cols, Defaulted> & keyof Cols, Known<Computed>>]?: InsertValue<Cols[K]> | undefined
 	}
 >
+
+type RequiredKeys<Cols extends ColumnDefs, Defaulted extends string, Computed extends string> = Exclude<
+	keyof Cols & string,
+	OptionalKeys<Cols, Defaulted> | Known<Computed>
+>
+
+/** The row a query or union selects. */
+type SelectedRow<Q> = Q extends { readonly _phantom?: { readonly output: infer Output } } ? Output : never
+
+/** Selected columns the table cannot take: not an insertable column, or of another type. */
+export type InsertSelectMisfits<Output, Cols extends ColumnDefs, Computed extends string = never> = {
+	[K in keyof Output]: K extends Exclude<keyof Cols & string, Known<Computed>>
+		? [Output[K]] extends [InferTS<Cols[K]>]
+			? never
+			: K
+		: K
+}[keyof Output]
+
+/** Required columns of the table the query does not select. */
+export type InsertSelectMissing<
+	Output,
+	Cols extends ColumnDefs,
+	Defaulted extends string = never,
+	Computed extends string = never,
+> = Exclude<RequiredKeys<Cols, Defaulted, Computed>, keyof Output>
+
+/**
+ * `unknown` when a query's row fits the table, otherwise a property naming
+ * what does not, so the error says which columns to fix.
+ */
+type SelectFits<Output, Cols extends ColumnDefs, Defaulted extends string, Computed extends string> = ([
+	InsertSelectMisfits<Output, Cols, Computed>,
+] extends [never]
+	? unknown
+	: { readonly targetCannotTake: InsertSelectMisfits<Output, Cols, Computed> }) &
+	([InsertSelectMissing<Output, Cols, Defaulted, Computed>] extends [never]
+		? unknown
+		: { readonly missingColumns: InsertSelectMissing<Output, Cols, Defaulted, Computed> })
+
+/** A ClickHouse setting's value, as `SETTINGS name = value` writes it. */
+export type InsertSettingValue = string | number | boolean
 
 /** The insert row of a table value: `InsertRowOf<typeof ApiKeys>`. */
 export type InsertRowOf<T> =
@@ -113,8 +155,12 @@ export type ConflictClause =
 /** @internal — runtime insert state */
 export interface CHInsertState {
 	readonly table: Table<string, ColumnDefs>
-	/** Set by `values`. Compiling without it is a defect. */
+	/** Set by `values`. Compiling without it or `selectQuery` is a defect. */
 	readonly rows?: ReadonlyArray<Readonly<Record<string, unknown>>>
+	/** Set by `select`, which clears `rows` (and `values` clears it). */
+	readonly selectQuery?: CHQuery<any, any, any, any> | CHUnionQuery<any>
+	/** Set by `settings`: ClickHouse `SETTINGS` for this insert. */
+	readonly settings?: Readonly<Record<string, InsertSettingValue>>
 	/** Set by `returning`: the RETURNING list, as a select callback. */
 	readonly returningFn?: ($: any) => Record<string, Expr<any>>
 	/** Set by `onConflictDoNothing` / `onConflictDoUpdate`. */
@@ -141,6 +187,24 @@ export interface CHInsert<
 	values(
 		rows: InsertRow<Cols, Defaulted, Computed> | ReadonlyArray<InsertRow<Cols, Defaulted, Computed>>,
 	): CHInsert<Cols, Defaulted, Computed, Output>
+
+	/**
+	 * `INSERT ... SELECT`: insert the rows a query (or union) selects. Each
+	 * selected alias names the column it is written to, so the query must
+	 * select every required column, and only columns the table can take, of
+	 * their types. Replaces any `values`.
+	 */
+	select<Q extends CHQuery<any, any, any, any> | CHUnionQuery<any>>(
+		query: Q & SelectFits<SelectedRow<Q>, Cols, Defaulted, Computed>,
+	): CHInsert<Cols, Defaulted, Computed, Output>
+
+	/**
+	 * ClickHouse `SETTINGS` for this insert, such as
+	 * `{ async_insert: 1, wait_for_async_insert: 1 }`. Names must be plain
+	 * identifiers; values are written as literals. Calling it again replaces
+	 * them. On a dialect without insert settings (Postgres) compiling is a defect.
+	 */
+	settings(settings: Readonly<Record<string, InsertSettingValue>>): CHInsert<Cols, Defaulted, Computed, Output>
 
 	/**
 	 * Return the inserted rows: column names, or a callback building an
@@ -178,9 +242,12 @@ const makeInsert = <Cols extends ColumnDefs, Defaulted extends string, Computed 
 	values: (rows) =>
 		makeInsert({
 			...state,
+			selectQuery: undefined,
 			// Copied, so a caller pushing to its array later does not change the insert.
 			rows: Array.isArray(rows) ? [...rows] : [rows as Readonly<Record<string, unknown>>],
 		}),
+	select: (query) => makeInsert({ ...state, rows: undefined, selectQuery: query }),
+	settings: (settings) => makeInsert({ ...state, settings: { ...settings } }),
 	returning: ((...args: ReadonlyArray<unknown>) => {
 		const [first] = args
 		const returningFn =

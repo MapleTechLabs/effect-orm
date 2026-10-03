@@ -110,6 +110,28 @@ CH.insertInto(Counters).values({ key: "k", count: 1 }).onConflictDoUpdate({ set:
 // @ts-expect-error a computed column cannot be set
 CH.insertInto(Spans).values({ OrgId: "o", Label: "l" }).onConflictDoUpdate({ target: ["OrgId"], set: { Day: "x" } })
 
+// INSERT ... SELECT: the selected row must fit the table.
+const Daily = CH.table("daily", { OrgId: CH.string, Total: CH.uint64, Note: CH.nullable(CH.string) })
+const Source = CH.table("source", { OrgId: CH.string, Ms: CH.uint64, Label: CH.string })
+CH.insertInto(Daily).select(CH.from(Source).select(($) => ({ OrgId: $.OrgId, Total: $.Ms })))
+CH.insertInto(Daily).select(CH.from(Source).select(($) => ({ OrgId: $.OrgId, Total: $.Ms, Note: $.Label })))
+CH.insertInto(Daily).select(
+	CH.unionAll(CH.from(Source).select(($) => ({ OrgId: $.OrgId, Total: $.Ms })), CH.from(Source).select(($) => ({ OrgId: $.OrgId, Total: $.Ms }))),
+)
+// @ts-expect-error Total is required and not selected
+CH.insertInto(Daily).select(CH.from(Source).select("OrgId"))
+// @ts-expect-error Label is not a column of daily
+CH.insertInto(Daily).select(CH.from(Source).select(($) => ({ OrgId: $.OrgId, Total: $.Ms, Label: $.Label })))
+// @ts-expect-error Total is a number, not a string
+CH.insertInto(Daily).select(CH.from(Source).select(($) => ({ OrgId: $.OrgId, Total: $.Label })))
+// @ts-expect-error a computed column cannot be selected into
+CH.insertInto(Spans).select(CH.from(Spans).select("OrgId", "Label", "Day"))
+
+// settings take plain values.
+CH.insertInto(Daily).values({ OrgId: "o", Total: 1 }).settings({ async_insert: 1, wait_for_async_insert: true })
+// @ts-expect-error not a setting value
+CH.insertInto(Daily).values({ OrgId: "o", Total: 1 }).settings({ async_insert: [1] })
+
 // An insert without RETURNING runs to no rows; compile gives a CompiledQuery.
 const insert = CH.insertInto(Plain).values({ A: "a", B: 1 })
 expectTypeOf<RowOf<typeof insert>>().toEqualTypeOf<never>()

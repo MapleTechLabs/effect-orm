@@ -90,6 +90,37 @@ the codec rejects fails to compile with a `QueryBuilderError` that names the row
   several rows is bound once. A statement over 65535 bound values (Postgres's limit) fails to
   compile instead of being split: send fewer rows per statement.
 
+## Insert ... select
+
+`select(query)` inserts the rows a query (or a `unionAll`) selects, instead of `values`. Each
+selected alias names the column it goes into, so select under the target's column names:
+
+```ts
+const Spans = CH.table("spans", { OrgId: CH.string, Name: CH.string, Ms: CH.uint64 }, { tenantColumn: "OrgId" })
+const Daily = CH.table("daily", { OrgId: CH.string, Name: CH.string, Total: CH.uint64 }, { tenantColumn: "OrgId" })
+
+CH.insertInto(Daily).select(
+	CH.from(Spans)
+		.select(($) => ({ OrgId: $.OrgId, Name: $.Name, Total: CH.sum($.Ms) }))
+		.where(($) => [$.OrgId.eq(CH.param.string("orgId"))])
+		.groupBy("OrgId", "Name"),
+)
+// INSERT INTO daily (OrgId, Name, Total)
+// SELECT ... FROM spans WHERE spans.OrgId = 'o1' GROUP BY OrgId, Name
+```
+
+The selected row is checked against the table: selecting a column the table does not have (or
+a computed one), selecting a value of another type, or leaving out a required column is a type
+error naming the columns (`targetCannotTake`, `missingColumns`). A nullable result, such as a
+Postgres `sum`, does not fit a NOT NULL column; wrap it in `coalesce`.
+
+The column list is the aliases in select order, which is the order the SELECT writes them, so
+ClickHouse and Postgres agree. `returning` and `onConflict*` work with `select` as with
+`values`. `select` and `values` replace each other.
+
+A long `INSERT ... SELECT` on ClickHouse (a backfill over a big table) can outlast an HTTP
+timeout; run those in slices.
+
 ## Returning
 
 On Postgres, `returning` adds a RETURNING list and `Database.run` returns the inserted rows,
@@ -149,12 +180,31 @@ RETURNING "key" AS "key", "count" AS "count"
 - Calling either again replaces the clause. ClickHouse has no `ON CONFLICT` (deduplicate with a
   `ReplacingMergeTree` instead), so compiling one for it is a `QueryBuilderDefect`.
 
+## Settings
+
+On ClickHouse, `settings` adds a `SETTINGS` clause to the insert, before `VALUES` or the
+`SELECT`:
+
+```ts
+CH.insertInto(Daily).values(rows).settings({ async_insert: 1, wait_for_async_insert: 1 })
+// INSERT INTO daily (OrgId, Name, Total) SETTINGS async_insert = 1, wait_for_async_insert = 1
+// VALUES ...
+```
+
+Names must be plain identifiers; values (strings, numbers, booleans) are written as literals.
+Calling it again replaces them. Postgres has no insert settings, so compiling one with
+`settings` for it is a `QueryBuilderDefect`.
+
 ## Tenant scope
 
 An insert has a `tenantScope` like a query, worked out the same way. On a table with a
 `tenantColumn`, it is `"single-tenant"` when every row gives that column the same value or the
 same param, and `"cross-tenant"` when rows differ or a row uses another expression. An
-`onConflictDoUpdate` that sets the tenant column counts as one more row. A table
+`onConflictDoUpdate` that sets the tenant column counts as one more row.
+
+An `INSERT ... SELECT` into a tenant table is `"single-tenant"` when the SELECT is, and each row
+takes its tenant from a tenant column of the source or from the same param that pins the SELECT.
+Into a table without a tenant column, the insert has the SELECT's scope: what it reads. A table
 without a tenant column gives `"untenanted"`.
 
 ## Failures
@@ -170,6 +220,7 @@ without a tenant column gives `"untenanted"`.
 | `returning` for a dialect without RETURNING       | `QueryBuilderDefect`                     |
 | `onConflictDoUpdate` setting no or unknown columns | `QueryBuilderError` `InvalidArguments`  |
 | `onConflict*` without ON CONFLICT, a bad target   | `QueryBuilderDefect`                     |
+| `settings` without insert settings, a bad name    | `QueryBuilderDefect`                     |
 
 _(Backed by `src/ch/insert.test.ts`, `src/database/database.test.ts` and
 `tests/database.clickhouse.test.ts`.)_

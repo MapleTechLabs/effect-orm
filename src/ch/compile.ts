@@ -12,7 +12,7 @@ import type { CHQuery, CHQueryState } from "./query"
 import type { CHUnionQuery } from "./union"
 import { isInsert, type CHInsert } from "./insert"
 import { createColumnAccessor, createQualifiedColumnAccessor, createJoinedColumnAccessor, sourceAlias } from "./query"
-import { aliased, columnTypeOf, isExprLike } from "./expr"
+import { aliased, columnTypeOf, isExprLike, type Expr } from "./expr"
 import { raw, identPath, quoteIdent, quoteIdentPath, compile as compileSqlFragment } from "../sql/sql-fragment"
 import { splitTerminalClauses } from "../sql/terminal-clauses"
 import { compileQuery, type SqlQuery } from "../sql/sql-query"
@@ -23,7 +23,7 @@ import { checkedLiteral, clickhouseDialect, currentDialect, withDialect, type Di
 import { Effect, Option, Schema } from "effect"
 import { QueryBuilderDefect, QueryBuilderError } from "./errors"
 import { withSubqueryCompiler } from "./subquery-context"
-import { tenantBoundOf, tenantPredicatesOf, withTenantBound, type TenantPredicate } from "./tenant"
+import { tenantBoundOf, tenantColumnOf, tenantPredicatesOf, withTenantBound, type TenantPredicate } from "./tenant"
 
 // `QueryBuilderError` moved to ./errors so `expr.ts` can raise it too; still
 // exported from here, which is where every caller imports it from.
@@ -1420,14 +1420,188 @@ const returningOf = (insert: CHInsert<any, any, any, any>) => {
 }
 
 /**
- * An INSERT ... VALUES. Columns are written in table order, so two rows with
- * their keys in different orders cannot swap values; a column some rows leave
- * out is `DEFAULT` in those rows, which both dialects accept.
+ * The column list and SQL of an `INSERT ... SELECT` source. The selected
+ * aliases name the columns, in select order, which is also the order the
+ * SELECT writes them in, so positional and named matching agree.
+ */
+const insertSelectSource = (
+	insert: CHInsert<any, any, any, any>,
+	query: CHQuery<any, any, any, any> | CHUnionQuery<any>,
+	values: Record<string, unknown>,
+) => {
+	const { table } = insert._state
+	const isUnion = "_tag" in query && query._tag === "CHUnionQuery"
+	const exprs = selectExprsOf(isUnion ? (query as CHUnionQuery<any>)._state.queries[0]! : (query as CHQuery<any, any, any, any>)) ?? {}
+	const columns = Object.keys(exprs)
+	const computed = new Set<string>(table.computed ?? [])
+	// The query is written in source, so a column the table cannot take is a
+	// defect, as the type error on `select` says.
+	for (const column of columns) {
+		if (!Object.hasOwn(table.columns, column) || computed.has(column)) {
+			throw new QueryBuilderDefect({
+				message: `insertInto(${table.name}): the query selects ${JSON.stringify(column)}, which is not an insertable column of the table`,
+			})
+		}
+	}
+	const inner = isUnion
+		? compileUnionInner(query as CHUnionQuery<any>, values, { nested: true })
+		: compileInner(query as CHQuery<any, any, any, any>, values, { skipFormat: true, nested: true })
+	const sql = isUnion && currentDialect().clauses.format ? splitTerminalClauses(inner.sql).body : inner.sql
+	return { columns, exprs, inner, sql }
+}
+
+/** `SETTINGS a = 1, b = 'x'`, or `""` without settings. */
+const insertSettingsClause = (insert: CHInsert<any, any, any, any>): string => {
+	const { table, settings } = insert._state
+	const entries = Object.entries(settings ?? {})
+	if (entries.length === 0) return ""
+	const dialect = currentDialect()
+	if (dialect.clauses.insertSettings !== true) {
+		throw new QueryBuilderDefect({
+			message: `insertInto(${table.name}): settings() has no meaning for the ${dialect.name} dialect, which has no INSERT SETTINGS`,
+		})
+	}
+	return ` SETTINGS ${entries
+		.map(([name, value]) => {
+			if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
+				throw new QueryBuilderDefect({ message: `insertInto(${table.name}): ${JSON.stringify(name)} is not a setting name` })
+			}
+			return `${name} = ${checkedLiteral(dialect, value, `setting ${name}`)}`
+		})
+		.join(", ")}`
+}
+
+/**
+ * An INSERT ... VALUES or INSERT ... SELECT. For VALUES, columns are written in
+ * table order, so two rows with their keys in different orders cannot swap
+ * values, and a column some rows leave out is `DEFAULT` in those rows, which
+ * both dialects accept.
  */
 function compileInsert(insert: CHInsert<any, any, any, any>, params: Record<string, unknown>): CompiledQuery<any, undefined> {
-	const { table, rows } = insert._state
+	const { table, rows, selectQuery } = insert._state
 	const where = `insertInto(${table.name})`
-	if (rows === undefined) throw new QueryBuilderDefect({ message: `${where}: values() is required` })
+	if (rows === undefined && selectQuery === undefined) {
+		throw new QueryBuilderDefect({ message: `${where}: values() or select() is required` })
+	}
+	const dialect = currentDialect()
+	const values: Record<string, unknown> = { ...params }
+	let next = 0
+	const cell = (column: string, value: unknown, context: string): string => {
+		if (value === undefined) return "DEFAULT"
+		if (isExprLike(value)) return compileSqlFragment(value.toFragment())
+		const wire = encodeValue(table.columns[column]!.literalSchema, value, `${where}: ${context}, column ${column}`)
+		let name = `${VALUE_PARAM}${next++}`
+		while (Object.hasOwn(params, name)) name = `${VALUE_PARAM}${next++}`
+		values[name] = wire
+		return compileSqlFragment(param.of(insertWireValue, name).toFragment())
+	}
+
+	// A tenant table's insert is single-tenant when every row it writes (and an
+	// upsert's SET, if it writes the column) pins the tenant column to the same
+	// value or param. Any other expression, a NULL or a default could be anything.
+	const tenant = table.tenantColumn
+	const bounds = new Set<string>()
+	let pinned = tenant !== undefined
+	const pin = (value: unknown, sql: string): void => {
+		if (!pinned) return
+		if (value === undefined || value === null || (isExprLike(value) && !("_paramName" in value))) pinned = false
+		else bounds.add(inlineParams(sql, values))
+	}
+
+	const [columns, source, conflictSql, readScope] = withSubqueryCompiler(
+		(subquery) =>
+			typeof subquery === "string" ? subquery : compileInner(subquery, values, { skipFormat: true, nested: true }).sql,
+		() => {
+			let columns: ReadonlyArray<string>
+			let source: string
+			// What the statement reads, besides what it writes: an INSERT ... SELECT
+			// into any table reads with the SELECT's scope.
+			let readScope: TenantScope | undefined
+			if (rows !== undefined) {
+				columns = valuesColumns(table, rows)
+				if (tenant !== undefined && !columns.includes(tenant)) pinned = false
+				const tuples = rows.map((row, index) => {
+					const cells = columns.map((column) => {
+						const value = row[column]
+						const sql = cell(column, value, `row ${index}`)
+						if (column === tenant) pin(value, sql)
+						return sql
+					})
+					return `(${cells.join(", ")})`
+				})
+				source = `VALUES ${tuples.join(", ")}`
+			} else {
+				const selected = insertSelectSource(insert, selectQuery!, values)
+				columns = selected.columns
+				source = selected.sql
+				readScope = selected.inner.tenantScope
+				const bound = tenantBoundOf(selected.inner)
+				if (tenant !== undefined) {
+					// The written tenant is pinned when the read is, and the row takes its
+					// tenant from a tenant column of the source or from that same value.
+					const expr = selected.exprs[tenant] as Expr<unknown> | undefined
+					const fromSource = expr !== undefined && isExprLike(expr) && tenantColumnOf(expr) !== undefined
+					const sameValue =
+						expr !== undefined &&
+						isExprLike(expr) &&
+						"_paramName" in expr &&
+						inlineParams(compileSqlFragment(expr.toFragment()), values) === bound
+					if (readScope !== "single-tenant" || bound === undefined || !(fromSource || sameValue)) pinned = false
+					else bounds.add(bound)
+				}
+			}
+			const conflictSql = onConflictClause(insert, cell, (column, value, sql) => {
+				if (column === tenant) pin(value, sql)
+			})
+			return [columns, source, conflictSql, readScope] as const
+		},
+	)
+
+	const returning = returningOf(insert)
+	const returningSql =
+		returning === undefined
+			? ""
+			: `\nRETURNING ${returning.aliases.map((alias) => compileSqlFragment(aliased(returning.exprs[alias]!, alias))).join(", ")}`
+	const rendered = renderParams(
+		`INSERT INTO ${quoteIdentPath(table.name)} (${columns.map(quoteIdent).join(", ")})${insertSettingsClause(insert)}\n${source}${conflictSql}${returningSql}`,
+		values,
+		dialect,
+	)
+	const tenantScope: TenantScope =
+		tenant === undefined
+			? (readScope ?? "untenanted")
+			: pinned && bounds.size === 1
+				? "single-tenant"
+				: "cross-tenant"
+	const tenantBound =
+		tenantScope !== "single-tenant" ? undefined : tenant === undefined ? undefined : [...bounds][0]
+	const returnedSchema = returning !== undefined && "schema" in returning.derived ? returning.derived.schema : undefined
+
+	return withTenantBound(
+		makeCompiledQuery<any, undefined>(
+			rendered.sql,
+			rendered.parameters,
+			tenantScope,
+			returning === undefined || returnedSchema !== undefined ? "derived" : "none",
+			() => (returning === undefined ? EMPTY_ROW : returnedSchema),
+			undefined,
+			returning !== undefined && "untyped" in returning.derived ? returning.derived.untyped : [],
+			undefined,
+			undefined,
+			dialect.name,
+			"insert",
+			returning?.aliases,
+		),
+		tenantBound,
+	)
+}
+
+/** The VALUES rows' columns, in table order, after checking every key. */
+const valuesColumns = (
+	table: CHInsert<any, any, any, any>["_state"]["table"],
+	rows: ReadonlyArray<Readonly<Record<string, unknown>>>,
+): ReadonlyArray<string> => {
+	const where = `insertInto(${table.name})`
 	// The rows usually come from data, so their number and keys are failures, not defects.
 	if (rows.length === 0) {
 		throw new QueryBuilderError({ code: "InvalidArguments", message: `${where}: values() was given no rows` })
@@ -1456,80 +1630,5 @@ function compileInsert(insert: CHInsert<any, any, any, any>, params: Record<stri
 	if (columns.length === 0) {
 		throw new QueryBuilderError({ code: "InvalidArguments", message: `${where}: every row is empty; give at least one column` })
 	}
-
-	const dialect = currentDialect()
-	const values: Record<string, unknown> = { ...params }
-	let next = 0
-	const cell = (column: string, value: unknown, context: string): string => {
-		if (value === undefined) return "DEFAULT"
-		if (isExprLike(value)) return compileSqlFragment(value.toFragment())
-		const wire = encodeValue(table.columns[column]!.literalSchema, value, `${where}: ${context}, column ${column}`)
-		let name = `${VALUE_PARAM}${next++}`
-		while (Object.hasOwn(params, name)) name = `${VALUE_PARAM}${next++}`
-		values[name] = wire
-		return compileSqlFragment(param.of(insertWireValue, name).toFragment())
-	}
-
-	// A tenant table's insert is single-tenant when every row (and an upsert's
-	// SET, if it writes the column) pins the tenant column to the same value or
-	// param. Any other expression, a NULL or a default could be anything.
-	const tenant = table.tenantColumn
-	const bounds = new Set<string>()
-	let pinned = tenant !== undefined && present.has(tenant)
-	const pin = (value: unknown, sql: string): void => {
-		if (!pinned) return
-		if (value === undefined || value === null || (isExprLike(value) && !("_paramName" in value))) pinned = false
-		else bounds.add(inlineParams(sql, values))
-	}
-
-	const [tuples, conflictSql] = withSubqueryCompiler(
-		(subquery) =>
-			typeof subquery === "string" ? subquery : compileInner(subquery, values, { skipFormat: true, nested: true }).sql,
-		() => {
-			const tuples = rows.map((row, index) => {
-				const cells = columns.map((column) => {
-					const value = row[column]
-					const sql = cell(column, value, `row ${index}`)
-					if (column === tenant) pin(value, sql)
-					return sql
-				})
-				return `(${cells.join(", ")})`
-			})
-			return [tuples, onConflictClause(insert, cell, (column, value, sql) => {
-				if (column === tenant) pin(value, sql)
-			})] as const
-		},
-	)
-
-	const returning = returningOf(insert)
-	const returningSql =
-		returning === undefined
-			? ""
-			: `\nRETURNING ${returning.aliases.map((alias) => compileSqlFragment(aliased(returning.exprs[alias]!, alias))).join(", ")}`
-	const rendered = renderParams(
-		`INSERT INTO ${quoteIdentPath(table.name)} (${columns.map(quoteIdent).join(", ")})\nVALUES ${tuples.join(", ")}${conflictSql}${returningSql}`,
-		values,
-		dialect,
-	)
-	const returnedSchema = returning !== undefined && "schema" in returning.derived ? returning.derived.schema : undefined
-	const tenantScope: TenantScope =
-		tenant === undefined ? "untenanted" : pinned && bounds.size === 1 ? "single-tenant" : "cross-tenant"
-
-	return withTenantBound(
-		makeCompiledQuery<any, undefined>(
-			rendered.sql,
-			rendered.parameters,
-			tenantScope,
-			returning === undefined || returnedSchema !== undefined ? "derived" : "none",
-			() => (returning === undefined ? EMPTY_ROW : returnedSchema),
-			undefined,
-			returning !== undefined && "untyped" in returning.derived ? returning.derived.untyped : [],
-			undefined,
-			undefined,
-			dialect.name,
-			"insert",
-			returning?.aliases,
-		),
-		tenantScope === "single-tenant" ? [...bounds][0] : undefined,
-	)
+	return columns
 }

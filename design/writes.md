@@ -1,7 +1,8 @@
 # Writes: INSERT
 
-Status: phases 1 to 3 built (`values`, `returning`, `onConflictDoNothing` /
-`onConflictDoUpdate`, see `docs/inserts.md`); phase 4 not started. Section 11 lists where the build differs from the plan. UPDATE and DELETE come later and
+Status: phases 1 to 4 built (`values`, `returning`, `onConflictDoNothing` /
+`onConflictDoUpdate`, `select`, `settings`; see `docs/inserts.md`). `encodeInsertRows` (§7) is
+not built: no consumer has asked for it. Section 11 lists where the build differs from the plan. UPDATE and DELETE come later and
 will reuse what this note sets up (the write-statement state, the `RETURNING` path, value
 encoding).
 
@@ -250,3 +251,10 @@ note, reusing `kind: "write"`, the returning path and the `set` record type from
   `.onConflict(target).doUpdate(...)` in §6: Maple's 68 call sites then move over with renames.
   `$` in `set` and `where` is qualified with the table name (`"counters"."count"`), because an
   unqualified column there is ambiguous with `excluded`.
+- **`INSERT ... SELECT` checks types with its own `InsertSelectMisfits` / `InsertSelectMissing`**
+  rather than moving `MisfitColumns` out of `schema/define.ts`: an insert also has to exclude
+  computed columns and require the ones without a default, which a materialized view does not.
+  Its tenant scope is the SELECT's for an untenanted target (the read), and for a tenant target
+  single-tenant only when the read is and each row takes its tenant from a source tenant column
+  or the same param.
+- **Settings are a dialect clause**, `DialectClauses.insertSettings`, like the others.

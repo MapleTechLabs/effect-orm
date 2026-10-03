@@ -212,6 +212,94 @@ describe("insertInto", () => {
 		)
 	})
 
+	describe("insert ... select", () => {
+		const Spans = CH.table("spans", { OrgId: CH.string, Name: CH.string, Ms: CH.uint64 }, { tenantColumn: "OrgId" })
+		const Daily = CH.table("daily", { OrgId: CH.string, Name: CH.string, Total: CH.uint64 }, { tenantColumn: "OrgId" })
+
+		it("names the columns from the selected aliases, in select order", () => {
+			const compiled = CH.compileUnsafe(
+				CH.insertInto(Daily).select(
+					CH.from(Spans)
+						.select(($) => ({ Total: CH.sum($.Ms), OrgId: $.OrgId, Name: $.Name }))
+						.where(($) => [$.OrgId.eq(CH.param.string("org"))])
+						.groupBy("OrgId", "Name"),
+				),
+				{ org: "o" },
+			)
+			expect(compiled.sql).toMatch(/^INSERT INTO daily \(Total, OrgId, Name\)\nSELECT\s+sum\(spans\.Ms\) AS Total,\s+spans\.OrgId AS OrgId,/)
+			expect(compiled.sql).toMatch(/WHERE spans\.OrgId = 'o'\s+GROUP BY OrgId, Name$/)
+			expect(compiled.tenantScope).toBe("single-tenant")
+		})
+
+		it("binds the query's params on Postgres, with values and select sharing the numbering", () => {
+			const Src = CH.table("src", { org: PG.text, n: PG.int4 })
+			const Dst = CH.table("dst", { org: PG.text, n: PG.int4 })
+			const compiled = PG.compileUnsafe(
+				CH.insertInto(Dst)
+					.select(CH.from(Src).select("org", "n").where(($) => [$.org.eq(CH.param.string("org"))]))
+					.onConflictDoUpdate({ target: ["org"], set: { n: CH.param.int("n") } }),
+				{ org: "o", n: 3 },
+			)
+			expect(compiled.sql).toMatch(/^INSERT INTO "dst" \("org", "n"\)\nSELECT[\s\S]*WHERE "src"\."org" = \$1\nON CONFLICT \("org"\) DO UPDATE SET "n" = \$2$/)
+			expect(compiled.parameters).toEqual(["o", 3])
+		})
+
+		it("takes a union", () => {
+			const branch = (org: string) =>
+				CH.from(Spans).select(($) => ({ OrgId: $.OrgId, Name: $.Name, Total: $.Ms })).where(($) => [$.OrgId.eq(org)])
+			const compiled = CH.compileUnsafe(CH.insertInto(Daily).select(CH.unionAll(branch("a"), branch("b"))))
+			expect(compiled.sql).toMatch(/^INSERT INTO daily \(OrgId, Name, Total\)\nSELECT[\s\S]*UNION ALL[\s\S]*'b'$/)
+			expect(compiled.tenantScope).toBe("cross-tenant")
+		})
+
+		it("tenant scope follows the read and where the tenant column comes from", () => {
+			const scope = (query: CH.CHQuery<any, any, any, any>, params: Record<string, unknown> = { org: "o" }) =>
+				CH.compileUnsafe(CH.insertInto(Daily).select(query as any), params).tenantScope
+			const pinned = CH.from(Spans).where(($) => [$.OrgId.eq(CH.param.string("org"))])
+			expect(scope(pinned.select(($) => ({ OrgId: $.OrgId, Name: $.Name, Total: $.Ms })))).toBe("single-tenant")
+			expect(scope(pinned.select(($) => ({ OrgId: CH.param.string("org"), Name: $.Name, Total: $.Ms })))).toBe("single-tenant")
+			// Pinned read, but the rows are written to another tenant.
+			expect(scope(pinned.select(($) => ({ OrgId: CH.param.string("other"), Name: $.Name, Total: $.Ms })), { org: "o", other: "p" })).toBe(
+				"cross-tenant",
+			)
+			expect(scope(CH.from(Spans).select(($) => ({ OrgId: $.OrgId, Name: $.Name, Total: $.Ms })))).toBe("cross-tenant")
+			// An untenanted target reads with the query's scope.
+			const Names = CH.table("names", { Name: CH.string })
+			expect(CH.compileUnsafe(CH.insertInto(Names).select(pinned.select("Name")), { org: "o" }).tenantScope).toBe("single-tenant")
+			expect(CH.compileUnsafe(CH.insertInto(Names).select(CH.from(Spans).select("Name"))).tenantScope).toBe("cross-tenant")
+		})
+
+		it("select and values replace each other", () => {
+			const fromQuery = CH.insertInto(Daily).select(CH.from(Daily).select("OrgId", "Name", "Total"))
+			expect(CH.compileUnsafe(fromQuery.values({ OrgId: "o", Name: "n", Total: 1 })).sql).toContain("VALUES")
+			expect(CH.compileUnsafe(fromQuery.values({ OrgId: "o", Name: "n", Total: 1 }).select(CH.from(Daily).select("OrgId", "Name", "Total"))).sql).toContain(
+				"SELECT",
+			)
+		})
+	})
+
+	describe("settings", () => {
+		const Notes = CH.table("notes", { Body: CH.string })
+
+		it("writes SETTINGS before VALUES on ClickHouse", () => {
+			const compiled = CH.compileUnsafe(
+				CH.insertInto(Notes).values({ Body: "x" }).settings({ async_insert: 1, wait_for_async_insert: true, insert_deduplication_token: "t'1" }),
+			)
+			expect(compiled.sql).toBe(
+				"INSERT INTO notes (Body) SETTINGS async_insert = 1, wait_for_async_insert = 1, insert_deduplication_token = 't\\'1'\nVALUES ('x')",
+			)
+		})
+
+		it.effect("a bad name and Postgres are defects", () =>
+			Effect.gen(function* () {
+				const insert = CH.insertInto(Notes).values({ Body: "x" })
+				expect(failure(yield* Effect.exit(CH.compile(insert.settings({ "a b": 1 }))))).toBeInstanceOf(QueryBuilderDefect)
+				expect(failure(yield* Effect.exit(PG.compile(insert.settings({ a: 1 }))))).toBeInstanceOf(QueryBuilderDefect)
+				expect(PG.compileUnsafe(insert.settings({})).sql).not.toContain("SETTINGS")
+			}),
+		)
+	})
+
 	describe("tenant scope", () => {
 		const scope = (rows: ReadonlyArray<Record<string, unknown>>, params: Record<string, unknown> = {}) =>
 			CH.compileUnsafe(CH.insertInto(Events).values(rows as any), params).tenantScope
