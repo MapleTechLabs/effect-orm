@@ -157,6 +157,23 @@ describe("migrate", () => {
 			)
 		})
 
+		it("refuses to resume a partial migration edited above the failed statement", async () => {
+			await Effect.runPromise(
+				withDatabase(
+					Effect.gen(function* () {
+						const source = (...statements: Array<string>) =>
+							Migrate.fromRecord({ "20261003000000_hand": { kind: "sql", migration: statements.join(`\n${Migrate.STATEMENT_BREAKPOINT}\n`) } })
+						const createA = "CREATE TABLE a (x UInt8) ENGINE = MergeTree ORDER BY x"
+						yield* Effect.exit(Migrate.run({ migrations: yield* source(createA, "THIS IS NOT SQL") }))
+						const inserted = yield* source("CREATE TABLE z (x UInt8) ENGINE = MergeTree ORDER BY x", createA, "SELECT 1")
+						const exit = yield* Effect.exit(Migrate.run({ migrations: inserted }))
+						expect(String(exit)).toContain("MigrateStepChanged")
+						expect((yield* Migrate.status(inserted)).map((s) => s.state)).toEqual(["partial"])
+					}),
+				),
+			)
+		})
+
 		it("rejects an edited migration under strict", async () => {
 			await Effect.runPromise(
 				withDatabase(

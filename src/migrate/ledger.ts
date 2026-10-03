@@ -64,8 +64,8 @@ export const readApplied = Effect.gen(function* () {
 export const readDoneSteps = (name: string) =>
 	Effect.gen(function* () {
 		const driver = yield* MigrationDriver
-		const rows = yield* driver.query(`SELECT step FROM ${LEDGER_TABLES.steps} FINAL WHERE name = ${q(name)}`)
-		return new Set(rows.map((row) => String(row.step)))
+		const rows = yield* driver.query(`SELECT step, sql_hash FROM ${LEDGER_TABLES.steps} FINAL WHERE name = ${q(name)}`)
+		return new Map(rows.map((row) => [String(row.step), String(row.sql_hash)] as const))
 	})
 
 export const recordStep = (name: string, step: string, sqlHash: string) =>

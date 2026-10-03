@@ -35,4 +35,11 @@ export class MigrateStepFailed extends Schema.TaggedError<MigrateStepFailed>()("
 	cause: Schema.Defect(),
 }) {}
 
-export type MigrateError = MigrateSqlError | MigrateSourceError | MigrateHashMismatch | MigrateLeaseHeld | MigrateStepFailed
+/** A statement a partial migration already ran has different SQL now. */
+export class MigrateStepChanged extends Schema.TaggedError<MigrateStepChanged>()("@maple-dev/effect-orm/MigrateStepChanged", {
+	migration: Schema.String,
+	step: Schema.String,
+	message: Schema.String,
+}) {}
+
+export type MigrateError = MigrateSqlError | MigrateSourceError | MigrateHashMismatch | MigrateLeaseHeld | MigrateStepChanged | MigrateStepFailed

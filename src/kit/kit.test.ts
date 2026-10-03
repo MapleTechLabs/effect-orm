@@ -1,4 +1,4 @@
-import { mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
@@ -79,6 +79,16 @@ describe("effect-orm CLI", () => {
 		const hints = JSON.stringify([{ type: "confirm_data_loss", kind: "column", entity: "events.Name" }])
 		expect(await cli("generate", "--json", "--config", "v3.config.ts", "--hints", hints)).toBe(0)
 		expect(folders()).toHaveLength(2)
+	})
+
+	it("skips a staging folder a crashed generate left behind", async () => {
+		writeFileSync(join(dir, "schema.ts"), schemaModule())
+		await cli("generate", "--name", "init")
+		const leftover = join(dir, "migrations", "20990101000000_half.tmp-4242")
+		mkdirSync(leftover)
+		writeFileSync(join(leftover, "migration.json"), '{"version":"1","ops":[]}')
+		expect(await cli("check")).toBe(0)
+		expect(lines.at(-1)).toBe("1 migrations, ok.")
 	})
 
 	it("check fails when a snapshot was edited by hand", async () => {

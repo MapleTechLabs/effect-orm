@@ -10,7 +10,7 @@ import { Effect, Option } from "effect"
 import { sha256Hex } from "../schema/entities"
 import type { RenderOptions } from "../schema/render"
 import { MigrationDriver } from "./driver"
-import { MigrateHashMismatch, MigrateLeaseHeld, MigrateStepFailed, type MigrateError } from "./errors"
+import { MigrateHashMismatch, MigrateLeaseHeld, MigrateStepChanged, MigrateStepFailed, type MigrateError } from "./errors"
 import {
 	ensureLedger,
 	readApplied,
@@ -91,9 +91,21 @@ const applyOne = (migration: LoadedMigration, render: RenderOptions, renew: Effe
 		const done = yield* readDoneSteps(migration.name)
 		let resumed = 0
 		for (const step of steps) {
-			if (done.has(step.id)) {
+			const sqlHash = yield* Effect.promise(() => sha256Hex(step.sql))
+			const doneHash = done.get(step.id)
+			if (doneHash === sqlHash) {
 				resumed += 1
 				continue
+			}
+			// A finished step whose SQL is now different: the partial migration was
+			// edited above the failure, or rendered with other options. Skipping it
+			// would leave a statement unrun; rerunning it could repeat one.
+			if (doneHash !== undefined) {
+				return yield* new MigrateStepChanged({
+					migration: migration.name,
+					step: step.id,
+					message: `${migration.name} step ${step.id} already ran with different SQL. Edit only the failed statement and those after it, or keep the render options of the first run`,
+				})
 			}
 			yield* driver.execute(step.sql).pipe(
 				Effect.mapError(
@@ -108,7 +120,7 @@ const applyOne = (migration: LoadedMigration, render: RenderOptions, renew: Effe
 				),
 				Effect.withSpan("effect_orm.migrate.step", { attributes: { "effect_orm.migration.step": step.id } }),
 			)
-			yield* recordStep(migration.name, step.id, yield* Effect.promise(() => sha256Hex(step.sql)))
+			yield* recordStep(migration.name, step.id, sqlHash)
 			yield* renew
 		}
 		yield* recordMigration(migration.name, migration.hash)

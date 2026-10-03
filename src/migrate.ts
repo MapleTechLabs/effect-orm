@@ -11,6 +11,7 @@ export {
 	MigrateLeaseHeld,
 	MigrateSourceError,
 	MigrateSqlError,
+	MigrateStepChanged,
 	MigrateStepFailed,
 	type MigrateError,
 } from "./migrate/errors"
@@ -18,6 +19,7 @@ export { LEDGER_TABLES } from "./migrate/ledger"
 export {
 	STATEMENT_BREAKPOINT,
 	fromFileSystem,
+	isStagingName,
 	fromRecord,
 	orderMigrations,
 	stepsOf,

@@ -153,7 +153,9 @@ How a run behaves:
   `strict` a changed file fails with `MigrateHashMismatch`, otherwise it logs a warning.
 - **Each statement is journaled** in `_effect_orm_migration_steps` after it finishes, and the
   migration row in `_effect_orm_migrations` is written last. A run that fails partway leaves
-  the migration `partial`; the next run skips the finished statements and resumes.
+  the migration `partial`; the next run skips the finished statements and resumes. A finished
+  statement whose SQL has since changed fails the run with `MigrateStepChanged` instead of being
+  skipped: edit only the failed statement and those after it.
 - **A lease** in `_effect_orm_migration_lease` stops a second run while one is active. It is best
   effort: two runs starting in the same instant can both proceed. Serialize deploys if that
   matters.

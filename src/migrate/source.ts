@@ -13,6 +13,9 @@ import { MigrateSourceError } from "./errors"
 
 export const STATEMENT_BREAKPOINT = "--> statement-breakpoint"
 
+/** `generate` writes a migration into `<name>.tmp-<pid>` and renames it into place. Readers skip these. */
+export const isStagingName = (name: string): boolean => /\.tmp-\d+$/.test(name)
+
 export interface MigrationInput {
 	/** `migration.json` or `migration.sql` contents. */
 	readonly migration: string
@@ -144,7 +147,10 @@ export const fromFileSystem = (
 		const entries = yield* fs.readDirectory(directory).pipe(Effect.mapError(fail(directory, "cannot read the migrations directory")))
 		const record: Record<string, MigrationInput> = {}
 		for (const name of entries) {
+			if (isStagingName(name)) continue
 			const dir = path.join(directory, name)
+			const info = yield* fs.stat(dir).pipe(Effect.mapError(fail(name, "cannot stat")))
+			if (info.type !== "Directory") continue
 			const read = (file: string) =>
 				fs.exists(path.join(dir, file)).pipe(
 					Effect.flatMap((exists) => (exists ? Effect.map(fs.readFileString(path.join(dir, file)), (text): string | undefined => text) : Effect.succeed(undefined))),

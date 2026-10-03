@@ -1,12 +1,12 @@
 // `effect-orm generate`: diff the schema modules against the migrations folder
 // and write the next migration. Offline: it never connects to a database.
 
-import { mkdir, readdir, readFile, rename, stat, writeFile } from "node:fs/promises"
+import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
 import { Effect, Schema } from "effect"
 import type { Layer } from "effect"
-import { fromRecord, type LoadedMigration, type MigrationInput } from "../migrate/source"
+import { fromRecord, isStagingName, type LoadedMigration, type MigrationInput } from "../migrate/source"
 import type { MigrationDriver } from "../migrate/driver"
 import { diffSchemas, type Hint } from "../schema/diff"
 import { labelOf, renderOp, type MigrationFile } from "../schema/ops"
@@ -62,6 +62,7 @@ export const readMigrations = (out: string): Effect.Effect<ReadonlyArray<LoadedM
 		const record: Record<string, MigrationInput> = {}
 		const optional = (path: string) => readFile(path, "utf8").then((text): string | undefined => text, () => undefined)
 		for (const name of names.sort()) {
+			if (isStagingName(name)) continue
 			const dir = join(out, name)
 			const isDir = yield* io(() => stat(dir).then((s) => s.isDirectory()), `Cannot stat ${dir}`)
 			if (!isDir) continue
@@ -173,16 +174,19 @@ export const generate = (config: KitConfig, cwd: string, options: GenerateOption
 		const name = `${timestamp(options.now ?? new Date(), taken)}_${options.name ?? `${pick(ADJECTIVES)}_${pick(NOUNS)}`}`
 		const dir = join(out, name)
 		const staging = `${dir}.tmp-${process.pid}`
-		yield* io(() => mkdir(staging, { recursive: true }), `Cannot create ${staging}`)
-		yield* io(
-			() =>
-				file === undefined
-					? writeFile(join(staging, "migration.sql"), "-- Custom SQL migration. Separate statements with a line holding only:\n-- --> statement-breakpoint\n")
-					: writeFile(join(staging, "migration.json"), `${JSON.stringify(file, null, "\t")}\n`),
-			`Cannot write ${dir}`,
-		)
-		yield* io(() => writeFile(join(staging, "snapshot.json"), serializeSnapshot(snapshot)), `Cannot write ${dir}`)
-		yield* io(() => rename(staging, dir), `Cannot move ${staging} to ${dir}`)
+		// Written aside and renamed into place, so a reader never sees half a migration.
+		yield* Effect.gen(function* () {
+			yield* io(() => mkdir(staging, { recursive: true }), `Cannot create ${staging}`)
+			yield* io(
+				() =>
+					file === undefined
+						? writeFile(join(staging, "migration.sql"), "-- Custom SQL migration. Separate statements with a line holding only:\n-- --> statement-breakpoint\n")
+						: writeFile(join(staging, "migration.json"), `${JSON.stringify(file, null, "\t")}\n`),
+				`Cannot write ${dir}`,
+			)
+			yield* io(() => writeFile(join(staging, "snapshot.json"), serializeSnapshot(snapshot)), `Cannot write ${dir}`)
+			yield* io(() => rename(staging, dir), `Cannot move ${staging} to ${dir}`)
+		}).pipe(Effect.onError(() => Effect.promise(() => rm(staging, { recursive: true, force: true }).catch(() => undefined))))
 
 		const plan = (file?.ops ?? []).map((op) => ({ label: labelOf(op), sql: renderOp(op, config.render) }))
 		return { written: dir, plan } satisfies GenerateResult

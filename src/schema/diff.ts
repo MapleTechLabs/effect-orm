@@ -15,6 +15,7 @@
 
 import { Schema } from "effect"
 import {
+	canonicalJson,
 	entityKey,
 	type ColumnEntity,
 	type IndexEntity,
@@ -56,7 +57,8 @@ const byKind = <K extends SchemaEntity["kind"]>(entities: ReadonlyArray<SchemaEn
 			.map((e) => [entityKey(e), e] as const),
 	)
 
-const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b)
+/** Key order is not a change; the snapshot hash ignores it too. */
+const same = (a: unknown, b: unknown): boolean => canonicalJson(a) === canonicalJson(b)
 
 const opOrder: Record<MigrationOp["op"], number> = {
 	drop_view: 0,
@@ -202,11 +204,9 @@ const diffTable = (
 	if (before.partitionBy !== after.partitionBy) rebuild("PARTITION BY", before.partitionBy, after.partitionBy)
 	if (before.primaryKey !== after.primaryKey) rebuild("PRIMARY KEY", before.primaryKey, after.primaryKey)
 	if (before.ttl !== after.ttl) ops.push({ op: "modify_ttl", table: after.name, ttl: after.ttl })
-	if (!same(before.settings, after.settings)) {
-		const set = Object.fromEntries(Object.entries(after.settings).filter(([k, v]) => before.settings[k] !== v))
-		const reset = Object.keys(before.settings).filter((k) => !(k in after.settings))
-		ops.push({ op: "modify_settings", table: after.name, set, reset })
-	}
+	const set = Object.fromEntries(Object.entries(after.settings).filter(([k, v]) => before.settings[k] !== v))
+	const reset = Object.keys(before.settings).filter((k) => !(k in after.settings))
+	if (Object.keys(set).length > 0 || reset.length > 0) ops.push({ op: "modify_settings", table: after.name, set, reset })
 	if (before.comment !== after.comment) ops.push({ op: "modify_comment", table: after.name, comment: after.comment })
 }
 

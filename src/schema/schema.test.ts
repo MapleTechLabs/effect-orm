@@ -189,4 +189,12 @@ describe("diffSchemas", () => {
 			"ALTER TABLE service_counts MODIFY TTL now() + toIntervalDay(1) SETTINGS materialize_ttl_after_modify = 0",
 		])
 	})
+
+	it("ignores settings that only changed key order", () => {
+		const make = (settings: Record<string, number>) =>
+			S.defineTable("ordered", { columns: { a: CH.string }, engine: S.engine.mergeTree(), orderBy: ["a"], settings })
+		const before = S.entitiesOf([make({ index_granularity: 8192, merge_with_ttl_timeout: 3600 })])
+		const after = S.entitiesOf([make({ merge_with_ttl_timeout: 3600, index_granularity: 8192 })])
+		expect(S.diffSchemas(before, after).ops).toEqual([])
+	})
 })
