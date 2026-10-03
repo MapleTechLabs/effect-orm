@@ -609,6 +609,17 @@ Nothing is open. Phase 1 can start.
 
 What landed differently from the sections above:
 
+- **No compile step, no raw `$n`.** `run` takes the built query (or a union, or a query
+  compiled elsewhere) and compiles it with the database's dialect, so callers never choose a
+  `compile` and never see `compileUnsafe`; compile failures are a typed `QueryBuilderError`.
+  Statements the builder lacks are written with `Db.sql\`...\``: values are bound per dialect
+  at run time (`$n` for Postgres, escaped literals for ClickHouse), templates compose, and
+  `sql.identifier` quotes plain names only. `query` takes an optional row schema so a
+  `RETURNING` read comes back typed.
+- **`requireTransaction` instead of `yield* Db.Transaction`.** Section 4.2's marker was a bare
+  `yield*` in the body. It is now a pipeable declared at the function boundary,
+  `Effect.fn(name)(body, Db.requireTransaction)`, mirroring `Db.transaction()`. Same
+  compile-time check; `Db.Transaction` stays for reading depth and settings.
 - **Namespace import, not static members.** The subpath exports flat names, used as
   `import * as Db from "@maple-dev/effect-orm/database"`: `Db.Database` (the service),
   `Db.run`, `Db.transaction`, `Db.Transaction`. This matches `Migrate.run` /

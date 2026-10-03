@@ -37,28 +37,22 @@ class InsufficientFunds extends Schema.TaggedError<InsufficientFunds>()("Insuffi
 
 const balanceOf = (id: number) =>
 	Db.run(
-		PG.compileUnsafe(
-			CH.from(Accounts)
-				.select("balance")
-				.where(($) => [$.id.eq(CH.param.int("id"))]),
-			{ id },
-		),
+		CH.from(Accounts)
+			.select("balance")
+			.where(($) => [$.id.eq(id)]),
 	).pipe(Effect.map((rows) => rows[0]?.balance ?? 0))
 
-// Only correct inside a transaction: it reads, then writes. Yielding
-// Db.Transaction puts it in the requirements, so calling this without a
-// transaction around it does not compile.
+// Must run inside a transaction: it reads, then writes.
 const withdraw = Effect.fn("withdraw")(function* (id: number, amount: number) {
-	yield* Db.Transaction
 	if ((yield* balanceOf(id)) < amount) return yield* new InsufficientFunds({ account: id })
-	yield* Db.execute({ sql: "UPDATE accounts SET balance = balance - $1 WHERE id = $2", parameters: [amount, id] })
-})
+	yield* Db.execute(Db.sql`UPDATE accounts SET balance = balance - ${amount} WHERE id = ${id}`)
+}, Db.requireTransaction)
 
-// A transactional operation: the trailing argument wraps the body.
+// Opens a transaction (or a savepoint, inside one).
 export const transfer = Effect.fn("transfer")(
 	function* (from: number, to: number, amount: number) {
 		yield* withdraw(from, amount)
-		yield* Db.execute({ sql: "UPDATE accounts SET balance = balance + $1 WHERE id = $2", parameters: [amount, to] })
+		yield* Db.execute(Db.sql`UPDATE accounts SET balance = balance + ${amount} WHERE id = ${to}`)
 	},
 	Db.transaction({ isolationLevel: "serializable", retry: "contention" }),
 )
@@ -69,8 +63,8 @@ const DatabaseLive = Db.layerSqlClient({ dialect: PG.postgresDialect }).pipe(
 
 export const balances = await Effect.runPromise(
 	Effect.gen(function* () {
-		yield* Db.execute({ sql: "CREATE TABLE accounts (id int4 PRIMARY KEY, balance int8 NOT NULL)" })
-		yield* Db.execute({ sql: "INSERT INTO accounts VALUES (1, 100), (2, 0)" })
+		yield* Db.execute(Db.sql`CREATE TABLE accounts (id int4 PRIMARY KEY, balance int8 NOT NULL)`)
+		yield* Db.execute(Db.sql`INSERT INTO accounts VALUES (1, 100), (2, 0)`)
 		yield* transfer(1, 2, 30)
 		// Fails: the withdrawal rolls back with the transaction.
 		const refused = yield* Effect.flip(transfer(1, 2, 500))
@@ -80,6 +74,9 @@ export const balances = await Effect.runPromise(
 // { from: 70, to: 30, refused: "InsufficientFunds" }
 ```
 
+Calling `withdraw(1, 30)` outside `transfer` does not compile: `requireTransaction` puts
+`Transaction` in its requirements, and only `transaction` removes it.
+
 ## Building a `Database`
 
 | Export | What it is |
@@ -87,17 +84,44 @@ export const balances = await Effect.runPromise(
 | `fromSqlClient(sql, options)` | A `DatabaseApi` over a client. `options.dialect` is required |
 | `layerSqlClient(options)` | A `Database` layer over the `SqlClient` in context |
 | `Database` | The service |
-| `run(compiled)` | Run a `CompiledQuery` and decode its rows |
-| `query(statement)` | Run a statement and return its rows undecoded |
+| `run(query, params?)` | Compile a query for the database's dialect, run it, decode its rows |
+| `sql\`...\`` | A statement with every `${value}` bound; `sql.identifier(name)` for a table or column name |
+| `query(statement, schema?)` | Run a statement and return its rows, decoded when a schema is given |
 | `execute(statement)` | Run a statement and discard its rows |
-| `transaction(body, options?)` | Run `body` in a transaction; data-first or pipeable |
-| `retryContention(effect, options?)` | Re-run on serialization failure or deadlock |
-| `Transaction` | The open transaction; present only inside `transaction` |
+| `transaction(options?)` | Run an effect in a transaction; data-first or pipeable |
+| `requireTransaction` | Mark an effect as correct only inside a transaction |
+| `retryContention(options?)` | Re-run on serialization failure or deadlock |
+| `Transaction` | The open transaction (`depth`, `isolationLevel`, `accessMode`) |
 | `isContention(error)` | Whether an error is a serialization failure or deadlock |
 
 `run`, `query`, `execute`, `transaction` and `retryContention` are also methods on
-`DatabaseApi`. A `Statement` is `{ sql, parameters? }`, so a `CompiledQuery` is one, and raw
-SQL with bound values is another.
+`DatabaseApi`.
+
+### Queries and statements
+
+`run` takes the query you built, a `unionAll`, or a query compiled elsewhere. It compiles with
+the database's dialect, so you never pick a `compile`; `params` fills the query's `param.*`
+markers, and a missing one fails with `QueryBuilderError`. A query compiled elsewhere must
+have been compiled for the same dialect, or `run` dies: the root `compile` is ClickHouse's.
+
+`sql` writes the statements the builder does not have yet (INSERT, UPDATE, DDL, advisory
+locks). Each `${value}` is bound, as `$1, $2, ...` on Postgres and as an escaped literal on
+ClickHouse, so nothing in a value becomes SQL. A `sql` inside another is spliced, so
+statements compose. Names go through `sql.identifier`, which accepts only plain identifiers
+(dotted for `schema.table`) and quotes them:
+
+```ts
+const where = Db.sql`org_id = ${orgId} AND revoked = false`
+yield* Db.execute(Db.sql`UPDATE ${Db.sql.identifier(table)} SET revoked = true WHERE ${where}`)
+
+const Claimed = Schema.Struct({ org_id: Schema.String, family: Schema.String })
+const claimed = yield* Db.query(
+	Db.sql`UPDATE api_keys SET revoked = true WHERE id = ${id} AND revoked = false RETURNING org_id, family`,
+	Claimed,
+)  // ReadonlyArray<{ org_id: string; family: string }>
+```
+
+`query` and `execute` also take a plain `{ sql, parameters }` for SQL you have as text.
 
 `FromSqlClientOptions`:
 
@@ -119,9 +143,9 @@ open transaction lives in fiber context.
 ## Transactions
 
 ```ts
-Db.transaction(body)                                      // data-first
+Effect.fn("op")(function* () { ... }, Db.transaction())        // as an Effect.fn pipe argument
 body.pipe(Db.transaction({ isolationLevel: "serializable" }))  // pipeable
-Effect.fn("op")(function* () { ... }, Db.transaction())   // as an Effect.fn pipe argument
+Db.transaction(body)                                           // data-first
 ```
 
 - **Pinning.** Every statement from the same client inside `body` runs on the transaction's
@@ -138,24 +162,25 @@ Effect.fn("op")(function* () { ... }, Db.transaction())   // as an Effect.fn pip
 
 ### Requiring a transaction
 
-`Transaction` is a service that only `transaction` provides, with `{ depth, isolationLevel,
-accessMode }`. A helper that is only correct inside a transaction yields it, so `Transaction`
-is in its requirements, and `transaction` removes it:
+Some helpers are only correct inside a transaction: a read followed by a write, two writes
+that must land together. Mark them with `requireTransaction`, the same way `transaction`
+marks the operations that open one:
 
 ```ts
-const revokeFamily = (familyId: string) =>
-	Effect.gen(function* () {
-		yield* Db.Transaction
-		yield* Db.execute({ sql: "UPDATE refresh_tokens SET revoked = true WHERE family = $1", parameters: [familyId] })
-		yield* Db.execute({ sql: "UPDATE api_keys SET revoked = true WHERE family = $1", parameters: [familyId] })
-	})
+const revokeFamily = Effect.fn("revokeFamily")(function* (family: string) {
+	yield* Db.execute(Db.sql`UPDATE api_keys SET revoked = true WHERE family = ${family}`)
+	yield* Db.execute(Db.sql`UPDATE refresh_tokens SET revoked = true WHERE family = ${family}`)
+}, Db.requireTransaction)
 
-revokeFamily("f1")                  // Effect<void, DatabaseError, Transaction | Database>
+revokeFamily("f1")                  // Effect<void, DatabaseError, Database | Transaction>
 Db.transaction(revokeFamily("f1"))  // Effect<void, DatabaseError | TransactionError, Database>
 ```
 
-This is how Effect's own `Effect.tx` treats `Effect.Transaction`. A helper that works either
-way, like most reads, just leaves `Transaction` out.
+`requireTransaction` adds `Transaction` to the requirements and `transaction` removes it, so a
+call outside a transaction is a compile error, not a bug found in production. This is how
+Effect's own `Effect.tx` treats `Effect.Transaction`. A helper that works either way, like
+most reads, needs no marker. Inside a transaction, `yield* Db.Transaction` gives its `depth`
+and settings.
 
 ### Settings
 
@@ -222,5 +247,5 @@ fails at BEGIN today: through the query path with a syntax error, and through `a
 
 ## Writes
 
-The builder compiles SELECTs only, so far. Run writes with `execute` (or `query`, for
-`RETURNING`) and bound `parameters`, as above.
+The builder compiles SELECTs only, so far. Write INSERT, UPDATE and DELETE with `sql`, as
+above, and read `RETURNING` with `query` and a schema.

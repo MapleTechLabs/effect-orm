@@ -7,12 +7,15 @@
 // statements outliving their transaction, and contention retry. See
 // `design/transactions.md`.
 
-import { Cause, Context, Effect, Exit, Layer, Option, Schedule } from "effect"
+import { Cause, Context, Effect, Exit, Layer, Option, Schedule, Schema } from "effect"
 import { dual } from "effect/Function"
 import * as SqlClient from "effect/sql/SqlClient"
 import { isSqlError } from "effect/sql/SqlError"
-import type { CompiledQuery, CompiledQueryDecodeError } from "../ch/compile"
+import { compileCH, compileUnion, CompiledQueryDecodeError, type CompiledQuery } from "../ch/compile"
 import { noTransactions, type Dialect, type IsolationLevel, type TransactionSettings } from "../ch/dialect"
+import type { QueryBuilderError } from "../ch/errors"
+import type { CHQuery } from "../ch/query"
+import type { CHUnionQuery } from "../ch/union"
 import {
 	DatabaseError,
 	TransactionClosed,
@@ -22,6 +25,7 @@ import {
 	TransactionUnsupported,
 	type TransactionError,
 } from "./errors"
+import { isSqlTemplate, renderTemplate, type SqlTemplate } from "./sql"
 import { firstLine, reasonOf, sqlStateOf, toDatabaseError } from "./sql-error"
 
 /** SQL and the values bound to its placeholders. A `CompiledQuery` is one. */
@@ -29,6 +33,19 @@ export interface Statement {
 	readonly sql: string
 	readonly parameters?: ReadonlyArray<unknown>
 }
+
+/** What `query` and `execute` take: a `sql\`...\`` template, or SQL with its parameters. */
+export type StatementInput = SqlTemplate | Statement
+
+/** What `run` takes: a built query, a union, or a query already compiled. */
+export type Runnable = CHQuery<any, any, any, any> | CHUnionQuery<any> | CompiledQuery<any, any>
+
+/** The decoded row of a `Runnable`. */
+export type RowOf<Q> =
+	Q extends CompiledQuery<infer Output, any> ? Output : Q extends { readonly _phantom?: { output: infer Output } } ? Output : never
+
+/** A row codec for `query`. */
+export type RowSchema<A> = Schema.Codec<A, unknown, never, never>
 
 export interface RetryOptions {
 	/** Retries after the first attempt. Default 3. */
@@ -56,22 +73,31 @@ export interface TransactionInfo {
 }
 
 /**
- * Present only inside `transaction`. A helper that is correct only inside a
- * transaction `yield*`s it, which puts `Transaction` in its requirements, and
- * the compiler refuses to run it until something wraps it in `transaction`.
+ * The open transaction. Present only inside `transaction`, which also removes
+ * it from the requirements of its body. `requireTransaction` adds it, which is
+ * how a helper says it must run inside a transaction. Read it for the depth or
+ * the settings of the transaction you are in.
  */
 export class Transaction extends Context.Service<Transaction, TransactionInfo>()("@maple-dev/effect-orm/Transaction") {}
 
 export interface DatabaseApi {
 	readonly dialect: Dialect
-	/** Run a compiled query (a SELECT, or a write with RETURNING) and decode its rows. */
-	readonly run: <Output>(
-		compiled: CompiledQuery<Output, any>,
-	) => Effect.Effect<ReadonlyArray<Output>, DatabaseError | CompiledQueryDecodeError>
-	/** Run a statement and return its rows undecoded. */
-	readonly query: (statement: Statement) => Effect.Effect<ReadonlyArray<Record<string, unknown>>, DatabaseError>
+	/**
+	 * Compile a query for this database's dialect, run it, and decode its rows.
+	 * `params` fills the query's `param.*` markers. A query compiled elsewhere
+	 * runs as it is, if it was compiled for this dialect.
+	 */
+	readonly run: <Q extends Runnable>(
+		query: Q,
+		params?: Record<string, unknown>,
+	) => Effect.Effect<ReadonlyArray<RowOf<Q>>, DatabaseError | QueryBuilderError | CompiledQueryDecodeError>
+	/** Run a statement and return its rows, decoded through `schema` when given. */
+	readonly query: {
+		(statement: StatementInput): Effect.Effect<ReadonlyArray<Record<string, unknown>>, DatabaseError>
+		<A>(statement: StatementInput, schema: RowSchema<A>): Effect.Effect<ReadonlyArray<A>, DatabaseError | CompiledQueryDecodeError>
+	}
 	/** Run a statement whose rows are not wanted: DDL, an advisory lock, a write without RETURNING. */
-	readonly execute: (statement: Statement) => Effect.Effect<void, DatabaseError>
+	readonly execute: (statement: StatementInput) => Effect.Effect<void, DatabaseError>
 	/**
 	 * Run `body` in a transaction. Nested calls become savepoints. A failure,
 	 * defect or interruption in `body` rolls back; domain errors pass through
@@ -175,31 +201,70 @@ export const fromSqlClient = (sql: SqlClient.SqlClient, options: FromSqlClientOp
 				: observe(statement),
 		)
 
-	const query: DatabaseApi["query"] = (statement) =>
+	const resolve = (statement: StatementInput): Effect.Effect<Statement, DatabaseError> =>
+		isSqlTemplate(statement) ? renderTemplate(statement, dialect) : Effect.succeed(statement)
+
+	const rows = (statement: Statement) =>
 		guard(statement).pipe(
 			Effect.andThen(raw.unsafe<Record<string, unknown>>(statement.sql, statement.parameters ?? [])),
 			Effect.map((rows): ReadonlyArray<Record<string, unknown>> => rows),
 			Effect.mapError(toDatabaseError(statement.sql)),
 		)
 
+	const decodeWith =
+		<A>(schema: RowSchema<A>) =>
+		(wire: ReadonlyArray<Record<string, unknown>>) => {
+			const decode = Schema.decodeUnknownEffect(schema)
+			return Effect.forEach(wire, (row, rowIndex) =>
+				decode(row).pipe(
+					Effect.mapError(
+						(cause) => new CompiledQueryDecodeError({ message: `row ${rowIndex} did not match the schema`, rowIndex, cause }),
+					),
+				),
+			)
+		}
+
+	const query = ((statement: StatementInput, schema?: RowSchema<unknown>) =>
+		Effect.flatMap(
+			resolve(statement),
+			(resolved): Effect.Effect<ReadonlyArray<unknown>, DatabaseError | CompiledQueryDecodeError> =>
+				schema === undefined ? rows(resolved) : Effect.flatMap(rows(resolved), decodeWith(schema)),
+		)) as DatabaseApi["query"]
+
 	const execute: DatabaseApi["execute"] = (statement) =>
-		guard(statement).pipe(
-			Effect.andThen(command(raw.unsafe(statement.sql, statement.parameters ?? []))),
-			Effect.asVoid,
-			Effect.mapError(toDatabaseError(statement.sql)),
+		Effect.flatMap(resolve(statement), (resolved) =>
+			guard(resolved).pipe(
+				Effect.andThen(command(raw.unsafe(resolved.sql, resolved.parameters ?? []))),
+				Effect.asVoid,
+				Effect.mapError(toDatabaseError(resolved.sql)),
+			),
 		)
 
-	const run: DatabaseApi["run"] = (compiled) =>
-		compiled.dialect !== undefined && compiled.dialect !== dialect.name
-			? Effect.die(
-					new DatabaseError({
-						message: `a query compiled for ${compiled.dialect} cannot run on a ${dialect.name} database; compile it with the ${dialect.name} compile`,
-						sql: compiled.sql,
-						reason: "DialectMismatch",
-						cause: undefined,
-					}),
-				)
-			: Effect.flatMap(query(compiled), (rows) => compiled.decodeRows(rows))
+	const compileFor = (
+		runnable: Runnable,
+		params: Record<string, unknown>,
+	): Effect.Effect<CompiledQuery<any, any>, QueryBuilderError> => {
+		if ("decodeRows" in runnable) {
+			return runnable.dialect !== undefined && runnable.dialect !== dialect.name
+				? Effect.die(
+						new DatabaseError({
+							message: `a query compiled for ${runnable.dialect} cannot run on a ${dialect.name} database; pass the query to run instead of compiling it`,
+							sql: runnable.sql,
+							reason: "DialectMismatch",
+							cause: undefined,
+						}),
+					)
+				: Effect.succeed(runnable)
+		}
+		return "_tag" in runnable && runnable._tag === "CHUnionQuery"
+			? compileUnion(runnable, params, { dialect })
+			: compileCH(runnable as CHQuery<any, any, any, any>, params, { dialect })
+	}
+
+	const run: DatabaseApi["run"] = (runnable, params = {}) =>
+		Effect.flatMap(compileFor(runnable, params), (compiled) =>
+			Effect.flatMap(rows(compiled), (wire) => compiled.decodeRows(wire)),
+		)
 
 	const retryContention = <A, E, R>(effect: Effect.Effect<A, E, R>, retry?: RetryOptions) =>
 		Effect.flatMap(Effect.serviceOption(sql.transactionService), (open): Effect.Effect<A, E | TransactionOptionsRejected, R> =>
@@ -359,18 +424,41 @@ export const layerSqlClient = (options: FromSqlClientOptions): Layer.Layer<Datab
 	)
 
 /** `run` on the `Database` in context. */
-export const run = <Output>(
-	compiled: CompiledQuery<Output, any>,
-): Effect.Effect<ReadonlyArray<Output>, DatabaseError | CompiledQueryDecodeError, Database> =>
-	Effect.flatMap(Effect.service(Database), (db) => db.run(compiled))
+export const run = <Q extends Runnable>(
+	query: Q,
+	params?: Record<string, unknown>,
+): Effect.Effect<ReadonlyArray<RowOf<Q>>, DatabaseError | QueryBuilderError | CompiledQueryDecodeError, Database> =>
+	Effect.flatMap(Effect.service(Database), (db) => db.run(query, params))
 
 /** `query` on the `Database` in context. */
-export const query = (statement: Statement): Effect.Effect<ReadonlyArray<Record<string, unknown>>, DatabaseError, Database> =>
-	Effect.flatMap(Effect.service(Database), (db) => db.query(statement))
+export const query: {
+	(statement: StatementInput): Effect.Effect<ReadonlyArray<Record<string, unknown>>, DatabaseError, Database>
+	<A>(
+		statement: StatementInput,
+		schema: RowSchema<A>,
+	): Effect.Effect<ReadonlyArray<A>, DatabaseError | CompiledQueryDecodeError, Database>
+} = ((statement: StatementInput, schema?: RowSchema<unknown>) =>
+	Effect.flatMap(
+		Effect.service(Database),
+		(db): Effect.Effect<ReadonlyArray<unknown>, DatabaseError | CompiledQueryDecodeError> =>
+			schema === undefined ? db.query(statement) : db.query(statement, schema),
+	)) as typeof query
 
 /** `execute` on the `Database` in context. */
-export const execute = (statement: Statement): Effect.Effect<void, DatabaseError, Database> =>
+export const execute = (statement: StatementInput): Effect.Effect<void, DatabaseError, Database> =>
 	Effect.flatMap(Effect.service(Database), (db) => db.execute(statement))
+
+/**
+ * Mark an effect as correct only inside a transaction. It adds `Transaction`
+ * to the requirements, so it does not compile until `transaction` wraps it, as
+ * an `Effect.fn` pipe argument or with `.pipe`:
+ *
+ * ```ts
+ * const revokeFamily = Effect.fn("revokeFamily")(function* (family: string) { ... }, Db.requireTransaction)
+ * ```
+ */
+export const requireTransaction = <A, E, R>(self: Effect.Effect<A, E, R>): Effect.Effect<A, E, R | Transaction> =>
+	Effect.andThen(Effect.service(Transaction), self)
 
 /**
  * `transaction` on the `Database` in context. Data-first or pipeable, so it

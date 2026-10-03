@@ -1,6 +1,6 @@
-// Type-level tests: `Transaction` as a requirement, and what `transaction` removes.
+// Type-level tests: rows from `run`, `requireTransaction`, and what `transaction` removes.
 
-import { Effect } from "effect"
+import { Effect, Schema } from "effect"
 import { expectTypeOf } from "expect-type"
 import * as CH from "../index"
 import * as PG from "../postgres"
@@ -10,41 +10,52 @@ class Domain {
 	readonly _tag = "Domain"
 }
 
-const compiled = PG.compileUnsafe(CH.from(CH.table("t", { id: PG.int4, note: PG.text })).select("id", "note"), {})
+const Items = CH.table("t", { id: PG.int4, note: PG.text })
+type Row = { readonly id: number; readonly note: string }
+type RunError = Db.DatabaseError | CH.QueryBuilderError | CH.CompiledQueryDecodeError
 
-// `run` infers rows from the compiled query and needs only a Database.
-expectTypeOf(Db.run(compiled)).toEqualTypeOf<
-	Effect.Effect<ReadonlyArray<{ readonly id: number; readonly note: string }>, Db.DatabaseError | CH.CompiledQueryDecodeError, Db.Database>
+// `run` takes the query itself and infers its rows.
+expectTypeOf(Db.run(CH.from(Items).select("id", "note"))).toEqualTypeOf<Effect.Effect<ReadonlyArray<Row>, RunError, Db.Database>>()
+expectTypeOf(Db.run(CH.unionAll(CH.from(Items).select("id", "note"), CH.from(Items).select("id", "note")))).toEqualTypeOf<
+	Effect.Effect<ReadonlyArray<Row>, RunError, Db.Database>
+>()
+// ...or a query compiled elsewhere.
+expectTypeOf(Db.run(PG.compileUnsafe(CH.from(Items).select("id", "note"), {}))).toEqualTypeOf<
+	Effect.Effect<ReadonlyArray<Row>, RunError, Db.Database>
 >()
 
-// A helper that must run in a transaction carries `Transaction` in R.
-const mustBeAtomic = Effect.gen(function* () {
-	yield* Db.Transaction
-	yield* Db.execute({ sql: "UPDATE t SET note = ''" })
-	return 1
-})
-expectTypeOf(mustBeAtomic).toEqualTypeOf<Effect.Effect<number, Db.DatabaseError, Db.Transaction | Db.Database>>()
+// `query` is untyped without a schema and typed with one.
+expectTypeOf(Db.query(Db.sql`SELECT 1`)).toEqualTypeOf<
+	Effect.Effect<ReadonlyArray<Record<string, unknown>>, Db.DatabaseError, Db.Database>
+>()
+expectTypeOf(Db.query(Db.sql`SELECT 1 AS n`, Schema.Struct({ n: Schema.Number }))).toEqualTypeOf<
+	Effect.Effect<ReadonlyArray<{ readonly n: number }>, Db.DatabaseError | CH.CompiledQueryDecodeError, Db.Database>
+>()
 
-// `transaction` removes it, data-first and pipeable, and adds its own errors.
+// `requireTransaction` adds the requirement; `transaction` removes it.
+const revoke = Effect.fn("revoke")(function* (family: string) {
+	yield* Db.execute(Db.sql`UPDATE t SET note = '' WHERE note = ${family}`)
+	return 1
+}, Db.requireTransaction)
+expectTypeOf(revoke).returns.toEqualTypeOf<Effect.Effect<number, Db.DatabaseError, Db.Database | Db.Transaction>>()
+
 type Wrapped = Effect.Effect<number, Db.DatabaseError | Db.TransactionError, Db.Database>
-expectTypeOf(Db.transaction(mustBeAtomic)).toEqualTypeOf<Wrapped>()
-expectTypeOf(mustBeAtomic.pipe(Db.transaction({ isolationLevel: "serializable" }))).toEqualTypeOf<Wrapped>()
+expectTypeOf(Db.transaction(revoke("f"))).toEqualTypeOf<Wrapped>()
+expectTypeOf(revoke("f").pipe(Db.transaction({ isolationLevel: "serializable" }))).toEqualTypeOf<Wrapped>()
+
+const op = Effect.fn("op")(function* () {
+	return yield* revoke("f")
+}, Db.transaction())
+expectTypeOf(op).returns.toEqualTypeOf<Wrapped>()
 
 // Domain errors stay in the error channel beside the transaction's.
 expectTypeOf(Db.transaction(Effect.fail(new Domain()))).toEqualTypeOf<
 	Effect.Effect<never, Domain | Db.DatabaseError | Db.TransactionError, Db.Database>
 >()
 
-// As an Effect.fn pipe argument.
-const method = Effect.fn("method")(function* (id: number) {
-	yield* Db.Transaction
-	return id
-}, Db.transaction())
-expectTypeOf(method).returns.toEqualTypeOf<Effect.Effect<number, Db.DatabaseError | Db.TransactionError, Db.Database>>()
-
-// Without the wrapper, a Transaction requirement cannot be provided by Database alone.
+// Without the wrapper, the requirement cannot be satisfied by a Database alone.
 // @ts-expect-error Transaction is still required
-const unwrapped: Effect.Effect<number, Db.DatabaseError, Db.Database> = mustBeAtomic
+const unwrapped: Effect.Effect<number, Db.DatabaseError, Db.Database> = revoke("f")
 void unwrapped
 
 // Settings are typed: an unknown isolation level does not compile.

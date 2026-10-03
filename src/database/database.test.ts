@@ -4,14 +4,15 @@
 // isolation between two transactions is out of reach here.
 
 import { PgliteClient } from "@effect/sql-pglite"
-import { assert, describe, expect, layer } from "@effect/vitest"
-import { Cause, Deferred, Effect, Exit, Fiber, Layer, Ref, Schedule } from "effect"
+import { assert, describe, expect, it, layer } from "@effect/vitest"
+import { Cause, Deferred, Effect, Exit, Fiber, Layer, Ref, Schedule, Schema } from "effect"
 import * as SqlClient from "effect/sql/SqlClient"
 import * as CH from "../index"
 import * as PG from "../postgres"
 import { clickhouseDialect } from "../ch/dialect"
 import { postgresDialect } from "../pg/dialect"
 import * as Db from "../database"
+import { renderTemplate } from "./sql"
 
 const statements: Array<string> = []
 
@@ -30,16 +31,17 @@ let tables = 0
 /** A fresh table per test: the client is shared across the file. */
 const freshTable = Effect.gen(function* () {
 	const name = `t_${++tables}`
-	yield* Db.execute({ sql: `CREATE TABLE ${name} (id int4 PRIMARY KEY, note text)` })
+	yield* Db.execute(Db.sql`CREATE TABLE ${Db.sql.identifier(name)} (id int4 PRIMARY KEY, note text)`)
 	return name
 })
 const insert = (table: string, id: number, note = "") =>
-	Db.execute({ sql: `INSERT INTO ${table} VALUES ($1, $2)`, parameters: [id, note] })
+	Db.execute(Db.sql`INSERT INTO ${Db.sql.identifier(table)} VALUES (${id}, ${note})`)
 const ids = (table: string) =>
-	Db.run(PG.compileUnsafe(CH.from(CH.table(table, { id: PG.int4 })).select("id").orderBy(["id", "asc"]), {})).pipe(
+	Db.run(CH.from(CH.table(table, { id: PG.int4 })).select("id").orderBy(["id", "asc"])).pipe(
 		Effect.map((rows) => rows.map((row) => row.id)),
 	)
-const raiseSqlState = (code: string) =>
+// DO blocks take no bound values, so the code is written in. Test-only.
+const raiseSqlState = (code: "40001" | "40P01") =>
 	Db.execute({ sql: `DO $$ BEGIN RAISE EXCEPTION 'forced' USING ERRCODE = '${code}'; END $$` })
 
 class Domain extends Error {
@@ -47,7 +49,7 @@ class Domain extends Error {
 }
 
 layer(Live, { excludeTestServices: true })("Database on PGlite", (it) => {
-	it.effect("run decodes a compiled query inside and outside a transaction", () =>
+	it.effect("run compiles a query for the database's dialect, inside and outside a transaction", () =>
 		Effect.gen(function* () {
 			const table = yield* freshTable
 			yield* insert(table, 1)
@@ -56,9 +58,54 @@ layer(Live, { excludeTestServices: true })("Database on PGlite", (it) => {
 		}),
 	)
 
+	it.effect("run fills params, and a missing one is a QueryBuilderError", () =>
+		Effect.gen(function* () {
+			const table = yield* freshTable
+			yield* Effect.all([insert(table, 1, "a"), insert(table, 2, "b")])
+			const Items = CH.table(table, { id: PG.int4, note: PG.text })
+			const byNote = CH.from(Items)
+				.select("id")
+				.where(($) => [$.note.eq(CH.param.string("note"))])
+			expect(yield* Db.run(byNote, { note: "b" })).toEqual([{ id: 2 }])
+			const error = yield* Effect.flip(Db.run(byNote))
+			expect(error).toBeInstanceOf(CH.QueryBuilderError)
+		}),
+	)
+
+	it.effect("sql binds every value: nothing in a value becomes SQL", () =>
+		Effect.gen(function* () {
+			const table = yield* freshTable
+			const hostile = "x'); DROP TABLE t_1; --"
+			yield* insert(table, 1, hostile)
+			const where = Db.sql`note = ${hostile}`
+			const rows = yield* Db.query(Db.sql`SELECT id, note FROM ${Db.sql.identifier(table)} WHERE ${where}`)
+			expect(rows).toEqual([{ id: 1, note: hostile }])
+		}),
+	)
+
+	it.effect("sql.identifier accepts only plain names", () =>
+		Effect.gen(function* () {
+			const error = yield* Effect.flip(Db.execute(Db.sql`SELECT * FROM ${Db.sql.identifier("t; DROP TABLE x")}`))
+			expect(error.reason).toBe("InvalidLiteral")
+		}),
+	)
+
+	it.effect("query decodes rows through a schema", () =>
+		Effect.gen(function* () {
+			const table = yield* freshTable
+			yield* insert(table, 1, "a")
+			const Row = Schema.Struct({ id: Schema.Number, note: Schema.String })
+			const rows = yield* Db.query(Db.sql`UPDATE ${Db.sql.identifier(table)} SET note = 'b' RETURNING id, note`, Row)
+			expect(rows).toEqual([{ id: 1, note: "b" }])
+			const error = yield* Effect.flip(Db.query(Db.sql`SELECT 'x' AS id`, Row))
+			expect(error).toBeInstanceOf(CH.CompiledQueryDecodeError)
+		}),
+	)
+
 	it.effect("refuses a query compiled for another dialect", () =>
 		Effect.gen(function* () {
-			const compiled = CH.compileUnsafe(CH.from(CH.table("x", { id: PG.int4 })).select("id"), {})
+			// The root compile is ClickHouse's.
+			const compiled = yield* CH.compile(CH.from(CH.table("x", { id: PG.int4 })).select("id"), {})
 			const exit = yield* Effect.exit(Db.run(compiled))
 			assert(Exit.isFailure(exit) && Cause.hasDies(exit.cause))
 			const defect = Cause.squash(exit.cause)
@@ -172,9 +219,9 @@ layer(Live, { excludeTestServices: true })("Database on PGlite", (it) => {
 			const settings = yield* Db.transaction(
 				Effect.gen(function* () {
 					const info = yield* Db.Transaction
-					const rows = yield* Db.query({
-						sql: "SELECT current_setting('transaction_isolation') AS isolation, current_setting('transaction_read_only') AS read_only",
-					})
+					const rows = yield* Db.query(
+						Db.sql`SELECT current_setting('transaction_isolation') AS isolation, current_setting('transaction_read_only') AS read_only`,
+					)
 					return { info, row: rows[0] }
 				}),
 				{ isolationLevel: "serializable", accessMode: "read only", deferrable: true },
@@ -197,15 +244,15 @@ layer(Live, { excludeTestServices: true })("Database on PGlite", (it) => {
 	it.effect("a failed COMMIT is TransactionCommitFailed, not a defect", () =>
 		Effect.gen(function* () {
 			const parent = yield* freshTable
-			const child = `${parent}_child`
-			yield* Db.execute({
-				sql: `CREATE TABLE ${child} (id int4, parent int4 REFERENCES ${parent}(id) DEFERRABLE INITIALLY DEFERRED)`,
-			})
-			const error = yield* Effect.flip(Db.transaction(Db.execute({ sql: `INSERT INTO ${child} VALUES (1, 999)` })))
+			const child = Db.sql.identifier(`${parent}_child`)
+			yield* Db.execute(
+				Db.sql`CREATE TABLE ${child} (id int4, parent int4 REFERENCES ${Db.sql.identifier(parent)}(id) DEFERRABLE INITIALLY DEFERRED)`,
+			)
+			const error = yield* Effect.flip(Db.transaction(Db.execute(Db.sql`INSERT INTO ${child} VALUES (1, 999)`)))
 			assert(error instanceof Db.TransactionCommitFailed)
 			expect(error.sqlState).toBe("23503")
 			expect(error.message).toMatch(/^COMMIT failed/)
-			expect(yield* Db.query({ sql: `SELECT * FROM ${child}` })).toEqual([])
+			expect(yield* Db.query(Db.sql`SELECT * FROM ${child}`)).toEqual([])
 		}),
 	)
 
@@ -296,25 +343,50 @@ layer(Live, { excludeTestServices: true })("Database on PGlite", (it) => {
 				dialect: clickhouseDialect,
 				observe: (statement) => Effect.sync(() => void sent.push(statement.sql)),
 			})
-			const error = yield* Effect.flip(clickhouse.transaction(clickhouse.execute({ sql: "SELECT 1" })))
+			const error = yield* Effect.flip(clickhouse.transaction(clickhouse.execute(Db.sql`SELECT 1`)))
 			assert(error instanceof Db.TransactionUnsupported)
 			expect(error.dialect).toBe("clickhouse")
 			expect(sent).toEqual([])
 		}),
 	)
 
-	it.effect("transaction fits an Effect.fn pipe argument", () =>
+	it.effect("requireTransaction and transaction as Effect.fn pipe arguments", () =>
 		Effect.gen(function* () {
 			const table = yield* freshTable
 			const write = Effect.fn("write")(function* (id: number) {
-				yield* Db.Transaction
 				yield* insert(table, id)
 				if (id === 2) return yield* Effect.fail(new Domain("two"))
 				return id
+			}, Db.requireTransaction)
+			const op = Effect.fn("op")(function* (id: number) {
+				return yield* write(id)
 			}, Db.transaction())
-			expect(yield* write(1)).toBe(1)
-			yield* Effect.flip(write(2))
+			expect(yield* op(1)).toBe(1)
+			yield* Effect.flip(op(2))
 			expect(yield* ids(table)).toEqual([1])
+		}),
+	)
+})
+
+describe("sql templates per dialect", () => {
+	const name = "it's"
+	const template = Db.sql`SELECT * FROM ${Db.sql.identifier("app.events")} WHERE name = ${name} AND n IN (${1}, ${2})`
+
+	it.effect("Postgres binds $n", () =>
+		Effect.gen(function* () {
+			expect(yield* renderTemplate(template, postgresDialect)).toEqual({
+				sql: `SELECT * FROM "app"."events" WHERE name = $1 AND n IN ($2, $3)`,
+				parameters: ["it's", 1, 2],
+			})
+		}),
+	)
+
+	it.effect("ClickHouse writes escaped literals", () =>
+		Effect.gen(function* () {
+			expect(yield* renderTemplate(template, clickhouseDialect)).toEqual({
+				sql: "SELECT * FROM app.events WHERE name = 'it\\'s' AND n IN (1, 2)",
+				parameters: [],
+			})
 		}),
 	)
 })

@@ -33,20 +33,20 @@ const withDatabase = <A, E>(body: (db: Db.DatabaseApi, sent: Array<string>, clie
 
 describe("database", () => {
 	describe.skipIf(!endpoint)("live ClickHouse", () => {
-		it("runs compiled queries and statements", async () => {
+		it("runs queries and sql templates", async () => {
 			const rows = await Effect.runPromise(
 				withDatabase((db) =>
 					Effect.gen(function* () {
-						yield* db.execute({ sql: "CREATE TABLE events (Id UInt32, Name String) ENGINE = MergeTree ORDER BY Id" })
-						yield* db.execute({ sql: "INSERT INTO events VALUES (1, 'a'), (2, 'b')" })
+						yield* db.execute(Db.sql`CREATE TABLE events (Id UInt32, Name String) ENGINE = MergeTree ORDER BY Id`)
+						yield* db.execute(Db.sql`INSERT INTO events VALUES (${1}, ${"a"}), (${2}, ${"it's"})`)
 						const Events = CH.table("events", { Id: CH.uint32, Name: CH.string })
-						return yield* db.run(CH.compileUnsafe(CH.from(Events).select("Id", "Name").orderBy(["Id", "asc"]), {}))
+						return yield* db.run(CH.from(Events).select("Id", "Name").orderBy(["Id", "asc"]))
 					}),
 				),
 			)
 			expect(rows).toEqual([
 				{ Id: 1, Name: "a" },
-				{ Id: 2, Name: "b" },
+				{ Id: 2, Name: "it's" },
 			])
 		})
 
@@ -54,7 +54,7 @@ describe("database", () => {
 			const result = await Effect.runPromise(
 				withDatabase((db, sent) =>
 					Effect.gen(function* () {
-						const error = yield* Effect.flip(db.transaction(db.execute({ sql: "SELECT 1" })))
+						const error = yield* Effect.flip(db.transaction(db.execute(Db.sql`SELECT 1`)))
 						return { error, sent: [...sent] }
 					}),
 				),
