@@ -86,6 +86,7 @@ const program = Effect.gen(function* () {
 		temporary,
 		true,
 	)
+	yield* runCommand(path.join(temporary, "node_modules/.bin/effect-orm"), ["--help"], temporary, true)
 })
 
 // This is the CLI entry point; provide platform services once at the boundary.

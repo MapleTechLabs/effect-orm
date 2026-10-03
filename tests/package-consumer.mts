@@ -9,6 +9,9 @@ import * as Bench from "@maple-dev/effect-orm/benchmark"
 import { makeHttpClient } from "@maple-dev/effect-orm/benchmark/http"
 import { runCli } from "@maple-dev/effect-orm/benchmark/cli"
 import * as SQL from "@maple-dev/effect-orm/sql"
+import * as S from "@maple-dev/effect-orm/schema"
+import * as Migrate from "@maple-dev/effect-orm/migrate"
+import { defineConfig } from "@maple-dev/effect-orm/kit"
 
 const events = CH.table("events", { id: T.uint64, name: T.string })
 const query = CH.from(events)
@@ -29,6 +32,26 @@ assert.equal(SQL.compile(length(CH.lit("abc")).toFragment()), "length('abc')")
 const invalid = Effect.runSync(Effect.exit(CH.compile(query, {})))
 assert.equal(invalid._tag, "Failure")
 
+const managed = S.defineTable("managed", {
+	columns: { id: T.uint64, name: S.column(T.string, { default: "" }) },
+	engine: S.engine.mergeTree(),
+	orderBy: ["id"],
+})
+const counts = S.defineTable("counts", { columns: { name: T.string, n: T.uint64 }, engine: S.engine.summingMergeTree(), orderBy: ["name"] })
+const countsMv = S.materializedView("counts_mv", {
+	to: counts,
+	as: CH.from(managed).select(($) => ({ name: $.name, n: CH.count() })).groupBy("name"),
+})
+assert.match(CH.compileUnsafe(CH.from(managed).select("name"), {}).sql, /FROM managed/)
+const created = S.diffSchemas([], S.entitiesOf([managed, counts, countsMv]))
+assert.deepEqual(created.ops.map((op) => op.op), ["create_table", "create_table", "create_view"])
+assert.match(created.ops.flatMap((op) => S.renderOp(op)).join("\n"), /name String DEFAULT ''/)
+const loaded = await Effect.runPromise(
+	Migrate.fromRecord({ "20260101000000_init": { kind: "ops", migration: JSON.stringify({ version: "1", ops: created.ops }) } }),
+)
+assert.equal(Migrate.stepsOf(loaded[0]!).length, 3)
+assert.equal(defineConfig({ schema: "./schema.ts", out: "./migrations" }).out, "./migrations")
+
 // Compile-only negative assertions verify that published declarations retain
 // column checking and inferred row types.
 const checkTypes = () => {
@@ -37,6 +60,8 @@ const checkTypes = () => {
 	// @ts-expect-error the selected ID is a string after toString
 	const id: number = rows[0]!.id
 	void id
+	// @ts-expect-error a view output column the target table lacks must not typecheck
+	S.materializedView("bad_mv", { to: counts, as: CH.from(managed).select(($) => ({ missing: $.name })) })
 }
 void checkTypes
 console.log("Isolated tarball imports, types, compilation and codecs passed")

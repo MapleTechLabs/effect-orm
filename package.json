@@ -22,7 +22,8 @@
 		"url": "git+https://github.com/MapleTechLabs/effect-orm.git"
 	},
 	"bin": {
-		"ch-bench": "./dist/benchmark/bin.mjs"
+		"ch-bench": "./dist/benchmark/bin.mjs",
+		"effect-orm": "./dist/kit/bin.mjs"
 	},
 	"files": [
 		"dist",
@@ -51,6 +52,18 @@
 		"./postgres": {
 			"types": "./dist/postgres.d.mts",
 			"import": "./dist/postgres.mjs"
+		},
+		"./schema": {
+			"types": "./dist/schema.d.mts",
+			"import": "./dist/schema.mjs"
+		},
+		"./migrate": {
+			"types": "./dist/migrate.d.mts",
+			"import": "./dist/migrate.mjs"
+		},
+		"./kit": {
+			"types": "./dist/kit.d.mts",
+			"import": "./dist/kit.mjs"
 		},
 		"./benchmark": {
 			"types": "./dist/benchmark/index.d.mts",

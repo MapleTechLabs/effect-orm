@@ -16,7 +16,8 @@ You do not need a Maple account, Maple's schema, or tenant columns. Tenant analy
 optional feature for applications that share tables between tenants.
 
 The root builder does not manage connections, create tables, run migrations, insert rows, or provide
-an ORM. It does not validate SQL against a live server, choose query plans, enforce authorization,
+an ORM. Opt-in [schema and migration entry points](./migrations.md) add DDL and migrations for
+ClickHouse. It does not validate SQL against a live server, choose query plans, enforce authorization,
 or supply retries. Existing ClickHouse tables and your executor own those responsibilities.
 [Getting started](./getting-started.md) covers npm installation and building from source.
 
@@ -53,6 +54,7 @@ Roughly in reading order.
 | [Tenant scoping](./tenant-scoping.md)                 | `tenantScope`, what marks a query scoped, `crossTenant()`                           |
 | [Extending the DSL](./extending.md)                   | `defineFn`, raw escape hatches, handwritten SQL                                     |
 | [Postgres](./postgres.md)                             | The Postgres dialect, its column types and functions                                |
+| [Schema and migrations](./migrations.md)              | `defineTable`, `materializedView`, `effect-orm generate`, applying migrations       |
 
 ## Reference
 
@@ -72,6 +74,9 @@ Roughly in reading order.
 | `@maple-dev/effect-orm/benchmark`      | Driver-free suite definitions, runner, report schemas, and comparisons                                                                                    |
 | `@maple-dev/effect-orm/benchmark/http` | ClickHouse HTTP transport, environment configuration, and query-log collection                                                                            |
 | `@maple-dev/effect-orm/benchmark/cli`  | `runCli(args)` for embedding the bundled `ch-bench` commands                                                                                              |
+| `@maple-dev/effect-orm/schema`         | `defineTable`, `materializedView`, DDL rendering, snapshots, and the schema diff. Pure                                                                   |
+| `@maple-dev/effect-orm/kit`            | `generate` and `check` over a migrations folder, `defineConfig`, and `runCli` for the bundled `effect-orm` command. Node or Bun                          |
+| `@maple-dev/effect-orm/migrate`        | `run`, `status`, `verify`, and `MigrationDriver`: applies migrations through a driver you provide                                                       |
 
 The root barrel is curated, not exhaustive — see
 [the reference](./reference.md#whats-only-on-a-subpath) for what lives only on a subpath.

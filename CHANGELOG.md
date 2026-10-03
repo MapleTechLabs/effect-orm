@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Add schema-as-code and migrations for ClickHouse, all opt-in (see `docs/migrations.md`):
+  - `./schema`: `defineTable` (a `Table` that also carries its DDL), `materializedView` (its
+    body is a DSL query, type-checked against the target table), DDL rendering with replicated
+    engines and `ON CLUSTER` as render options, content-hashed snapshots, and an offline diff.
+  - `./kit` and the `effect-orm` command: `generate` writes the next migration from the schema
+    modules, asks before dropping data (or takes `--hints`, exiting 2 without them), and
+    refuses changes that need a table rebuild; `check` validates the snapshot chain and
+    branch conflicts.
+  - `./migrate`: `run`, `status`, and `verify` through a `MigrationDriver` you build from
+    your `SqlClient`. Statements are journaled one by one so a failed run resumes, applied
+    migrations have their hash checked, and `verify` compares the database with the last
+    applied snapshot.
 - Postgres: wrap each `UNION ALL` branch in parentheses (`DialectClauses.parenthesizeUnionBranches`).
   A branch with its own `WITH`, `ORDER BY` or `LIMIT` was a syntax error.
 - Postgres: bind `param.float` as `$n::float8`, `param.bool` as `$n::boolean`, and the
