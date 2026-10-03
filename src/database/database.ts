@@ -397,12 +397,14 @@ const restoreCause = <E>(
 				}),
 			)
 		}
+		// The body never ran: BEGIN or SAVEPOINT died, not ROLLBACK.
+		if (bodyExit === undefined) return Effect.fail(toDatabaseError(depth === 0 ? "BEGIN" : "SAVEPOINT")(error))
 		// An interrupted transaction whose ROLLBACK died stays interrupted.
-		if (bodyExit !== undefined && Cause.hasInterrupts(bodyExit.cause)) return Effect.failCause(bodyExit.cause as Cause.Cause<E>)
+		if (Cause.hasInterrupts(bodyExit.cause)) return Effect.failCause(bodyExit.cause as Cause.Cause<E>)
 		return Effect.fail(
 			new TransactionRollbackFailed({
 				message: `ROLLBACK failed after the transaction body failed: ${firstLine(error)}`,
-				bodyCause: bodyExit === undefined ? undefined : bodyExit.cause,
+				bodyCause: bodyExit.cause,
 				cause: error,
 			}),
 		)

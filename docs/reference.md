@@ -37,7 +37,7 @@ The root barrel is curated. These are exported by the package but not from it:
 | `makeHttpClient`, `makeHttpTransport`, `httpConfigFromEnv`                                       | `/benchmark/http` |
 | `runCli`                                                                                         | `/benchmark/cli`  |
 | `postgresDialect`, Postgres column types and functions, Postgres-default `compile`              | `/postgres`       |
-| `Database`, `run`, `query`, `execute`, `transaction`, `retryContention`, `Transaction`          | `/database`       |
+| `Database`, `run`, `sql`, `query`, `execute`, `transaction`, `requireTransaction`, `retryContention`, `Transaction` | `/database` |
 | `DatabaseError`, `TransactionCommitFailed`, `TransactionRollbackFailed` and the other transaction errors | `/database` |
 
 Every column-type constructor and every expression helper is on the root as well as on its
@@ -90,7 +90,7 @@ Note `/sql` exports a `compile` (fragment → string) distinct from the root `co
 | `compileUnsafe`      | The same, returning `CompiledQuery<Output>` and throwing instead                     |
 | `compileUnion`       | `(union, params, options?) => Effect<CompiledQuery<Output>, QueryBuilderError>`      |
 | `compileUnionUnsafe` | The same, throwing instead                                                           |
-| `rawCompiledQuery`   | `({ sql, tenantScope, reason, justification, rowSchema?, route? }) => CompiledQuery` |
+| `rawCompiledQuery`   | `({ sql, tenantScope, reason, justification, rowSchema?, route?, dialect? }) => CompiledQuery` |
 | `clickhouseDialect`  | The default `Dialect`: params written into the SQL as ClickHouse literals            |
 
 `Dialect`, `DialectClauses` and `ParamStyle` describe a database: how identifiers and literals
