@@ -5,8 +5,11 @@
 //
 // - `_effect_orm_migrations`: one row per applied migration, written only
 //   after every statement in it finished. Never written first.
-// - `_effect_orm_migration_steps`: one row per finished statement, so a run
-//   that stopped halfway resumes at the first statement without a row.
+// - `_effect_orm_migration_steps`: the latest state of each statement:
+//   `started` is written before it runs, then `done` or `failed`. A run that
+//   stopped halfway resumes after the last `done`. A statement left at
+//   `started` may or may not have run (the process died, or the `done` row was
+//   never written), so it is never re-run automatically; see `resolveStep`.
 // - `_effect_orm_migration_lease`: who is migrating, until when. Best effort:
 //   two runs that start within the same instant can both see an empty lease.
 //   Callers that need a hard guarantee serialize runs themselves.
@@ -40,7 +43,7 @@ export const ensureLedger = (options: RenderOptions): Effect.Effect<void, Migrat
 			`CREATE TABLE IF NOT EXISTS ${LEDGER_TABLES.migrations}${cluster(options)} (name String, hash String, applied_at DateTime64(3) DEFAULT now64(3)) ENGINE = ${ledgerEngine(options, "applied_at")} ORDER BY name`,
 		)
 		yield* driver.execute(
-			`CREATE TABLE IF NOT EXISTS ${LEDGER_TABLES.steps}${cluster(options)} (name String, step String, sql_hash String, finished_at DateTime64(3) DEFAULT now64(3)) ENGINE = ${ledgerEngine(options, "finished_at")} ORDER BY (name, step)`,
+			`CREATE TABLE IF NOT EXISTS ${LEDGER_TABLES.steps}${cluster(options)} (name String, step String, sql_hash String, state LowCardinality(String), seq UInt64, finished_at DateTime64(3) DEFAULT now64(3)) ENGINE = ${ledgerEngine(options, "seq")} ORDER BY (name, step)`,
 		)
 		yield* driver.execute(
 			`CREATE TABLE IF NOT EXISTS ${LEDGER_TABLES.lease}${cluster(options)} (owner String, expires_at DateTime64(3), written_at DateTime64(3) DEFAULT now64(3)) ENGINE = ${ledgerEngine(options, "written_at")} ORDER BY owner`,
@@ -61,18 +64,40 @@ export const readApplied = Effect.gen(function* () {
 	return rows.map((row): AppliedRow => ({ name: String(row.name), hash: String(row.hash), appliedAt: String(row.applied) }))
 })
 
-export const readDoneSteps = (name: string) =>
+export type StepState = "started" | "done" | "failed"
+
+export interface StepRow {
+	readonly sqlHash: string
+	readonly state: StepState
+}
+
+/** The latest state of each statement of a migration. */
+export const readSteps = (name: string) =>
 	Effect.gen(function* () {
 		const driver = yield* MigrationDriver
-		const rows = yield* driver.query(`SELECT step, sql_hash FROM ${LEDGER_TABLES.steps} FINAL WHERE name = ${q(name)}`)
-		return new Map(rows.map((row) => [String(row.step), String(row.sql_hash)] as const))
+		const rows = yield* driver.query(`SELECT step, sql_hash, state FROM ${LEDGER_TABLES.steps} FINAL WHERE name = ${q(name)}`)
+		return new Map(
+			rows.map((row) => {
+				const state = String(row.state)
+				const parsed: StepState = state === "started" || state === "failed" ? state : "done"
+				return [String(row.step), { sqlHash: String(row.sql_hash), state: parsed }] as const
+			}),
+		)
 	})
 
-export const recordStep = (name: string, step: string, sqlHash: string) =>
+// The ReplacingMergeTree version: strictly increasing within a process, so a
+// state written after another always wins even inside one millisecond.
+let lastSeq = 0
+const nextSeq = (): number => {
+	lastSeq = Math.max(lastSeq + 1, Date.now() * 1000)
+	return lastSeq
+}
+
+export const recordStep = (name: string, step: string, sqlHash: string, state: StepState) =>
 	Effect.gen(function* () {
 		const driver = yield* MigrationDriver
 		yield* driver.execute(
-			`INSERT INTO ${LEDGER_TABLES.steps} (name, step, sql_hash) VALUES (${q(name)}, ${q(step)}, ${q(sqlHash)})`,
+			`INSERT INTO ${LEDGER_TABLES.steps} (name, step, sql_hash, state, seq) VALUES (${q(name)}, ${q(step)}, ${q(sqlHash)}, ${q(state)}, ${nextSeq()})`,
 		)
 	})
 

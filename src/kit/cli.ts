@@ -16,6 +16,8 @@ const help = `effect-orm: schema migrations for ClickHouse
   migrate [--strict]               Apply pending migrations (needs config.driver)
   status                           Applied, pending, partial, or changed, per migration
   verify                           Compare the database with the last applied snapshot
+  resolve <migration> <step>       Record what a step left "started" did, after checking the database:
+          --ran | --not-ran        --ran skips it on the next migrate, --not-ran runs it
 
   --config <path>                  Default: effect-orm.config.ts
   --json                           Machine-readable output
@@ -29,6 +31,8 @@ const options = {
 	hints: { type: "string" },
 	"hints-file": { type: "string" },
 	strict: { type: "boolean" },
+	ran: { type: "boolean" },
+	"not-ran": { type: "boolean" },
 	json: { type: "boolean" },
 	help: { type: "boolean" },
 } as const
@@ -105,6 +109,25 @@ const program = (args: ReadonlyArray<string>, print: (line: string) => void) =>
 				out(result, () => [
 					`${result.migrations} migrations, ok.`,
 					...(result.leaves.length > 1 ? [`Independent branches (merged by the next generate): ${result.leaves.join(", ")}`] : []),
+				])
+				return 0
+			}
+			case "resolve": {
+				const [, migrationName, stepId] = parsed.positionals
+				const ran = parsed.values.ran === true
+				const notRan = parsed.values["not-ran"] === true
+				if (migrationName === undefined || stepId === undefined || ran === notRan) {
+					return yield* new KitError({ code: "config", message: "usage: effect-orm resolve <migration> <step> --ran | --not-ran" })
+				}
+				const migrations = yield* readMigrations(resolve(cwd, config.out))
+				const migration = migrations.find((m) => m.name === migrationName)
+				if (migration === undefined) return yield* new KitError({ code: "config", message: `no migration named ${migrationName}` })
+				yield* withDriver(
+					config,
+					Migrate.resolveStep({ migration, step: stepId, outcome: ran ? "ran" : "not-ran", render: config.render ?? {} }),
+				)
+				out({ migration: migrationName, step: stepId, outcome: ran ? "ran" : "not-ran" }, () => [
+					`Recorded ${migrationName} step ${stepId} as ${ran ? "done; migrate will skip it" : "not run; migrate will run it"}.`,
 				])
 				return 0
 			}

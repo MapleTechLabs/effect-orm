@@ -156,6 +156,11 @@ How a run behaves:
   the migration `partial`; the next run skips the finished statements and resumes. A finished
   statement whose SQL has since changed fails the run with `MigrateStepChanged` instead of being
   skipped: edit only the failed statement and those after it.
+- **Uncertain statements are never repeated.** `started` is journaled before a statement runs. If
+  the process dies, or the `done` row cannot be written, the statement may or may not have run, and
+  the next run stops there with `MigrateStepUncertain` (status `uncertain`). Check the database,
+  then record what happened: `Migrate.resolveStep` or `effect-orm resolve <migration> <step>
+  --ran | --not-ran`. A statement the server rejected is journaled `failed` and simply runs again.
 - **A lease** in `_effect_orm_migration_lease` stops a second run while one is active. It is best
   effort: two runs starting in the same instant can both proceed. Serialize deploys if that
   matters.

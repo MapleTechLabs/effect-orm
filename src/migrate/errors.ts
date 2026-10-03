@@ -42,4 +42,13 @@ export class MigrateStepChanged extends Schema.TaggedError<MigrateStepChanged>()
 	message: Schema.String,
 }) {}
 
-export type MigrateError = MigrateSqlError | MigrateSourceError | MigrateHashMismatch | MigrateLeaseHeld | MigrateStepChanged | MigrateStepFailed
+/**
+ * A statement started and never reported back: it may or may not have run.
+ * Check the database, then record what happened with `resolveStep`.
+ */
+export class MigrateStepUncertain extends Schema.TaggedError<MigrateStepUncertain>()(
+	"@maple-dev/effect-orm/MigrateStepUncertain",
+	{ migration: Schema.String, step: Schema.String, sql: Schema.String, message: Schema.String },
+) {}
+
+export type MigrateError = MigrateSqlError | MigrateSourceError | MigrateHashMismatch | MigrateLeaseHeld | MigrateStepChanged | MigrateStepFailed | MigrateStepUncertain

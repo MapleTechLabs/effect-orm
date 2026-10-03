@@ -13,6 +13,7 @@ export {
 	MigrateSqlError,
 	MigrateStepChanged,
 	MigrateStepFailed,
+	MigrateStepUncertain,
 	type MigrateError,
 } from "./migrate/errors"
 export { LEDGER_TABLES } from "./migrate/ledger"
@@ -27,5 +28,14 @@ export {
 	type MigrationInput,
 	type MigrationStep,
 } from "./migrate/source"
-export { run, status, type AppliedMigration, type MigrationState, type MigrationStatus, type RunOptions } from "./migrate/run"
+export {
+	resolveStep,
+	run,
+	status,
+	type AppliedMigration,
+	type MigrationState,
+	type MigrationStatus,
+	type ResolveStepOptions,
+	type RunOptions,
+} from "./migrate/run"
 export { verify, type Drift, type VerifyResult } from "./migrate/verify"

@@ -10,11 +10,11 @@ import { Effect, Option } from "effect"
 import { sha256Hex } from "../schema/entities"
 import type { RenderOptions } from "../schema/render"
 import { MigrationDriver } from "./driver"
-import { MigrateHashMismatch, MigrateLeaseHeld, MigrateStepChanged, MigrateStepFailed, type MigrateError } from "./errors"
+import { MigrateHashMismatch, MigrateLeaseHeld, MigrateSourceError, MigrateStepChanged, MigrateStepFailed, MigrateStepUncertain, type MigrateError } from "./errors"
 import {
 	ensureLedger,
 	readApplied,
-	readDoneSteps,
+	readSteps,
 	readLiveLeases,
 	recordMigration,
 	recordStep,
@@ -41,7 +41,8 @@ export interface AppliedMigration {
 	readonly resumedSteps: number
 }
 
-export type MigrationState = "applied" | "pending" | "partial" | "changed"
+/** `uncertain`: a statement started and never reported back; see `resolveStep`. */
+export type MigrationState = "applied" | "pending" | "partial" | "uncertain" | "changed"
 
 export interface MigrationStatus {
 	readonly name: string
@@ -88,26 +89,38 @@ const applyOne = (migration: LoadedMigration, render: RenderOptions, renew: Effe
 	Effect.gen(function* () {
 		const driver = yield* MigrationDriver
 		const steps = stepsOf(migration, render)
-		const done = yield* readDoneSteps(migration.name)
+		const journal = yield* readSteps(migration.name)
 		let resumed = 0
 		for (const step of steps) {
 			const sqlHash = yield* Effect.promise(() => sha256Hex(step.sql))
-			const doneHash = done.get(step.id)
-			if (doneHash === sqlHash) {
+			const previous = journal.get(step.id)
+			if (previous?.state === "started") {
+				return yield* new MigrateStepUncertain({
+					migration: migration.name,
+					step: step.id,
+					sql: step.sql,
+					message: `${migration.name} step ${step.id} started and never reported back, so it may or may not have run. Check the database, then record the outcome with resolveStep (effect-orm resolve)`,
+				})
+			}
+			if (previous?.state === "done" && previous.sqlHash === sqlHash) {
 				resumed += 1
 				continue
 			}
 			// A finished step whose SQL is now different: the partial migration was
 			// edited above the failure, or rendered with other options. Skipping it
 			// would leave a statement unrun; rerunning it could repeat one.
-			if (doneHash !== undefined) {
+			if (previous?.state === "done") {
 				return yield* new MigrateStepChanged({
 					migration: migration.name,
 					step: step.id,
 					message: `${migration.name} step ${step.id} already ran with different SQL. Edit only the failed statement and those after it, or keep the render options of the first run`,
 				})
 			}
+			// Journal the attempt first: if the statement runs but the `done` row is
+			// never written, the next run stops at this step instead of repeating it.
+			yield* recordStep(migration.name, step.id, sqlHash, "started")
 			yield* driver.execute(step.sql).pipe(
+				Effect.tapError(() => recordStep(migration.name, step.id, sqlHash, "failed").pipe(Effect.ignore)),
 				Effect.mapError(
 					(cause) =>
 						new MigrateStepFailed({
@@ -120,7 +133,7 @@ const applyOne = (migration: LoadedMigration, render: RenderOptions, renew: Effe
 				),
 				Effect.withSpan("effect_orm.migrate.step", { attributes: { "effect_orm.migration.step": step.id } }),
 			)
-			yield* recordStep(migration.name, step.id, sqlHash)
+			yield* recordStep(migration.name, step.id, sqlHash, "done")
 			yield* renew
 		}
 		yield* recordMigration(migration.name, migration.hash)
@@ -172,9 +185,39 @@ export const status = (
 					const state: MigrationState = row.value.hash === migration.hash ? "applied" : "changed"
 					return { name: migration.name, state, appliedAt: row.value.appliedAt }
 				}
-				const done = yield* readDoneSteps(migration.name)
-				const state: MigrationState = done.size > 0 ? "partial" : "pending"
+				const journal = [...(yield* readSteps(migration.name)).values()]
+				const state: MigrationState = journal.some((step) => step.state === "started")
+					? "uncertain"
+					: journal.some((step) => step.state === "done")
+						? "partial"
+						: "pending"
 				return { name: migration.name, state, appliedAt: undefined }
 			}),
 		)
+	})
+
+export interface ResolveStepOptions {
+	readonly migration: LoadedMigration
+	/** The step id from `MigrateStepUncertain`. */
+	readonly step: string
+	/** What checking the database showed: the statement took effect, or it did not. */
+	readonly outcome: "ran" | "not-ran"
+	readonly render?: RenderOptions
+}
+
+/**
+ * Record the outcome of a step left uncertain, after checking the database.
+ * `ran` marks it done so the next run skips it; `not-ran` marks it failed so
+ * the next run executes it.
+ */
+export const resolveStep = (options: ResolveStepOptions): Effect.Effect<void, MigrateError, MigrationDriver> =>
+	Effect.gen(function* () {
+		const { migration } = options
+		const step = stepsOf(migration, options.render ?? {}).find((s) => s.id === options.step)
+		if (step === undefined) {
+			return yield* new MigrateSourceError({ migration: migration.name, message: `has no step ${options.step}` })
+		}
+		yield* ensureLedger(options.render ?? {})
+		const sqlHash = yield* Effect.promise(() => sha256Hex(step.sql))
+		yield* recordStep(migration.name, step.id, sqlHash, options.outcome === "ran" ? "done" : "failed")
 	})

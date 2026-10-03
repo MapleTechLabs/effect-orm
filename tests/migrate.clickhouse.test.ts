@@ -174,6 +174,43 @@ describe("migrate", () => {
 			)
 		})
 
+		it("stops at a statement that started and never reported back, until it is resolved", async () => {
+			await Effect.runPromise(
+				withDatabase(
+					Effect.gen(function* () {
+						const migrations = yield* Migrate.fromRecord({
+							"20261003000000_hand": {
+								kind: "sql",
+								migration: `CREATE TABLE counts (n UInt8) ENGINE = MergeTree ORDER BY n\n${Migrate.STATEMENT_BREAKPOINT}\nINSERT INTO counts VALUES (1)`,
+							},
+						})
+						const sql = yield* ClickhouseClient.ClickhouseClient
+						// The INSERT ran but its `done` row was never written: what a crash between the two leaves.
+						yield* sql.asCommand(sql.unsafe("CREATE TABLE counts (n UInt8) ENGINE = MergeTree ORDER BY n"))
+						yield* Migrate.run({ migrations: yield* Migrate.fromRecord({}) })
+						const [migration] = migrations
+						const steps = Migrate.stepsOf(migration!)
+						yield* Migrate.resolveStep({ migration: migration!, step: "0", outcome: "ran" })
+						yield* sql.asCommand(sql.unsafe("INSERT INTO counts VALUES (1)"))
+						yield* sql.asCommand(
+							sql.unsafe(
+								`INSERT INTO ${Migrate.LEDGER_TABLES.steps} (name, step, sql_hash, state, seq) VALUES ('20261003000000_hand', '1', 'x', 'started', ${Date.now() * 1000 + 999})`,
+							),
+						)
+						expect(steps).toHaveLength(2)
+						expect((yield* Migrate.status(migrations)).map((s) => s.state)).toEqual(["uncertain"])
+						const exit = yield* Effect.exit(Migrate.run({ migrations }))
+						expect(String(exit)).toContain("MigrateStepUncertain")
+
+						yield* Migrate.resolveStep({ migration: migration!, step: "1", outcome: "ran" })
+						expect(yield* Migrate.run({ migrations })).toEqual([{ name: "20261003000000_hand", steps: 2, resumedSteps: 2 }])
+						const rows = yield* sql.unsafe<{ c: string }>("SELECT count() AS c FROM counts")
+						expect(Number(rows[0]?.c)).toBe(1)
+					}),
+				),
+			)
+		})
+
 		it("rejects an edited migration under strict", async () => {
 			await Effect.runPromise(
 				withDatabase(
