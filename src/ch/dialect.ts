@@ -59,6 +59,9 @@ export interface DialectClauses {
 	/** Whether each `UNION ALL` branch is wrapped in parentheses. Postgres needs
 	 *  it for a branch with its own WITH, ORDER BY or LIMIT. */
 	readonly parenthesizeUnionBranches: boolean
+	/** `RETURNING` after an INSERT. Absent means no: an insert with
+	 *  `.returning()` fails to compile for the dialect. */
+	readonly returning?: boolean
 }
 
 /** A transaction isolation level. `read uncommitted` is left out: Postgres runs it as `read committed`. */
@@ -138,7 +141,13 @@ export const clickhouseDialect: Dialect = {
 	literal: sqlLiteral,
 	dateTimeLiteral: (value) => quoteClickHouseString(chDateTimeLiteral(value)),
 	params: { _tag: "inline" },
-	clauses: { format: true, derivedTableAlias: false, groupByAlias: true, parenthesizeUnionBranches: false },
+	clauses: {
+		format: true,
+		derivedTableAlias: false,
+		groupByAlias: true,
+		parenthesizeUnionBranches: false,
+		returning: false,
+	},
 	transactions: noTransactions,
 }
 

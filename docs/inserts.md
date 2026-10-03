@@ -31,8 +31,8 @@ const insertKey = CH.insertInto(ApiKeys).values({
 // yield* Db.run(insertKey, { id, orgId })
 ```
 
-`Database.run` compiles the insert for its database's dialect and runs it. An insert returns no
-rows; `RETURNING` is not built yet (see [`design/writes.md`](../design/writes.md)).
+`Database.run` compiles the insert for its database's dialect and runs it. Without
+[`returning`](#returning) an insert returns no rows.
 
 ## The row type
 
@@ -90,6 +90,25 @@ the codec rejects fails to compile with a `QueryBuilderError` that names the row
   several rows is bound once. A statement over 65535 bound values (Postgres's limit) fails to
   compile instead of being split: send fewer rows per statement.
 
+## Returning
+
+On Postgres, `returning` adds a RETURNING list and `Database.run` returns the inserted rows,
+decoded. It takes column names, or a callback building one expression per alias, as `select`
+does:
+
+```ts
+const created = CH.insertInto(ApiKeys)
+	.values({ id: CH.param.string("id"), org_id: CH.param.string("orgId"), name: "default" })
+	.returning(($) => ({ id: $.id, createdAt: $.created_at }))
+
+// const [row] = yield* Db.run(created, { id, orgId }) // { id: string; createdAt: DateTime.Utc }
+```
+
+The row schema is derived from the list, as it is from a SELECT: an untyped expression
+(`untypedExpr`) leaves the insert undecoded, with `rowSchemaSource: "none"` and the alias in
+`untypedColumns`. `CompiledQuery.returning` lists the aliases. ClickHouse has no RETURNING, so
+compiling an insert with `returning` for it is a `QueryBuilderDefect`.
+
 ## Tenant scope
 
 An insert has a `tenantScope` like a query, worked out the same way. On a table with a
@@ -107,6 +126,7 @@ without a tenant column gives `"untenanted"`.
 | A param with no value                             | `QueryBuilderError` `UnresolvedParam`    |
 | Over the dialect's bound-value limit              | `QueryBuilderError` `InvalidArguments`   |
 | Compiling without `values`                        | `QueryBuilderDefect`                     |
+| `returning` for a dialect without RETURNING       | `QueryBuilderDefect`                     |
 
 _(Backed by `src/ch/insert.test.ts`, `src/database/database.test.ts` and
 `tests/database.clickhouse.test.ts`.)_

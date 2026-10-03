@@ -11,7 +11,7 @@ import { custom, dateTime, dateTime64, type CHType, type ColumnDefs } from "./ty
 import type { CHQuery, CHQueryState } from "./query"
 import type { CHUnionQuery } from "./union"
 import { isInsert, type CHInsert } from "./insert"
-import { createQualifiedColumnAccessor, createJoinedColumnAccessor, sourceAlias } from "./query"
+import { createColumnAccessor, createQualifiedColumnAccessor, createJoinedColumnAccessor, sourceAlias } from "./query"
 import { aliased, columnTypeOf, isExprLike } from "./expr"
 import { raw, identPath, quoteIdent, quoteIdentPath, compile as compileSqlFragment } from "../sql/sql-fragment"
 import { splitTerminalClauses } from "../sql/terminal-clauses"
@@ -134,6 +134,11 @@ interface CompiledQueryBase<Output> {
 	 * through a client path that expects a result set.
 	 */
 	readonly kind: "select" | "insert"
+	/**
+	 * The aliases of an insert's RETURNING list, when it has one. An insert
+	 * without it sends back no rows; one with it is read like a query.
+	 */
+	readonly returning?: ReadonlyArray<string>
 	/**
 	 * The values a binding dialect sends beside `sql`, in placeholder order.
 	 *
@@ -343,6 +348,7 @@ const makeCompiledQuery = <Output, Route extends string | undefined>(
 	rowSchemaMismatch?: RowSchemaMismatch,
 	dialect?: string,
 	kind: "select" | "insert" = "select",
+	returning?: ReadonlyArray<string>,
 ): CompiledQuery<Output, Route> => {
 	let cachedDecodeRow: ((row: unknown) => Effect.Effect<Output, unknown, never>) | undefined
 	let decoderBuilt = false
@@ -405,6 +411,7 @@ const makeCompiledQuery = <Output, Route extends string | undefined>(
 	return {
 		sql,
 		kind,
+		...(returning !== undefined ? { returning } : undefined),
 		parameters,
 		tenantScope,
 		// Resolved eagerly only here, where the getter is already memoised by
@@ -1326,6 +1333,24 @@ const VALUE_PARAM = "$$v"
 
 const EMPTY_ROW = Schema.Struct({}) as unknown as CompiledQueryRowSchema<never>
 
+/** The RETURNING clause and its row schema, or none without `returning`. */
+const returningOf = (insert: CHInsert<any, any, any, any>) => {
+	const { table, returningFn } = insert._state
+	if (returningFn === undefined) return undefined
+	const dialect = currentDialect()
+	if (dialect.clauses.returning !== true) {
+		throw new QueryBuilderDefect({
+			message: `insertInto(${table.name}): returning() has no meaning for the ${dialect.name} dialect, which has no RETURNING clause`,
+		})
+	}
+	const exprs = returningFn(createColumnAccessor(table.columns))
+	const aliases = Object.keys(exprs)
+	if (aliases.length === 0) {
+		throw new QueryBuilderDefect({ message: `insertInto(${table.name}): returning() needs at least one column` })
+	}
+	return { exprs, aliases, derived: deriveRowSchema(exprs) }
+}
+
 /**
  * An INSERT ... VALUES. Columns are written in table order, so two rows with
  * their keys in different orders cannot swap values; a column some rows leave
@@ -1403,27 +1428,34 @@ function compileInsert(insert: CHInsert<any, any, any, any>, params: Record<stri
 	)
 
 	const dialect = currentDialect()
+	const returning = returningOf(insert)
+	const returningSql =
+		returning === undefined
+			? ""
+			: `\nRETURNING ${returning.aliases.map((alias) => compileSqlFragment(aliased(returning.exprs[alias]!, alias))).join(", ")}`
 	const rendered = renderParams(
-		`INSERT INTO ${quoteIdentPath(table.name)} (${columns.map(quoteIdent).join(", ")})\nVALUES ${tuples.join(", ")}`,
+		`INSERT INTO ${quoteIdentPath(table.name)} (${columns.map(quoteIdent).join(", ")})\nVALUES ${tuples.join(", ")}${returningSql}`,
 		values,
 		dialect,
 	)
+	const returnedSchema = returning !== undefined && "schema" in returning.derived ? returning.derived.schema : undefined
 	const tenantScope: TenantScope =
 		tenant === undefined ? "untenanted" : pinned && bounds.size === 1 ? "single-tenant" : "cross-tenant"
 
 	return withTenantBound(
-		makeCompiledQuery<never, undefined>(
+		makeCompiledQuery<any, undefined>(
 			rendered.sql,
 			rendered.parameters,
 			tenantScope,
-			"derived",
-			() => EMPTY_ROW,
+			returning === undefined || returnedSchema !== undefined ? "derived" : "none",
+			() => (returning === undefined ? EMPTY_ROW : returnedSchema),
 			undefined,
-			[],
+			returning !== undefined && "untyped" in returning.derived ? returning.derived.untyped : [],
 			undefined,
 			undefined,
 			dialect.name,
 			"insert",
+			returning?.aliases,
 		),
 		tenantScope === "single-tenant" ? [...bounds][0] : undefined,
 	)

@@ -10,6 +10,9 @@
   `command` and returns no rows.
 - Add `TableOptions.defaults` for the columns an insert may leave out. `defineTable` works them
   out from its column options and records `MATERIALIZED` / `ALIAS` columns as not insertable.
+- Add `returning` to an insert (Postgres): column names or a callback, as in `select`. `run`
+  returns the inserted rows decoded through the derived row schema; `CompiledQuery.returning`
+  lists the aliases. Add `DialectClauses.returning`, optional, absent meaning no.
 - Add `CompiledQuery.kind` (`"select"` or `"insert"`); `rawCompiledQuery` takes it as an option.
 - Add `ParamStyle.maxParameters`; Postgres sets 65535, and a statement over it fails to compile.
 - Add `@maple-dev/effect-orm/database`, opt-in (see `docs/database.md`): a `Database` over the

@@ -14,6 +14,7 @@
 //   yield* Database.run(insert, { id, orgId })
 
 import type { Comparable, Expr, Widen } from "./expr"
+import type { ColumnAccessor, InferOutput } from "./query"
 import type { Table } from "./table"
 import type { CHType, ColumnDefs, InferTS } from "./types"
 
@@ -69,6 +70,8 @@ export interface CHInsertState {
 	readonly table: Table<string, ColumnDefs>
 	/** Set by `values`. Compiling without it is a defect. */
 	readonly rows?: ReadonlyArray<Readonly<Record<string, unknown>>>
+	/** Set by `returning`: the RETURNING list, as a select callback. */
+	readonly returningFn?: ($: any) => Record<string, Expr<any>>
 }
 
 export interface CHInsert<
@@ -91,6 +94,20 @@ export interface CHInsert<
 	values(
 		rows: InsertRow<Cols, Defaulted, Computed> | ReadonlyArray<InsertRow<Cols, Defaulted, Computed>>,
 	): CHInsert<Cols, Defaulted, Computed, Output>
+
+	/**
+	 * Return the inserted rows: column names, or a callback building an
+	 * expression per alias, as in `select`. `Database.run` then decodes them
+	 * through the derived row schema. Postgres only; on a dialect without
+	 * RETURNING (ClickHouse) compiling is a defect. Calling it again replaces
+	 * the list.
+	 */
+	returning<K extends keyof Cols & string>(
+		...columns: K[]
+	): CHInsert<Cols, Defaulted, Computed, { readonly [P in K]: InferTS<Cols[P]> }>
+	returning<S extends Record<string, Expr<any>>>(
+		fn: ($: ColumnAccessor<Cols>) => S,
+	): CHInsert<Cols, Defaulted, Computed, InferOutput<S>>
 }
 
 const makeInsert = <Cols extends ColumnDefs, Defaulted extends string, Computed extends string, Output>(
@@ -104,6 +121,14 @@ const makeInsert = <Cols extends ColumnDefs, Defaulted extends string, Computed 
 			// Copied, so a caller pushing to its array later does not change the insert.
 			rows: Array.isArray(rows) ? [...rows] : [rows as Readonly<Record<string, unknown>>],
 		}),
+	returning: ((...args: ReadonlyArray<unknown>) => {
+		const [first] = args
+		const returningFn =
+			typeof first === "function"
+				? (first as ($: any) => Record<string, Expr<any>>)
+				: ($: any) => Object.fromEntries((args as ReadonlyArray<string>).map((column) => [column, $[column]]))
+		return makeInsert({ ...state, returningFn })
+	}) as CHInsert<Cols, Defaulted, Computed, Output>["returning"],
 })
 
 /** Start an INSERT into `table`. Give its rows with `values`. */

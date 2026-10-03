@@ -81,6 +81,19 @@ const Keys = CH.table("api_keys", { id: PG.uuid, created_at: PG.timestamptz }, {
 CH.insertInto(Keys).values({ id: "k" })
 CH.insertInto(Keys).values({ id: "k", created_at: new Date() as unknown as DateTime.Utc })
 
+// RETURNING: column names or a callback, as in select.
+const returningNames = CH.insertInto(Keys).values({ id: "k" }).returning("id", "created_at")
+expectTypeOf<RowOf<typeof returningNames>>().toEqualTypeOf<{ readonly id: string; readonly created_at: DateTime.Utc }>()
+const returningExprs = CH.insertInto(Keys)
+	.values({ id: "k" })
+	.returning(($) => ({ key: $.id, n: CH.rawExpr("1", PG.int4) }))
+expectTypeOf<RowOf<typeof returningExprs>>().toEqualTypeOf<{ readonly key: string; readonly n: number }>()
+expectTypeOf(PG.compileUnsafe(returningExprs)).toEqualTypeOf<
+	CH.CompiledQuery<{ readonly key: string; readonly n: number }, undefined>
+>()
+// @ts-expect-error not a column
+CH.insertInto(Keys).values({ id: "k" }).returning("nope")
+
 // An insert without RETURNING runs to no rows; compile gives a CompiledQuery.
 const insert = CH.insertInto(Plain).values({ A: "a", B: 1 })
 expectTypeOf<RowOf<typeof insert>>().toEqualTypeOf<never>()

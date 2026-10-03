@@ -62,7 +62,7 @@ Note `/sql` exports a `compile` (fragment → string) distinct from the root `co
 | `fromQuery` | `(query, alias) => CHQuery`               |
 | `fromUnion` | `(union, alias) => CHQuery`               |
 | `unionAll`  | `(...queries) => CHUnionQuery`            |
-| `insertInto` | `(table) => CHInsert`; `.values(row \| rows)` sets its rows. See [Inserting rows](./inserts.md) |
+| `insertInto` | `(table) => CHInsert`; `.values(row \| rows)` sets its rows, `.returning(...)` the RETURNING list (Postgres). See [Inserting rows](./inserts.md) |
 
 ### `CHQuery` methods
 

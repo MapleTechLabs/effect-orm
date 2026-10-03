@@ -405,7 +405,15 @@ layer(Live, { excludeTestServices: true })("Database on PGlite", (it) => {
 				{ org: "o1" },
 			)
 			expect(inserted).toEqual([])
-			const rows = yield* Db.run(CH.from(Keys).select("id", "uses", "created_at", "revoked", "meta", "tags", "note").orderBy(["id", "asc"]))
+			const returned = yield* Db.run(
+				CH.insertInto(Keys)
+					.values({ id: id(3), org_id: "o1", tags: ["z"] })
+					.returning(($) => ({ id: $.id, uses: $.uses, createdAt: $.created_at, revoked: $.revoked, tags: $.tags })),
+			)
+			expect(returned).toHaveLength(1)
+			expect(returned[0]).toMatchObject({ id: id(3), uses: 0, revoked: false, tags: ["z"] })
+			expect(DateTime.isDateTime(returned[0]!.createdAt)).toBe(true)
+			const rows = yield* Db.run(CH.from(Keys).where(($) => [$.id.neq(id(3))]).select("id", "uses", "created_at", "revoked", "meta", "tags", "note").orderBy(["id", "asc"]))
 			expect(rows[0]).toEqual({ id: id(1), uses: 0, created_at: at, revoked: false, meta: { k: [1, 2] }, tags: ["a", "it's"], note: null })
 			expect(rows[1]).toMatchObject({ id: id(2), uses: 7, revoked: true, meta: null, tags: [], note: "n" })
 		}),

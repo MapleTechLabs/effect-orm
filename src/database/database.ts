@@ -85,7 +85,7 @@ export interface DatabaseApi {
 	readonly dialect: Dialect
 	/**
 	 * Compile a query for this database's dialect, run it, and decode its rows.
-	 * An insert returns no rows.
+	 * An insert returns its RETURNING rows, or none without `returning`.
 	 * `params` fills the query's `param.*` markers. A query compiled elsewhere
 	 * runs as it is, if it was compiled for this dialect.
 	 */
@@ -263,11 +263,12 @@ export const fromSqlClient = (sql: SqlClient.SqlClient, options: FromSqlClientOp
 		return compileCH(runnable as CHQuery<any, any, any, any>, params, { dialect })
 	}
 
-	// An insert sends back no rows, so it runs the way `execute` does: through
-	// `command`, which a ClickHouse client needs for a statement with no result set.
+	// An insert without RETURNING sends back no rows, so it runs the way `execute`
+	// does: through `command`, which a ClickHouse client needs for a statement
+	// with no result set.
 	const run: DatabaseApi["run"] = (runnable, params = {}) =>
 		Effect.flatMap(compileFor(runnable, params), (compiled) =>
-			compiled.kind === "insert"
+			compiled.kind === "insert" && compiled.returning === undefined
 				? Effect.as(execute(compiled), [])
 				: Effect.flatMap(rows(compiled), (wire) => compiled.decodeRows(wire)),
 		)

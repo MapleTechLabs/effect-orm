@@ -247,6 +247,7 @@ fails at BEGIN today: through the query path with a syntax error, and through `a
 
 ## Writes
 
-The builder compiles SELECTs and [INSERTs](./inserts.md). `run` runs an insert and returns no
-rows; on ClickHouse it goes through `command`, as `execute` does. Write UPDATE, DELETE and
-`INSERT ... RETURNING` with `sql`, as above, and read `RETURNING` with `query` and a schema.
+The builder compiles SELECTs and [INSERTs](./inserts.md). `run` runs an insert and returns its
+`returning` rows, decoded, or none without `returning`; an insert without it goes through
+`command`, as `execute` does. Write UPDATE and DELETE with `sql`, as above, and read `RETURNING`
+with `query` and a schema.

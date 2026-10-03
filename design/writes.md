@@ -1,7 +1,7 @@
 # Writes: INSERT
 
-Status: phase 1 built (`insertInto(...).values(...)`, see `docs/inserts.md`); phases 2 to 4 not
-started. Section 11 lists where the build differs from the plan. UPDATE and DELETE come later and
+Status: phases 1 and 2 built (`insertInto(...).values(...).returning(...)`, see
+`docs/inserts.md`); phases 3 and 4 not started. Section 11 lists where the build differs from the plan. UPDATE and DELETE come later and
 will reuse what this note sets up (the write-statement state, the `RETURNING` path, value
 encoding).
 
@@ -238,4 +238,10 @@ note, reusing `kind: "write"`, the returning path and the `set` record type from
   takes it as an option, so a handwritten INSERT can say so too.
 - **The bound-value limit is a dialect field**, `ParamStyle.maxParameters`, so it applies to
   queries as well and to a later dialect. The error is `InvalidArguments`; no new error code.
-- **An insert's row schema** is an empty struct with `rowSchemaSource: "derived"`.
+- **An insert's row schema** is an empty struct with `rowSchemaSource: "derived"`, or the one
+  derived from `returning`.
+- **`returning` on a dialect without it is a defect**, not a failure, like `.format()` on
+  Postgres: the dialect is chosen in source, not by a value. `DialectClauses.returning` is
+  optional so a dialect written against the earlier interface still compiles.
+- **`CompiledQuery.returning`** lists the RETURNING aliases; `run` reads it to choose between
+  the command path and the row path, so a precompiled insert runs correctly too.

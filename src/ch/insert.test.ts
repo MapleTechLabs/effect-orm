@@ -95,6 +95,55 @@ describe("insertInto", () => {
 		expect(compiled.sql).toBe("INSERT INTO notes (Body)\nVALUES ('\\x5F_PARAM_string_x__')")
 	})
 
+	describe("returning", () => {
+		it.effect("writes RETURNING and derives the row schema from it", () =>
+			Effect.gen(function* () {
+				const compiled = PG.compileUnsafe(
+					CH.insertInto(Keys)
+						.values({ id: "a", org_id: "o", name: "n", meta: {} })
+						.returning(($) => ({ id: $.id, createdAt: $.created_at })),
+				)
+				expect(compiled.sql).toBe(
+					'INSERT INTO "api_keys" ("id", "org_id", "name", "meta")\nVALUES ($1, $2, $3, $4)\n' +
+						'RETURNING "id" AS "id", "created_at" AS "createdAt"',
+				)
+				expect(compiled.returning).toEqual(["id", "createdAt"])
+				expect(compiled.rowSchemaSource).toBe("derived")
+				const at = "2026-01-02T03:04:05.000Z"
+				const [row] = yield* compiled.decodeRows([{ id: "a", createdAt: at }])
+				expect(row!.id).toBe("a")
+				expect(DateTime.formatIso(row!.createdAt)).toBe(at)
+			}),
+		)
+
+		it("takes column names, and calling it again replaces the list", () => {
+			const insert = CH.insertInto(Keys).values({ id: "a", org_id: "o", name: "n", meta: {} })
+			expect(PG.compileUnsafe(insert.returning("id", "revoked")).sql).toMatch(/RETURNING "id" AS "id", "revoked" AS "revoked"$/)
+			expect(PG.compileUnsafe(insert.returning("revoked").returning("id")).returning).toEqual(["id"])
+			expect(PG.compileUnsafe(insert).returning).toBeUndefined()
+		})
+
+		it("an untyped expression leaves the insert undecoded, and names the alias", () => {
+			const compiled = PG.compileUnsafe(
+				CH.insertInto(Keys)
+					.values({ id: "a", org_id: "o", name: "n", meta: {} })
+					.returning(() => ({ txid: CH.untypedExpr("pg_current_xact_id()::xid::text") })),
+			)
+			expect(compiled.sql).toMatch(/RETURNING pg_current_xact_id\(\)::xid::text AS "txid"$/)
+			expect(compiled.rowSchemaSource).toBe("none")
+			expect(compiled.untypedColumns).toEqual(["txid"])
+		})
+
+		it.effect("is a defect on ClickHouse, which has no RETURNING", () =>
+			Effect.gen(function* () {
+				const exit = yield* Effect.exit(
+					CH.compile(CH.insertInto(Events).values({ OrgId: "o", At: new Date(0), Attrs: {}, Tags: [] }).returning("Id")),
+				)
+				expect(failure(exit)).toBeInstanceOf(QueryBuilderDefect)
+			}),
+		)
+	})
+
 	describe("tenant scope", () => {
 		const scope = (rows: ReadonlyArray<Record<string, unknown>>, params: Record<string, unknown> = {}) =>
 			CH.compileUnsafe(CH.insertInto(Events).values(rows as any), params).tenantScope

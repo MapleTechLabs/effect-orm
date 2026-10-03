@@ -97,7 +97,13 @@ export const postgresDialect: Dialect = {
 		// The wire protocol counts parameters in an Int16.
 		maxParameters: 65535,
 	},
-	clauses: { format: false, derivedTableAlias: true, groupByAlias: false, parenthesizeUnionBranches: true },
+	clauses: {
+		format: false,
+		derivedTableAlias: true,
+		groupByAlias: false,
+		parenthesizeUnionBranches: true,
+		returning: true,
+	},
 	paramCodecs: {
 		bool: Schema.Boolean,
 		dateTime: PgTimestampLiteral,
