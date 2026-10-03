@@ -101,4 +101,19 @@ export const postgresDialect: Dialect = {
 		dateTime: PgTimestampLiteral,
 		dateTimeSeconds: timestampSeconds,
 	},
+	transactions: {
+		support: "full",
+		savepoints: true,
+		isolationLevels: ["read committed", "repeatable read", "serializable"],
+		accessModes: true,
+		deferrable: true,
+		setTransaction: (settings) => {
+			const modes = [
+				settings.isolationLevel === undefined ? undefined : `ISOLATION LEVEL ${settings.isolationLevel.toUpperCase()}`,
+				settings.accessMode?.toUpperCase(),
+				settings.deferrable === undefined ? undefined : settings.deferrable ? "DEFERRABLE" : "NOT DEFERRABLE",
+			].filter((mode) => mode !== undefined)
+			return modes.length === 0 ? undefined : `SET TRANSACTION ${modes.join(", ")}`
+		},
+	},
 }

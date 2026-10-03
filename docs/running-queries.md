@@ -66,6 +66,10 @@ runtimes, use a runtime-compatible adapter such as `@clickhouse/client-web` with
 integration. Keep database credentials on your server.
 See the [Effect ClickHouse driver source](https://github.com/Effect-TS/effect/blob/main/packages/sql/clickhouse/src/ClickhouseClient.ts).
 
+For a client that implements Effect's `SqlClient`, the opt-in
+[`@maple-dev/effect-orm/database`](./database.md) entry point does this loop for you
+(`Db.run(compiled)`), and adds transactions on Postgres.
+
 ## Formats and numeric precision
 
 Leave `.format()` off the builder query. Effect's ClickHouse client requests `FORMAT JSON`

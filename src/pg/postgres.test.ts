@@ -10,7 +10,8 @@ import type { CompiledQuery } from "../ch/compile"
 import * as CH from "../index"
 import * as PG from "../postgres"
 
-const db = new PGlite()
+// PGlite 0.5 takes the session time zone from the host; the fixtures assume UTC.
+const db = new PGlite({ postgresqlconf: "timezone = 'UTC'" })
 
 const events = CH.table(
 	"events",

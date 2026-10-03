@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- Add `@maple-dev/effect-orm/database`, opt-in (see `docs/database.md`): a `Database` over the
+  Effect `SqlClient` you already use. `run(query, params?)` compiles a query for the database's
+  dialect, runs it and decodes its rows; `sql\`...\`` writes the other statements with every
+  value bound (and `sql.identifier` for names); `query` decodes rows through an optional schema.
+  `transaction` runs Effect's own `withTransaction`, nesting as savepoints, and adds isolation
+  level, access mode and deferrable settings; typed `TransactionCommitFailed` /
+  `TransactionRollbackFailed` where Effect 4.0.0 dies; `retryContention` for SQLSTATE 40001 /
+  40P01; `requireTransaction` to mark helpers that must be atomic, checked at compile time; and
+  a `TransactionClosed` defect for statements that outlive their transaction. ClickHouse
+  declares no transactions and fails with `TransactionUnsupported` before sending anything.
+- Add `Dialect.transactions` (`DialectTransactions`, `IsolationLevel`, `TransactionSettings`):
+  what transactions a dialect supports. Optional; absent means none.
+- Add `CompiledQuery.dialect`: the name of the dialect a query was compiled for, so an executor
+  can refuse one compiled for another database. `rawCompiledQuery` takes it as an option.
+- Dev: PGlite 0.5. It takes the session time zone from the host, so tests pin it to UTC.
+
 - Add schema-as-code and migrations for ClickHouse, all opt-in (see `docs/migrations.md`):
   - `./schema`: `defineTable` (a `Table` that also carries its DDL), `materializedView` (its
     body is a DSL query, type-checked against the target table), DDL rendering with replicated

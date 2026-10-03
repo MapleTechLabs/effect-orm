@@ -186,6 +186,15 @@ interface CompiledQueryBase<Output> {
 	 * human reviewer can see.
 	 */
 	readonly rawSql?: { readonly reason: string; readonly justification: string }
+	/**
+	 * The `name` of the dialect the query was compiled for (`clickhouse`,
+	 * `postgres`). Absent for handwritten SQL that did not say.
+	 *
+	 * Lets an executor refuse a query compiled for another database, the usual
+	 * cause being the root `compile` (ClickHouse) where the Postgres one was
+	 * meant: the SQL may even run, with ClickHouse quoting and inlined params.
+	 */
+	readonly dialect?: string
 	/** Runtime decode of raw query results. Queries built from handwritten SQL
 	 *  should provide a row schema so schema drift is caught before consumers
 	 *  read fields from `Record<string, unknown>`. Without a schema this is an
@@ -325,6 +334,7 @@ const makeCompiledQuery = <Output, Route extends string | undefined>(
 	untypedColumns: ReadonlyArray<string> = [],
 	rawSql?: { readonly reason: string; readonly justification: string },
 	rowSchemaMismatch?: RowSchemaMismatch,
+	dialect?: string,
 ): CompiledQuery<Output, Route> => {
 	let cachedDecodeRow: ((row: unknown) => Effect.Effect<Output, unknown, never>) | undefined
 	let decoderBuilt = false
@@ -397,6 +407,7 @@ const makeCompiledQuery = <Output, Route extends string | undefined>(
 		untypedColumns: rowSchemaSource === "none" ? untypedColumns : [],
 		rowSchemaMismatch,
 		...(rawSql !== undefined ? { rawSql } : undefined),
+		...(dialect !== undefined ? { dialect } : undefined),
 		...(!(route === undefined) ? { route } : undefined),
 		decodeRows,
 		encodeRows,
@@ -444,6 +455,8 @@ export const rawCompiledQuery = <
 	readonly justification: string
 	readonly rowSchema?: CompiledQueryRowSchema<Output>
 	readonly route?: Route
+	/** The `name` of the dialect the SQL is written for, so an executor can check it. */
+	readonly dialect?: string
 }): CompiledQuery<Output, Route> =>
 	makeCompiledQuery(
 		args.sql,
@@ -454,6 +467,8 @@ export const rawCompiledQuery = <
 		args.route,
 		[],
 		{ reason: args.reason, justification: args.justification },
+		undefined,
+		args.dialect,
 	)
 
 /**
@@ -810,6 +825,7 @@ function compileInner<
 			options?.rowSchema === undefined
 				? undefined
 				: compareRowSchemas(options.rowSchema, derivedSchema),
+			currentDialect().name,
 		),
 		tenantScope === "single-tenant" ? scope.bound : undefined,
 	)
@@ -1141,6 +1157,7 @@ function compileUnionInner<Output extends Record<string, any>, Params extends Re
 			options?.rowSchema === undefined
 				? undefined
 				: compareRowSchemas(options.rowSchema, derivedSchema),
+			currentDialect().name,
 		),
 		tenantScope === "single-tenant" ? [...bounds][0] : undefined,
 	)

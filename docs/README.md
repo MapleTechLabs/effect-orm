@@ -55,6 +55,7 @@ Roughly in reading order.
 | [Extending the DSL](./extending.md)                   | `defineFn`, raw escape hatches, handwritten SQL                                     |
 | [Postgres](./postgres.md)                             | The Postgres dialect, its column types and functions                                |
 | [Schema and migrations](./migrations.md)              | `defineTable`, `materializedView`, `effect-orm generate`, applying migrations       |
+| [Statements and transactions](./database.md)          | `Database` over your `SqlClient`: `run`, `execute`, `transaction`, retry            |
 
 ## Reference
 
@@ -77,6 +78,7 @@ Roughly in reading order.
 | `@maple-dev/effect-orm/schema`         | `defineTable`, `materializedView`, DDL rendering, snapshots, and the schema diff. Pure                                                                   |
 | `@maple-dev/effect-orm/kit`            | `generate` and `check` over a migrations folder, `defineConfig`, and `runCli` for the bundled `effect-orm` command. Node or Bun                          |
 | `@maple-dev/effect-orm/migrate`        | `run`, `status`, `verify`, and `MigrationDriver`: applies migrations through a driver you provide                                                       |
+| `@maple-dev/effect-orm/database`       | `Database` over your `SqlClient`: `run` compiled queries, `execute` statements, `transaction` with settings and contention retry                           |
 
 The root barrel is curated, not exhaustive — see
 [the reference](./reference.md#whats-only-on-a-subpath) for what lives only on a subpath.

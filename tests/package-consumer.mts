@@ -11,6 +11,7 @@ import { runCli } from "@maple-dev/effect-orm/benchmark/cli"
 import * as SQL from "@maple-dev/effect-orm/sql"
 import * as S from "@maple-dev/effect-orm/schema"
 import * as Migrate from "@maple-dev/effect-orm/migrate"
+import * as Db from "@maple-dev/effect-orm/database"
 import { defineConfig } from "@maple-dev/effect-orm/kit"
 
 const events = CH.table("events", { id: T.uint64, name: T.string })
@@ -87,3 +88,6 @@ assert.equal(
 	"http://localhost:8123",
 )
 assert.equal(typeof runCli, "function")
+
+assert.equal(typeof Db.fromSqlClient, "function")
+assert.equal(Db.isContention(new Db.DatabaseError({ message: "x", sql: "", reason: "SerializationError", cause: undefined })), true)

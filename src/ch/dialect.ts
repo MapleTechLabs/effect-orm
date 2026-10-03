@@ -55,6 +55,51 @@ export interface DialectClauses {
 	readonly parenthesizeUnionBranches: boolean
 }
 
+/** A transaction isolation level. `read uncommitted` is left out: Postgres runs it as `read committed`. */
+export type IsolationLevel = "read committed" | "repeatable read" | "serializable"
+
+/** What a transaction starts with. Every field is optional; an empty value changes nothing. */
+export interface TransactionSettings {
+	readonly isolationLevel?: IsolationLevel | undefined
+	readonly accessMode?: "read write" | "read only" | undefined
+	/** Postgres: wait for a safe snapshot. Only meaningful with `serializable` and `read only`. */
+	readonly deferrable?: boolean | undefined
+}
+
+/**
+ * What transactions a dialect supports. Read by `@maple-dev/effect-orm/database`
+ * before any statement is sent, so an unsupported request fails instead of
+ * pretending. See `design/transactions.md`.
+ */
+export interface DialectTransactions {
+	/**
+	 * `none`: a transaction fails with `TransactionUnsupported`. ClickHouse is
+	 * `none`: its transactions are experimental, need a server flag and an HTTP
+	 * session, and a BEGIN without a session is silently a no-op.
+	 */
+	readonly support: "none" | "full"
+	/** Whether a nested transaction becomes a savepoint. Without it, nesting fails. */
+	readonly savepoints: boolean
+	readonly isolationLevels: ReadonlyArray<IsolationLevel>
+	readonly accessModes: boolean
+	readonly deferrable: boolean
+	/**
+	 * The statement that applies `settings`, run as the first statement of a
+	 * transaction, or `undefined` when there is nothing to apply.
+	 */
+	readonly setTransaction: (settings: TransactionSettings) => string | undefined
+}
+
+/** No transactions. What a dialect without a `transactions` entry gets. */
+export const noTransactions: DialectTransactions = {
+	support: "none",
+	savepoints: false,
+	isolationLevels: [],
+	accessModes: false,
+	deferrable: false,
+	setTransaction: () => undefined,
+}
+
 /**
  * A database the builder writes SQL for.
  *
@@ -75,6 +120,8 @@ export interface Dialect extends SqlSyntax {
 	 * instant for the other. Kinds not listed use the ClickHouse codec.
 	 */
 	readonly paramCodecs?: Readonly<Record<string, Schema.Codec<any, any>>>
+	/** Transaction support. Absent means none. */
+	readonly transactions?: DialectTransactions
 }
 
 /** ClickHouse, with params written into the SQL as literals. The default. */
@@ -86,6 +133,7 @@ export const clickhouseDialect: Dialect = {
 	dateTimeLiteral: (value) => quoteClickHouseString(chDateTimeLiteral(value)),
 	params: { _tag: "inline" },
 	clauses: { format: true, derivedTableAlias: false, groupByAlias: true, parenthesizeUnionBranches: false },
+	transactions: noTransactions,
 }
 
 // The dialect of the enclosing compile, beside the syntax installed for the
