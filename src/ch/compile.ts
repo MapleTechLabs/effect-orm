@@ -7,15 +7,16 @@
 // 3. Evaluating the whereFn (with params resolved) to get Conditions
 // 4. Assembling into SqlQuery and calling the existing compileQuery()
 
-import { dateTime, dateTime64, type CHType, type ColumnDefs } from "./types"
+import { custom, dateTime, dateTime64, type CHType, type ColumnDefs } from "./types"
 import type { CHQuery, CHQueryState } from "./query"
 import type { CHUnionQuery } from "./union"
+import { isInsert, type CHInsert } from "./insert"
 import { createQualifiedColumnAccessor, createJoinedColumnAccessor, sourceAlias } from "./query"
-import { aliased, columnTypeOf } from "./expr"
+import { aliased, columnTypeOf, isExprLike } from "./expr"
 import { raw, identPath, quoteIdent, quoteIdentPath, compile as compileSqlFragment } from "../sql/sql-fragment"
 import { splitTerminalClauses } from "../sql/terminal-clauses"
 import { compileQuery, type SqlQuery } from "../sql/sql-query"
-import { PARAM_MARKER_PREFIX, PARAM_PLACEHOLDER_PATTERN, paramSchema, type ParamKind } from "./param"
+import { PARAM_MARKER_PREFIX, PARAM_PLACEHOLDER_PATTERN, param, paramSchema, type ParamKind } from "./param"
 import { mergeResultSchemas } from "./define-fn"
 import { encodeValue } from "./literal"
 import { checkedLiteral, clickhouseDialect, currentDialect, withDialect, type Dialect } from "./dialect"
@@ -127,6 +128,12 @@ interface ResolvedCte {
 
 interface CompiledQueryBase<Output> {
 	readonly sql: string
+	/**
+	 * What the statement does. An `insert` without RETURNING sends back no rows,
+	 * so an executor runs it the way it runs DDL (`Database.run` does), not
+	 * through a client path that expects a result set.
+	 */
+	readonly kind: "select" | "insert"
 	/**
 	 * The values a binding dialect sends beside `sql`, in placeholder order.
 	 *
@@ -335,6 +342,7 @@ const makeCompiledQuery = <Output, Route extends string | undefined>(
 	rawSql?: { readonly reason: string; readonly justification: string },
 	rowSchemaMismatch?: RowSchemaMismatch,
 	dialect?: string,
+	kind: "select" | "insert" = "select",
 ): CompiledQuery<Output, Route> => {
 	let cachedDecodeRow: ((row: unknown) => Effect.Effect<Output, unknown, never>) | undefined
 	let decoderBuilt = false
@@ -396,6 +404,7 @@ const makeCompiledQuery = <Output, Route extends string | undefined>(
 
 	return {
 		sql,
+		kind,
 		parameters,
 		tenantScope,
 		// Resolved eagerly only here, where the getter is already memoised by
@@ -457,6 +466,8 @@ export const rawCompiledQuery = <
 	readonly route?: Route
 	/** The `name` of the dialect the SQL is written for, so an executor can check it. */
 	readonly dialect?: string
+	/** `insert` for a write that returns no rows. Default `select`. */
+	readonly kind?: "select" | "insert"
 }): CompiledQuery<Output, Route> =>
 	makeCompiledQuery(
 		args.sql,
@@ -469,6 +480,7 @@ export const rawCompiledQuery = <
 		{ reason: args.reason, justification: args.justification },
 		undefined,
 		args.dialect,
+		args.kind,
 	)
 
 /**
@@ -505,7 +517,7 @@ const asEffect = <A>(compile: () => A): Effect.Effect<A, QueryBuilderError> =>
  * rather than a typed 400. Use {@link compileCHUnsafe} where a throw is what you
  * want — a fixture that fails to compile should fail its test loudly.
  */
-export const compileCH = <
+export function compileCH<
 	Cols extends ColumnDefs,
 	Output extends Record<string, any>,
 	Joins extends Record<string, ColumnDefs>,
@@ -521,8 +533,25 @@ export const compileCH = <
 		deferParams?: boolean
 		dialect?: Dialect
 	},
-): Effect.Effect<CompiledQuery<Decoded, Route>, QueryBuilderError> =>
-	asEffect(() => compileCHUnsafe(query, params, options))
+): Effect.Effect<CompiledQuery<Decoded, Route>, QueryBuilderError>
+/** An INSERT. `params` fills the `param.*` markers among its values. */
+export function compileCH<Output>(
+	insert: CHInsert<any, any, any, Output>,
+	params?: Record<string, unknown>,
+	options?: InsertCompileOptions,
+): Effect.Effect<CompiledQuery<Output, undefined>, QueryBuilderError>
+export function compileCH(
+	query: CHQuery<any, any, any, any> | CHInsert<any, any, any, any>,
+	params?: Record<string, unknown>,
+	options?: any,
+): Effect.Effect<CompiledQuery<any, any>, QueryBuilderError> {
+	return asEffect(() => compileCHUnsafe(query as CHQuery<any, any, any, any>, params ?? {}, options))
+}
+
+/** What compiling an INSERT takes: only the dialect. */
+export interface InsertCompileOptions {
+	readonly dialect?: Dialect
+}
 
 /** {@link compileCH} for a `UNION ALL`. */
 export const compileUnion = <Output extends Record<string, any>, Params extends Record<string, any>>(
@@ -552,8 +581,21 @@ export function compileCHUnsafe<
 		/** How params reach the server. ClickHouse literals when omitted. */
 		dialect?: Dialect
 	},
-): CompiledQuery<Decoded, Route> {
-	return withDialect(options?.dialect ?? currentDialect(), () => compileInner(query, params, options))
+): CompiledQuery<Decoded, Route>
+/** An INSERT. `params` fills the `param.*` markers among its values. */
+export function compileCHUnsafe<Output>(
+	insert: CHInsert<any, any, any, Output>,
+	params?: Record<string, unknown>,
+	options?: InsertCompileOptions,
+): CompiledQuery<Output, undefined>
+export function compileCHUnsafe(
+	query: CHQuery<any, any, any, any> | CHInsert<any, any, any, any>,
+	params?: Record<string, unknown>,
+	options?: any,
+): CompiledQuery<any, any> {
+	return withDialect(options?.dialect ?? currentDialect(), () =>
+		isInsert(query) ? compileInsert(query, params ?? {}) : compileInner(query, params ?? {}, options),
+	)
 }
 
 /**
@@ -1207,6 +1249,13 @@ function renderParams(
 		return marker
 	})
 
+	if (style._tag === "bind" && style.maxParameters !== undefined && parameters.length > style.maxParameters) {
+		throw new QueryBuilderError({
+			code: "InvalidArguments",
+			message: `compile: the statement binds ${parameters.length} values, over the ${style.maxParameters} ${dialect.name} allows in one statement; send fewer rows per statement`,
+		})
+	}
+
 	if (missing.length > 0) {
 		throw new QueryBuilderError({
 			code: "UnresolvedParam",
@@ -1259,4 +1308,123 @@ function encodeParam(dialect: Dialect, kind: ParamKind, name: string, value: unk
 		})
 	}
 	return encodeValue(schema, value, paramContext(kind, name))
+}
+
+// INSERT
+
+/**
+ * The column type an insert's literal values are bound as. The value is
+ * encoded through its own column's codec first (so a failure names the row and
+ * column), and this passes the wire value on unchanged: ClickHouse writes it as
+ * a literal, Postgres binds it. A Postgres placeholder in `VALUES` needs no
+ * cast: the server coerces it to the target column.
+ */
+const insertWireValue = custom("insert value", Schema.Unknown)
+
+/** Prefix of the params an insert's literal values become. */
+const VALUE_PARAM = "$$v"
+
+const EMPTY_ROW = Schema.Struct({}) as unknown as CompiledQueryRowSchema<never>
+
+/**
+ * An INSERT ... VALUES. Columns are written in table order, so two rows with
+ * their keys in different orders cannot swap values; a column some rows leave
+ * out is `DEFAULT` in those rows, which both dialects accept.
+ */
+function compileInsert(insert: CHInsert<any, any, any, any>, params: Record<string, unknown>): CompiledQuery<any, undefined> {
+	const { table, rows } = insert._state
+	const where = `insertInto(${table.name})`
+	if (rows === undefined) throw new QueryBuilderDefect({ message: `${where}: values() is required` })
+	// The rows usually come from data, so their number and keys are failures, not defects.
+	if (rows.length === 0) {
+		throw new QueryBuilderError({ code: "InvalidArguments", message: `${where}: values() was given no rows` })
+	}
+	const computed = new Set<string>(table.computed ?? [])
+	const present = new Set<string>()
+	rows.forEach((row, index) => {
+		for (const [column, value] of Object.entries(row)) {
+			if (value === undefined) continue
+			if (!Object.hasOwn(table.columns, column)) {
+				throw new QueryBuilderError({
+					code: "InvalidArguments",
+					message: `${where}: row ${index} has ${JSON.stringify(column)}, which is not a column of the table`,
+				})
+			}
+			if (computed.has(column)) {
+				throw new QueryBuilderError({
+					code: "InvalidArguments",
+					message: `${where}: row ${index} writes ${column}, which the database computes (MATERIALIZED or ALIAS)`,
+				})
+			}
+			present.add(column)
+		}
+	})
+	const columns = Object.keys(table.columns).filter((column) => present.has(column))
+	if (columns.length === 0) {
+		throw new QueryBuilderError({ code: "InvalidArguments", message: `${where}: every row is empty; give at least one column` })
+	}
+
+	const values: Record<string, unknown> = { ...params }
+	let next = 0
+	const cell = (column: string, value: unknown, index: number): string => {
+		if (value === undefined) return "DEFAULT"
+		if (isExprLike(value)) return compileSqlFragment(value.toFragment())
+		const wire = encodeValue(table.columns[column]!.literalSchema, value, `${where}: row ${index}, column ${column}`)
+		let name = `${VALUE_PARAM}${next++}`
+		while (Object.hasOwn(params, name)) name = `${VALUE_PARAM}${next++}`
+		values[name] = wire
+		return compileSqlFragment(param.of(insertWireValue, name).toFragment())
+	}
+
+	// A tenant table's insert is single-tenant when every row pins the tenant
+	// column to the same value or param. Any other expression, a NULL or a
+	// default could be anything.
+	const tenant = table.tenantColumn
+	const bounds = new Set<string>()
+	let pinned = tenant !== undefined
+
+	const tuples = withSubqueryCompiler(
+		(subquery) =>
+			typeof subquery === "string" ? subquery : compileInner(subquery, values, { skipFormat: true, nested: true }).sql,
+		() =>
+			rows.map((row, index) => {
+				const cells = columns.map((column) => {
+					const value = row[column]
+					const sql = cell(column, value, index)
+					if (column === tenant && pinned) {
+						if (value === undefined || value === null || (isExprLike(value) && !("_paramName" in value))) pinned = false
+						else bounds.add(inlineParams(sql, values))
+					}
+					return sql
+				})
+				if (tenant !== undefined && !present.has(tenant)) pinned = false
+				return `(${cells.join(", ")})`
+			}),
+	)
+
+	const dialect = currentDialect()
+	const rendered = renderParams(
+		`INSERT INTO ${quoteIdentPath(table.name)} (${columns.map(quoteIdent).join(", ")})\nVALUES ${tuples.join(", ")}`,
+		values,
+		dialect,
+	)
+	const tenantScope: TenantScope =
+		tenant === undefined ? "untenanted" : pinned && bounds.size === 1 ? "single-tenant" : "cross-tenant"
+
+	return withTenantBound(
+		makeCompiledQuery<never, undefined>(
+			rendered.sql,
+			rendered.parameters,
+			tenantScope,
+			"derived",
+			() => EMPTY_ROW,
+			undefined,
+			[],
+			undefined,
+			undefined,
+			dialect.name,
+			"insert",
+		),
+		tenantScope === "single-tenant" ? [...bounds][0] : undefined,
+	)
 }

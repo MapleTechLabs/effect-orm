@@ -18,12 +18,14 @@ export * from "./pg/types"
 export * from "./pg/functions"
 
 /** `compile` from the root entry, for Postgres unless `options.dialect` says otherwise. */
-export const compile: typeof compileCH = (query, params, options) =>
-	compileCH(query, params, { ...options, dialect: options?.dialect ?? postgresDialect })
+// Typed through `any` and cast: `compileCH` is overloaded (queries and inserts),
+// and an overloaded type gives an arrow's parameters no contextual type.
+export const compile = ((query: any, params?: any, options?: any) =>
+	compileCH(query, params, { ...options, dialect: options?.dialect ?? postgresDialect })) as typeof compileCH
 
 /** `compileUnsafe` from the root entry, for Postgres. */
-export const compileUnsafe: typeof compileCHUnsafe = (query, params, options) =>
-	compileCHUnsafe(query, params, { ...options, dialect: options?.dialect ?? postgresDialect })
+export const compileUnsafe = ((query: any, params?: any, options?: any) =>
+	compileCHUnsafe(query, params, { ...options, dialect: options?.dialect ?? postgresDialect })) as typeof compileCHUnsafe
 
 /** `compileUnion` from the root entry, for Postgres. */
 export const compileUnion: typeof compileUnionCH = (union, params, options) =>

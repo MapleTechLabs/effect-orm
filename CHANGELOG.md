@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Add `insertInto(table).values(rows)` (see `docs/inserts.md`): INSERT ... VALUES from the same
+  table definitions, for ClickHouse and Postgres. The row type requires every column that is not
+  nullable and has no default; values are encoded through the column codecs, written as literals
+  on ClickHouse and bound on Postgres; a key some rows leave out is `DEFAULT`; tenant scope is
+  derived as for queries. `compile` and `Database.run` accept an insert; `run` sends it through
+  `command` and returns no rows.
+- Add `TableOptions.defaults` for the columns an insert may leave out. `defineTable` works them
+  out from its column options and records `MATERIALIZED` / `ALIAS` columns as not insertable.
+- Add `CompiledQuery.kind` (`"select"` or `"insert"`); `rawCompiledQuery` takes it as an option.
+- Add `ParamStyle.maxParameters`; Postgres sets 65535, and a statement over it fails to compile.
 - Add `@maple-dev/effect-orm/database`, opt-in (see `docs/database.md`): a `Database` over the
   Effect `SqlClient` you already use. `run(query, params?)` compiles a query for the database's
   dialect, runs it and decodes its rows; `sql\`...\`` writes the other statements with every

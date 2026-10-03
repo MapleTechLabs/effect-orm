@@ -2,7 +2,7 @@
 // refused before anything is sent. Creates one table in a throwaway database.
 
 import { ClickhouseClient } from "@effect/sql-clickhouse"
-import { Effect, Exit } from "effect"
+import { DateTime, Effect, Exit } from "effect"
 import { describe, expect, it } from "vitest"
 import * as CH from "@maple-dev/effect-orm"
 import * as Db from "@maple-dev/effect-orm/database"
@@ -48,6 +48,55 @@ describe("database", () => {
 				{ Id: 1, Name: "a" },
 				{ Id: 2, Name: "it's" },
 			])
+		})
+
+		it("runs an insert built with insertInto through the command path", async () => {
+			const { rows, sent } = await Effect.runPromise(
+				withDatabase((db, sent) =>
+					Effect.gen(function* () {
+						yield* db.execute(
+							Db.sql`CREATE TABLE events (
+								OrgId String,
+								Id UInt64 DEFAULT 42,
+								At DateTime64(3),
+								Attrs Map(String, String),
+								Note Nullable(String),
+								Tags Array(String),
+								Day String MATERIALIZED toString(toDate(At))
+							) ENGINE = MergeTree ORDER BY (OrgId, Id)`,
+						)
+						const Events = CH.table(
+							"events",
+							{
+								OrgId: CH.string,
+								Id: CH.uint64,
+								At: CH.dateTime64,
+								Attrs: CH.map(CH.string, CH.string),
+								Note: CH.nullable(CH.string),
+								Tags: CH.array(CH.string),
+							},
+							{ tenantColumn: "OrgId", defaults: ["Id"] },
+						)
+						const inserted = yield* db.run(
+							CH.insertInto(Events).values([
+								{ OrgId: CH.param.string("org"), At: new Date("2026-01-02T03:04:05.678Z"), Attrs: { a: "it's; x" }, Tags: ["t"], Note: null },
+								{ OrgId: CH.param.string("org"), Id: 7, At: "2026-01-02 00:00:00", Attrs: {}, Tags: [], Note: "n" },
+							]),
+							{ org: "o1" },
+						)
+						expect(inserted).toEqual([])
+						const rows = yield* db.run(
+							CH.from(Events).select("OrgId", "Id", "At", "Attrs", "Note", "Tags").orderBy(["Id", "asc"]),
+						)
+						return { rows, sent: [...sent] }
+					}),
+				),
+			)
+			expect(rows.map((row) => ({ ...row, At: DateTime.formatIso(row.At) }))).toEqual([
+				{ OrgId: "o1", Id: 7, At: "2026-01-02T00:00:00.000Z", Attrs: {}, Note: "n", Tags: [] },
+				{ OrgId: "o1", Id: 42, At: "2026-01-02T03:04:05.678Z", Attrs: { a: "it's; x" }, Note: null, Tags: ["t"] },
+			])
+			expect(sent[1]).toMatch(/^INSERT INTO events \(OrgId, Id, At, Attrs, Note, Tags\)\nVALUES \('o1', DEFAULT, /)
 		})
 
 		it("refuses a transaction before sending anything", async () => {

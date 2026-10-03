@@ -5,7 +5,7 @@
 
 import { PgliteClient } from "@effect/sql-pglite"
 import { assert, describe, expect, it, layer } from "@effect/vitest"
-import { Cause, Deferred, Effect, Exit, Fiber, Layer, Ref, Schedule, Schema } from "effect"
+import { Cause, DateTime, Deferred, Effect, Exit, Fiber, Layer, Ref, Schedule, Schema } from "effect"
 import * as SqlClient from "effect/sql/SqlClient"
 import * as CH from "../index"
 import * as PG from "../postgres"
@@ -364,6 +364,65 @@ layer(Live, { excludeTestServices: true })("Database on PGlite", (it) => {
 			expect(yield* op(1)).toBe(1)
 			yield* Effect.flip(op(2))
 			expect(yield* ids(table)).toEqual([1])
+		}),
+	)
+
+	it.effect("run inserts rows built with insertInto, bound and decoded back through the column codecs", () =>
+		Effect.gen(function* () {
+			yield* Db.execute(
+				Db.sql`CREATE TABLE keys (
+					id uuid PRIMARY KEY,
+					org_id text NOT NULL,
+					uses int8 NOT NULL DEFAULT 0,
+					created_at timestamptz NOT NULL DEFAULT now(),
+					revoked boolean NOT NULL DEFAULT false,
+					meta jsonb,
+					tags text[] NOT NULL,
+					note text
+				)`,
+			)
+			const Keys = CH.table(
+				"keys",
+				{
+					id: PG.uuid,
+					org_id: PG.text,
+					uses: PG.int8,
+					created_at: PG.timestamptz,
+					revoked: PG.bool,
+					meta: PG.nullable(PG.jsonb()),
+					tags: PG.array(PG.text),
+					note: PG.nullable(PG.text),
+				},
+				{ tenantColumn: "org_id", defaults: ["uses", "created_at", "revoked"] },
+			)
+			const at = DateTime.makeUnsafe("2026-01-02T03:04:05.678Z")
+			const id = (n: number) => `00000000-0000-0000-0000-00000000000${n}`
+			const inserted = yield* Db.run(
+				CH.insertInto(Keys).values([
+					{ id: id(1), org_id: CH.param.string("org"), tags: ["a", "it's"], meta: { k: [1, 2] }, created_at: at },
+					{ id: id(2), org_id: CH.param.string("org"), tags: [], uses: 7, revoked: true, note: "n" },
+				]),
+				{ org: "o1" },
+			)
+			expect(inserted).toEqual([])
+			const rows = yield* Db.run(CH.from(Keys).select("id", "uses", "created_at", "revoked", "meta", "tags", "note").orderBy(["id", "asc"]))
+			expect(rows[0]).toEqual({ id: id(1), uses: 0, created_at: at, revoked: false, meta: { k: [1, 2] }, tags: ["a", "it's"], note: null })
+			expect(rows[1]).toMatchObject({ id: id(2), uses: 7, revoked: true, meta: null, tags: [], note: "n" })
+		}),
+	)
+
+	it.effect("an insert inside a failed transaction rolls back", () =>
+		Effect.gen(function* () {
+			const table = yield* freshTable
+			const T = CH.table(table, { id: PG.int4, note: PG.nullable(PG.text) })
+			const exit = yield* Effect.exit(
+				Db.transaction(
+					Effect.andThen(Db.run(CH.insertInto(T).values({ id: 1 })), Effect.fail(new Domain())),
+				),
+			)
+			expect(Exit.isFailure(exit)).toBe(true)
+			yield* Db.run(CH.insertInto(T).values([{ id: 2 }, { id: 3, note: "x" }]))
+			expect(yield* ids(table)).toEqual([2, 3])
 		}),
 	)
 })

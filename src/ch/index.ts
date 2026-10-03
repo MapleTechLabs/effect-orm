@@ -239,6 +239,9 @@ export {
 	fromUnion,
 } from "./query"
 
+// Insert builder
+export { type CHInsert, type InsertRow, type InsertRowOf, type InsertValue, insertInto } from "./insert"
+
 // Compilation
 export {
 	// `compileCH` / `compileCHUnsafe` are the internal names; the public API is
@@ -251,6 +254,7 @@ export {
 	type CompiledQuery,
 	type CompiledQueryInput,
 	type CompiledQueryRowSchema,
+	type InsertCompileOptions,
 	type RowSchemaMismatch,
 	type TenantScope,
 	CompiledQueryDecodeError,

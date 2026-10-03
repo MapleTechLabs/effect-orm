@@ -38,6 +38,12 @@ export type ParamStyle =
 			 * a param used twice is bound twice.
 			 */
 			readonly reuse: boolean
+			/**
+			 * The most values one statement may bind, when the server has a limit
+			 * (Postgres: 65535). A statement over it fails to compile, rather than
+			 * at the server or by being split into several statements.
+			 */
+			readonly maxParameters?: number
 	  }
 
 /** Clauses that exist in some dialects and not others. */

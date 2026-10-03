@@ -62,6 +62,7 @@ Note `/sql` exports a `compile` (fragment → string) distinct from the root `co
 | `fromQuery` | `(query, alias) => CHQuery`               |
 | `fromUnion` | `(union, alias) => CHQuery`               |
 | `unionAll`  | `(...queries) => CHUnionQuery`            |
+| `insertInto` | `(table) => CHInsert`; `.values(row \| rows)` sets its rows. See [Inserting rows](./inserts.md) |
 
 ### `CHQuery` methods
 
@@ -86,11 +87,11 @@ Note `/sql` exports a `compile` (fragment → string) distinct from the root `co
 
 | Export               | Signature                                                                            |
 | -------------------- | ------------------------------------------------------------------------------------ |
-| `compile`            | `(query, params, options?) => Effect<CompiledQuery<Output>, QueryBuilderError>`      |
+| `compile`            | `(query, params, options?) => Effect<CompiledQuery<Output>, QueryBuilderError>`; also `(insert, params?, options?)`, whose options (`InsertCompileOptions`) are only `dialect` |
 | `compileUnsafe`      | The same, returning `CompiledQuery<Output>` and throwing instead                     |
 | `compileUnion`       | `(union, params, options?) => Effect<CompiledQuery<Output>, QueryBuilderError>`      |
 | `compileUnionUnsafe` | The same, throwing instead                                                           |
-| `rawCompiledQuery`   | `({ sql, tenantScope, reason, justification, rowSchema?, route?, dialect? }) => CompiledQuery` |
+| `rawCompiledQuery`   | `({ sql, tenantScope, reason, justification, rowSchema?, route?, dialect?, kind? }) => CompiledQuery` |
 | `clickhouseDialect`  | The default `Dialect`: params written into the SQL as ClickHouse literals            |
 
 `Dialect`, `DialectClauses` and `ParamStyle` describe a database: how identifiers and literals
@@ -278,7 +279,7 @@ Types: `WindowSpec`, `CompiledWindowSpec`, `WindowFrameBound`, `WindowRowsFrame`
 
 **Everything else** — `Table`, `TableOptions`, `Expr`, `ColumnRef`, `Condition`, `Comparable`
 (what a value of a type may be compared against), `MapValueOf`, `Subquery`, `ParamMarker`,
-`ParamKind`, `CHQuery`, `CHUnionQuery`, `ColumnAccessor`, `JoinedColumnAccessor`,
+`ParamKind`, `CHQuery`, `CHUnionQuery`, `CHInsert`, `InsertRow`, `InsertRowOf`, `InsertValue`, `ColumnAccessor`, `JoinedColumnAccessor`,
 `JoinOnCallback`, `CompiledQuery`, `CompiledQueryInput`, `CompiledQueryRowSchema`, `RowSchemaMismatch`, `TenantScope`, `Dialect`, `DialectClauses`, `DialectTransactions`, `IsolationLevel`, `TransactionSettings`, `ParamStyle`, `FnResult`,
 `WindowFunnelMode`, `WindowSpec`, `WindowRowsFrame`, `WindowFrameBound`,
 `WindowOrderDirection`, `CompiledWindowSpec`.
@@ -297,7 +298,7 @@ Tag `"@maple-dev/effect-orm/QueryBuilderError"`. Raised while compiling, and sur
 | ------------------ | ------------------------------------------------------------------------ |
 | `UnresolvedParam`  | A param the params bag has no value for                                  |
 | `InvalidLiteral`   | A param value, or a comparison operand, the column's codec rejects       |
-| `InvalidArguments` | Arguments a function cannot use — an empty condition list, a bad pattern |
+| `InvalidArguments` | Arguments a function cannot use — an empty condition list, a bad pattern, an insert with no rows or an unknown column, more bound values than the dialect allows |
 
 ### `QueryBuilderDefect`
 

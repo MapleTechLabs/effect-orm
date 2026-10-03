@@ -69,31 +69,61 @@ export interface ColumnOptions<T extends CHType<string, any, any>> {
 	readonly comment?: string
 }
 
-export interface ColumnSpec<T extends CHType<string, any, any>> {
+/**
+ * `Given` keeps which options were given, so the table can tell an insert
+ * which columns it may leave out (a default) or may not write (computed).
+ */
+export interface ColumnSpec<T extends CHType<string, any, any>, Given extends keyof ColumnOptions<T> = keyof ColumnOptions<T>> {
 	readonly _tag: "ColumnSpec"
 	readonly type: T
 	readonly options: ColumnOptions<T>
+	readonly _given?: Given
 }
 
 /** A column with DDL options. A bare column type works too where no option is needed. */
-export const column = <T extends CHType<string, any, any>>(type: T, options: ColumnOptions<T> = {}): ColumnSpec<T> => ({
+export const column = <T extends CHType<string, any, any>, Given extends keyof ColumnOptions<T> = never>(
+	type: T,
+	// Only the option *names* are inferred, from the mapped half; the options
+	// themselves stay contextually typed, so `materialized: ($) => ...` keeps `$`.
+	options: ColumnOptions<T> & { readonly [K in Given]: unknown } = {} as ColumnOptions<T> & { readonly [K in Given]: unknown },
+): ColumnSpec<T, Given> => ({
 	_tag: "ColumnSpec",
 	type,
 	options,
 })
 
-export type ColumnInput = CHType<string, any, any> | ColumnSpec<CHType<string, any, any>>
+export type ColumnInput = CHType<string, any, any> | ColumnSpec<CHType<string, any, any>, any>
 
 /** The query-side column types of a `columns` record. */
 export type ColumnsOf<I extends Record<string, ColumnInput>> = {
-	readonly [K in keyof I]: I[K] extends ColumnSpec<infer T>
+	readonly [K in keyof I]: I[K] extends ColumnSpec<infer T, any>
 		? T
 		: I[K] extends CHType<string, any, any>
 			? I[K]
 			: never
 }
 
-const isColumnSpec = (input: ColumnInput): input is ColumnSpec<CHType<string, any, any>> =>
+/** Columns declared with `default` or `defaultExpr`: an insert may leave them out. */
+export type DefaultedColumnsOf<I extends Record<string, ColumnInput>> = {
+	[K in keyof I]: I[K] extends ColumnSpec<any, infer Given>
+		? [Extract<Given, "default" | "defaultExpr">] extends [never]
+			? never
+			: K
+		: never
+}[keyof I] &
+	string
+
+/** Columns declared `materialized` or `alias`: an insert may not write them. */
+export type ComputedColumnsOf<I extends Record<string, ColumnInput>> = {
+	[K in keyof I]: I[K] extends ColumnSpec<any, infer Given>
+		? [Extract<Given, "materialized" | "alias">] extends [never]
+			? never
+			: K
+		: never
+}[keyof I] &
+	string
+
+const isColumnSpec = (input: ColumnInput): input is ColumnSpec<CHType<string, any, any>, any> =>
 	"_tag" in input && input._tag === "ColumnSpec"
 
 // Engines
@@ -172,7 +202,12 @@ export interface TableDdl {
 	readonly indexes: ReadonlyArray<IndexEntity>
 }
 
-export interface SchemaTable<Name extends string, Cols extends ColumnDefs> extends Table<Name, Cols> {
+export interface SchemaTable<
+	Name extends string,
+	Cols extends ColumnDefs,
+	Defaulted extends string = string,
+	Computed extends string = string,
+> extends Table<Name, Cols, Defaulted, Computed> {
 	readonly ddl: TableDdl
 }
 
@@ -227,7 +262,7 @@ const columnDefault = (
 export function defineTable<const Name extends string, const Columns extends Record<string, ColumnInput>>(
 	name: Name,
 	definition: TableDefinition<Columns>,
-): SchemaTable<Name, ColumnsOf<Columns>> {
+): SchemaTable<Name, ColumnsOf<Columns>, DefaultedColumnsOf<Columns>, ComputedColumnsOf<Columns>> {
 	assertIdentifier(name, name)
 	const inputs = Object.entries(definition.columns)
 	if (inputs.length === 0) throw new SchemaDefinitionDefect({ object: name, message: "a table needs columns" })
@@ -255,7 +290,9 @@ export function defineTable<const Name extends string, const Columns extends Rec
 
 	const columnEntities = inputs.map(([column, input], position): ColumnEntity => {
 		assertIdentifier(`${name}.${column}`, column)
-		const spec = isColumnSpec(input) ? input : { _tag: "ColumnSpec" as const, type: input, options: {} }
+		const spec: ColumnSpec<CHType<string, any, any>> = isColumnSpec(input)
+			? input
+			: { _tag: "ColumnSpec", type: input as CHType<string, any, any>, options: {} }
 		return {
 			kind: "column",
 			table: name,
@@ -299,11 +336,17 @@ export function defineTable<const Name extends string, const Columns extends Rec
 		comment: definition.comment ?? null,
 	}
 
+	const defaults = columnEntities.filter((c) => c.default?.kind === "DEFAULT").map((c) => c.name)
+	const computed = columnEntities
+		.filter((c) => c.default?.kind === "MATERIALIZED" || c.default?.kind === "ALIAS")
+		.map((c) => c.name)
 	return {
 		_tag: "Table",
 		name,
 		columns: types,
 		...(definition.tenantColumn !== undefined ? { tenantColumn: definition.tenantColumn } : undefined),
+		...(defaults.length > 0 ? { defaults: defaults as unknown as Array<DefaultedColumnsOf<Columns>> } : undefined),
+		...(computed.length > 0 ? { computed: computed as unknown as Array<ComputedColumnsOf<Columns>> } : undefined),
 		ddl: { table, columns: columnEntities, indexes: indexEntities },
 	}
 }
