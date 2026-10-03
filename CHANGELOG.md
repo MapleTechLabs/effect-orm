@@ -13,6 +13,9 @@
 - Add `returning` to an insert (Postgres): column names or a callback, as in `select`. `run`
   returns the inserted rows decoded through the derived row schema; `CompiledQuery.returning`
   lists the aliases. Add `DialectClauses.returning`, optional, absent meaning no.
+- Add `onConflictDoNothing` and `onConflictDoUpdate` to an insert (Postgres), with Drizzle's
+  options: `target` (columns or `{ constraint }`), `targetWhere`, `set` (a record, or a callback
+  over the existing row and `excluded`) and `where`. Add `DialectClauses.onConflict`, optional.
 - Add `CompiledQuery.kind` (`"select"` or `"insert"`); `rawCompiledQuery` takes it as an option.
 - Add `ParamStyle.maxParameters`; Postgres sets 65535, and a statement over it fails to compile.
 - Add `@maple-dev/effect-orm/database`, opt-in (see `docs/database.md`): a `Database` over the

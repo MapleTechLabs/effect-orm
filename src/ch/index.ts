@@ -240,7 +240,17 @@ export {
 } from "./query"
 
 // Insert builder
-export { type CHInsert, type InsertRow, type InsertRowOf, type InsertValue, insertInto } from "./insert"
+export {
+	type CHInsert,
+	type ConflictSet,
+	type ConflictTarget,
+	type InsertRow,
+	type InsertRowOf,
+	type InsertValue,
+	type OnConflictDoNothing,
+	type OnConflictDoUpdate,
+	insertInto,
+} from "./insert"
 
 // Compilation
 export {

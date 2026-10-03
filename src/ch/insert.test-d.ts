@@ -94,6 +94,22 @@ expectTypeOf(PG.compileUnsafe(returningExprs)).toEqualTypeOf<
 // @ts-expect-error not a column
 CH.insertInto(Keys).values({ id: "k" }).returning("nope")
 
+// ON CONFLICT: targets are column names, SET takes values or expressions.
+const Counters = CH.table("counters", { key: PG.text, count: PG.int8 })
+CH.insertInto(Counters).values({ key: "k", count: 1 }).onConflictDoNothing({ target: ["key"] })
+CH.insertInto(Counters)
+	.values({ key: "k", count: 1 })
+	.onConflictDoUpdate({ target: ["key"], set: ($, excluded) => ({ count: $.count.add(excluded.count) }) })
+CH.insertInto(Counters).values({ key: "k", count: 1 }).onConflictDoUpdate({ target: { constraint: "c" }, set: { count: 0 } })
+// @ts-expect-error not a column
+CH.insertInto(Counters).values({ key: "k", count: 1 }).onConflictDoNothing({ target: ["nope"] })
+// @ts-expect-error a value of another type
+CH.insertInto(Counters).values({ key: "k", count: 1 }).onConflictDoUpdate({ target: ["key"], set: { count: "1" } })
+// @ts-expect-error DO UPDATE needs a target
+CH.insertInto(Counters).values({ key: "k", count: 1 }).onConflictDoUpdate({ set: { count: 0 } })
+// @ts-expect-error a computed column cannot be set
+CH.insertInto(Spans).values({ OrgId: "o", Label: "l" }).onConflictDoUpdate({ target: ["OrgId"], set: { Day: "x" } })
+
 // An insert without RETURNING runs to no rows; compile gives a CompiledQuery.
 const insert = CH.insertInto(Plain).values({ A: "a", B: 1 })
 expectTypeOf<RowOf<typeof insert>>().toEqualTypeOf<never>()

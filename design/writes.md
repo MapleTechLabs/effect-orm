@@ -1,7 +1,7 @@
 # Writes: INSERT
 
-Status: phases 1 and 2 built (`insertInto(...).values(...).returning(...)`, see
-`docs/inserts.md`); phases 3 and 4 not started. Section 11 lists where the build differs from the plan. UPDATE and DELETE come later and
+Status: phases 1 to 3 built (`values`, `returning`, `onConflictDoNothing` /
+`onConflictDoUpdate`, see `docs/inserts.md`); phase 4 not started. Section 11 lists where the build differs from the plan. UPDATE and DELETE come later and
 will reuse what this note sets up (the write-statement state, the `RETURNING` path, value
 encoding).
 
@@ -245,3 +245,8 @@ note, reusing `kind: "write"`, the returning path and the `set` record type from
   optional so a dialect written against the earlier interface still compiles.
 - **`CompiledQuery.returning`** lists the RETURNING aliases; `run` reads it to choose between
   the command path and the row path, so a precompiled insert runs correctly too.
+- **`ON CONFLICT` takes Drizzle's shape**, `onConflictDoNothing({ target?, targetWhere? })` and
+  `onConflictDoUpdate({ target, targetWhere?, set, where? })`, instead of the chained
+  `.onConflict(target).doUpdate(...)` in §6: Maple's 68 call sites then move over with renames.
+  `$` in `set` and `where` is qualified with the table name (`"counters"."count"`), because an
+  unqualified column there is ambiguous with `excluded`.

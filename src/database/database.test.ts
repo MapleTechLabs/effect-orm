@@ -419,6 +419,42 @@ layer(Live, { excludeTestServices: true })("Database on PGlite", (it) => {
 		}),
 	)
 
+	it.effect("upserts with onConflictDoUpdate and skips with onConflictDoNothing", () =>
+		Effect.gen(function* () {
+			yield* Db.execute(
+				Db.sql`CREATE TABLE counters (key text PRIMARY KEY, count int8 NOT NULL, locked boolean NOT NULL DEFAULT false)`,
+			)
+			const Counters = CH.table("counters", { key: PG.text, count: PG.int8, locked: PG.bool }, { defaults: ["locked"] })
+			const bump = (key: string, by: number) =>
+				Db.run(
+					CH.insertInto(Counters)
+						.values({ key, count: by })
+						.onConflictDoUpdate({
+							target: ["key"],
+							set: ($, excluded) => ({ count: $.count.add(excluded.count) }),
+							where: ($) => $.locked.eq(false),
+						})
+						.returning("key", "count"),
+				)
+			expect(yield* bump("a", 1)).toEqual([{ key: "a", count: 1 }])
+			expect(yield* bump("a", 2)).toEqual([{ key: "a", count: 3 }])
+			yield* Db.execute(Db.sql`UPDATE counters SET locked = true WHERE key = 'a'`)
+			// The WHERE skips a locked row: nothing is updated, so nothing returns.
+			expect(yield* bump("a", 5)).toEqual([])
+			const skipped = yield* Db.run(
+				CH.insertInto(Counters)
+					.values([{ key: "a", count: 100 }, { key: "b", count: 1 }])
+					.onConflictDoNothing({ target: ["key"] })
+					.returning("key"),
+			)
+			expect(skipped).toEqual([{ key: "b" }])
+			expect(yield* Db.run(CH.from(Counters).select("key", "count").orderBy(["key", "asc"]))).toEqual([
+				{ key: "a", count: 3 },
+				{ key: "b", count: 1 },
+			])
+		}),
+	)
+
 	it.effect("an insert inside a failed transaction rolls back", () =>
 		Effect.gen(function* () {
 			const table = yield* freshTable

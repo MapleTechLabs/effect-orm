@@ -144,6 +144,74 @@ describe("insertInto", () => {
 		)
 	})
 
+	describe("on conflict", () => {
+		const Counters = CH.table("counters", { org: PG.text, key: PG.text, count: PG.int8, locked: PG.bool }, { tenantColumn: "org" })
+		const row = { org: "o", key: "k", count: 1, locked: false }
+
+		it("DO NOTHING, with and without a target", () => {
+			const insert = CH.insertInto(Counters).values(row)
+			expect(PG.compileUnsafe(insert.onConflictDoNothing()).sql).toMatch(/\nON CONFLICT DO NOTHING$/)
+			expect(PG.compileUnsafe(insert.onConflictDoNothing({ target: ["org", "key"] })).sql).toMatch(
+				/\nON CONFLICT \("org", "key"\) DO NOTHING$/,
+			)
+			expect(PG.compileUnsafe(insert.onConflictDoNothing({ target: { constraint: "counters_pkey" } })).sql).toMatch(
+				/\nON CONFLICT ON CONSTRAINT "counters_pkey" DO NOTHING$/,
+			)
+			expect(
+				PG.compileUnsafe(insert.onConflictDoNothing({ target: ["key"], targetWhere: ($) => $.locked.eq(false) })).sql,
+			).toMatch(/\nON CONFLICT \("key"\) WHERE "locked" = FALSE DO NOTHING$/)
+		})
+
+		it("DO UPDATE with excluded, a qualified existing row, values and a WHERE", () => {
+			const compiled = PG.compileUnsafe(
+				CH.insertInto(Counters)
+					.values(row)
+					.onConflictDoUpdate({
+						target: ["org", "key"],
+						set: ($, excluded) => ({ count: $.count.add(excluded.count), locked: true }),
+						where: ($) => $.locked.eq(false),
+					})
+					.returning("count"),
+			)
+			expect(compiled.sql).toBe(
+				'INSERT INTO "counters" ("org", "key", "count", "locked")\nVALUES ($1, $2, $3, $4)\n' +
+					'ON CONFLICT ("org", "key") DO UPDATE SET "count" = "counters"."count" + "excluded"."count", "locked" = $5 ' +
+					'WHERE "counters"."locked" = FALSE\nRETURNING "count" AS "count"',
+			)
+			expect(compiled.parameters).toEqual(["o", "k", 1, false, true])
+		})
+
+		it("a SET that writes another tenant makes the insert cross-tenant", () => {
+			const insert = CH.insertInto(Counters).values(row)
+			const scope = (org: string) =>
+				PG.compileUnsafe(insert.onConflictDoUpdate({ target: ["key"], set: { org } })).tenantScope
+			expect(scope("o")).toBe("single-tenant")
+			expect(scope("p")).toBe("cross-tenant")
+		})
+
+		it.effect("a bad SET fails; misuse and ClickHouse are defects", () =>
+			Effect.gen(function* () {
+				const insert = CH.insertInto(Counters).values(row)
+				const empty = yield* Effect.flip(
+					PG.compile(insert.onConflictDoUpdate({ target: ["key"], set: { count: undefined } })),
+				)
+				expect(empty.message).toContain("sets no columns")
+				const unknown = yield* Effect.flip(
+					PG.compile(insert.onConflictDoUpdate({ target: ["key"], set: { nope: 1 } as any })),
+				)
+				expect(unknown.code).toBe("InvalidArguments")
+				for (const bad of [
+					PG.compile(insert.onConflictDoNothing({ target: [] })),
+					PG.compile(insert.onConflictDoNothing({ targetWhere: ($) => $.locked.eq(false) })),
+					PG.compile(insert.onConflictDoNothing({ target: { constraint: "c" }, targetWhere: ($) => $.locked.eq(false) })),
+					CH.compile(insert.onConflictDoNothing()),
+				]) {
+					expect(failure(yield* Effect.exit(bad))).toBeInstanceOf(QueryBuilderDefect)
+				}
+			}),
+		)
+	})
+
 	describe("tenant scope", () => {
 		const scope = (rows: ReadonlyArray<Record<string, unknown>>, params: Record<string, unknown> = {}) =>
 			CH.compileUnsafe(CH.insertInto(Events).values(rows as any), params).tenantScope

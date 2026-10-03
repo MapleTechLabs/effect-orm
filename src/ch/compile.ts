@@ -1333,6 +1333,74 @@ const VALUE_PARAM = "$$v"
 
 const EMPTY_ROW = Schema.Struct({}) as unknown as CompiledQueryRowSchema<never>
 
+/**
+ * The ON CONFLICT clause, or `""` without one. `$` in SET and WHERE is the
+ * existing row, qualified with the table name: an unqualified column there
+ * would be ambiguous with `excluded`.
+ */
+const onConflictClause = (
+	insert: CHInsert<any, any, any, any>,
+	cell: (column: string, value: unknown, context: string) => string,
+	wrote: (column: string, value: unknown, sql: string) => void,
+): string => {
+	const { table, conflict } = insert._state
+	if (conflict === undefined) return ""
+	const where = `insertInto(${table.name})`
+	const dialect = currentDialect()
+	if (dialect.clauses.onConflict !== true) {
+		throw new QueryBuilderDefect({
+			message: `${where}: onConflict has no meaning for the ${dialect.name} dialect, which has no ON CONFLICT clause`,
+		})
+	}
+
+	let target = ""
+	if (conflict.target !== undefined) {
+		if ("constraint" in conflict.target) {
+			if (conflict.targetWhere !== undefined) {
+				throw new QueryBuilderDefect({ message: `${where}: targetWhere needs a column target, not a constraint` })
+			}
+			target = ` ON CONSTRAINT ${quoteIdent(conflict.target.constraint)}`
+		} else {
+			const targetColumns = conflict.target
+			if (targetColumns.length === 0 || targetColumns.some((column) => !Object.hasOwn(table.columns, column))) {
+				throw new QueryBuilderDefect({ message: `${where}: the conflict target must name columns of the table` })
+			}
+			const predicate = conflict.targetWhere?.(createColumnAccessor(table.columns))
+			target = ` (${targetColumns.map(quoteIdent).join(", ")})${
+				predicate === undefined ? "" : ` WHERE ${compileSqlFragment(predicate.toFragment())}`
+			}`
+		}
+	} else if (conflict.targetWhere !== undefined) {
+		throw new QueryBuilderDefect({ message: `${where}: targetWhere needs a target` })
+	}
+	if (conflict.action === "nothing") return `\nON CONFLICT${target} DO NOTHING`
+
+	const existing = createQualifiedColumnAccessor(table.name, undefined, table.columns)
+	const excluded = createQualifiedColumnAccessor("excluded", undefined, table.columns)
+	const set = typeof conflict.set === "function" ? conflict.set(existing, excluded) : conflict.set
+	const computed = new Set<string>(table.computed ?? [])
+	// The SET record may come from data, so a bad key is a failure, as in a row.
+	const assignments = Object.entries(set as Record<string, unknown>).flatMap(([column, value]) => {
+		if (value === undefined) return []
+		if (!Object.hasOwn(table.columns, column) || computed.has(column)) {
+			throw new QueryBuilderError({
+				code: "InvalidArguments",
+				message: `${where}: onConflictDoUpdate sets ${JSON.stringify(column)}, which is not an insertable column of the table`,
+			})
+		}
+		const sql = cell(column, value, "onConflictDoUpdate set")
+		wrote(column, value, sql)
+		return [`${quoteIdent(column)} = ${sql}`]
+	})
+	if (assignments.length === 0) {
+		throw new QueryBuilderError({ code: "InvalidArguments", message: `${where}: onConflictDoUpdate sets no columns` })
+	}
+	const condition = conflict.where?.(existing, excluded)
+	return `\nON CONFLICT${target} DO UPDATE SET ${assignments.join(", ")}${
+		condition === undefined ? "" : ` WHERE ${compileSqlFragment(condition.toFragment())}`
+	}`
+}
+
 /** The RETURNING clause and its row schema, or none without `returning`. */
 const returningOf = (insert: CHInsert<any, any, any, any>) => {
 	const { table, returningFn } = insert._state
@@ -1389,52 +1457,57 @@ function compileInsert(insert: CHInsert<any, any, any, any>, params: Record<stri
 		throw new QueryBuilderError({ code: "InvalidArguments", message: `${where}: every row is empty; give at least one column` })
 	}
 
+	const dialect = currentDialect()
 	const values: Record<string, unknown> = { ...params }
 	let next = 0
-	const cell = (column: string, value: unknown, index: number): string => {
+	const cell = (column: string, value: unknown, context: string): string => {
 		if (value === undefined) return "DEFAULT"
 		if (isExprLike(value)) return compileSqlFragment(value.toFragment())
-		const wire = encodeValue(table.columns[column]!.literalSchema, value, `${where}: row ${index}, column ${column}`)
+		const wire = encodeValue(table.columns[column]!.literalSchema, value, `${where}: ${context}, column ${column}`)
 		let name = `${VALUE_PARAM}${next++}`
 		while (Object.hasOwn(params, name)) name = `${VALUE_PARAM}${next++}`
 		values[name] = wire
 		return compileSqlFragment(param.of(insertWireValue, name).toFragment())
 	}
 
-	// A tenant table's insert is single-tenant when every row pins the tenant
-	// column to the same value or param. Any other expression, a NULL or a
-	// default could be anything.
+	// A tenant table's insert is single-tenant when every row (and an upsert's
+	// SET, if it writes the column) pins the tenant column to the same value or
+	// param. Any other expression, a NULL or a default could be anything.
 	const tenant = table.tenantColumn
 	const bounds = new Set<string>()
-	let pinned = tenant !== undefined
+	let pinned = tenant !== undefined && present.has(tenant)
+	const pin = (value: unknown, sql: string): void => {
+		if (!pinned) return
+		if (value === undefined || value === null || (isExprLike(value) && !("_paramName" in value))) pinned = false
+		else bounds.add(inlineParams(sql, values))
+	}
 
-	const tuples = withSubqueryCompiler(
+	const [tuples, conflictSql] = withSubqueryCompiler(
 		(subquery) =>
 			typeof subquery === "string" ? subquery : compileInner(subquery, values, { skipFormat: true, nested: true }).sql,
-		() =>
-			rows.map((row, index) => {
+		() => {
+			const tuples = rows.map((row, index) => {
 				const cells = columns.map((column) => {
 					const value = row[column]
-					const sql = cell(column, value, index)
-					if (column === tenant && pinned) {
-						if (value === undefined || value === null || (isExprLike(value) && !("_paramName" in value))) pinned = false
-						else bounds.add(inlineParams(sql, values))
-					}
+					const sql = cell(column, value, `row ${index}`)
+					if (column === tenant) pin(value, sql)
 					return sql
 				})
-				if (tenant !== undefined && !present.has(tenant)) pinned = false
 				return `(${cells.join(", ")})`
-			}),
+			})
+			return [tuples, onConflictClause(insert, cell, (column, value, sql) => {
+				if (column === tenant) pin(value, sql)
+			})] as const
+		},
 	)
 
-	const dialect = currentDialect()
 	const returning = returningOf(insert)
 	const returningSql =
 		returning === undefined
 			? ""
 			: `\nRETURNING ${returning.aliases.map((alias) => compileSqlFragment(aliased(returning.exprs[alias]!, alias))).join(", ")}`
 	const rendered = renderParams(
-		`INSERT INTO ${quoteIdentPath(table.name)} (${columns.map(quoteIdent).join(", ")})\nVALUES ${tuples.join(", ")}${returningSql}`,
+		`INSERT INTO ${quoteIdentPath(table.name)} (${columns.map(quoteIdent).join(", ")})\nVALUES ${tuples.join(", ")}${conflictSql}${returningSql}`,
 		values,
 		dialect,
 	)

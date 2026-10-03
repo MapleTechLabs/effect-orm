@@ -109,11 +109,52 @@ The row schema is derived from the list, as it is from a SELECT: an untyped expr
 `untypedColumns`. `CompiledQuery.returning` lists the aliases. ClickHouse has no RETURNING, so
 compiling an insert with `returning` for it is a `QueryBuilderDefect`.
 
+## On conflict
+
+On Postgres, `onConflictDoNothing` and `onConflictDoUpdate` add an `ON CONFLICT` clause. Their
+options follow Drizzle's, so code moving from Drizzle changes little.
+
+```ts
+const Counters = CH.table("counters", { key: PG.text, count: PG.int8, locked: PG.bool }, { defaults: ["locked"] })
+
+// Skip a row whose key exists. Without `target`, any unique index or constraint counts.
+CH.insertInto(Counters).values({ key: "a", count: 1 }).onConflictDoNothing({ target: ["key"] })
+
+// Upsert: add to the existing count, unless the row is locked.
+CH.insertInto(Counters)
+	.values({ key: "a", count: 1 })
+	.onConflictDoUpdate({
+		target: ["key"],
+		set: ($, excluded) => ({ count: $.count.add(excluded.count) }),
+		where: ($) => $.locked.eq(false),
+	})
+	.returning("key", "count")
+```
+
+```sql
+INSERT INTO "counters" ("key", "count")
+VALUES ($1, $2)
+ON CONFLICT ("key") DO UPDATE SET "count" = "counters"."count" + "excluded"."count" WHERE "counters"."locked" = FALSE
+RETURNING "key" AS "key", "count" AS "count"
+```
+
+- `target` is column names, or `{ constraint: "name" }`. `targetWhere` gives a partial unique
+  index's predicate. `onConflictDoUpdate` requires a `target`; `onConflictDoNothing` does not.
+- `set` is a record of values, params or expressions, or a callback that gets `$` (the existing
+  row) and `excluded` (the row proposed for insertion). `$` is qualified with the table name,
+  because an unqualified column would be ambiguous with `excluded`. A key left out keeps the
+  existing value.
+- `where` limits the update to existing rows it holds for. A row it skips is not updated and,
+  with `returning`, returns nothing; the same goes for a row `onConflictDoNothing` skips.
+- Calling either again replaces the clause. ClickHouse has no `ON CONFLICT` (deduplicate with a
+  `ReplacingMergeTree` instead), so compiling one for it is a `QueryBuilderDefect`.
+
 ## Tenant scope
 
 An insert has a `tenantScope` like a query, worked out the same way. On a table with a
 `tenantColumn`, it is `"single-tenant"` when every row gives that column the same value or the
-same param, and `"cross-tenant"` when rows differ or a row uses another expression. A table
+same param, and `"cross-tenant"` when rows differ or a row uses another expression. An
+`onConflictDoUpdate` that sets the tenant column counts as one more row. A table
 without a tenant column gives `"untenanted"`.
 
 ## Failures
@@ -127,6 +168,8 @@ without a tenant column gives `"untenanted"`.
 | Over the dialect's bound-value limit              | `QueryBuilderError` `InvalidArguments`   |
 | Compiling without `values`                        | `QueryBuilderDefect`                     |
 | `returning` for a dialect without RETURNING       | `QueryBuilderDefect`                     |
+| `onConflictDoUpdate` setting no or unknown columns | `QueryBuilderError` `InvalidArguments`  |
+| `onConflict*` without ON CONFLICT, a bad target   | `QueryBuilderDefect`                     |
 
 _(Backed by `src/ch/insert.test.ts`, `src/database/database.test.ts` and
 `tests/database.clickhouse.test.ts`.)_

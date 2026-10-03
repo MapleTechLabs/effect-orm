@@ -62,6 +62,9 @@ export interface DialectClauses {
 	/** `RETURNING` after an INSERT. Absent means no: an insert with
 	 *  `.returning()` fails to compile for the dialect. */
 	readonly returning?: boolean
+	/** `ON CONFLICT ... DO NOTHING / DO UPDATE` after an INSERT. Absent means
+	 *  no: an insert with `onConflict*` fails to compile for the dialect. */
+	readonly onConflict?: boolean
 }
 
 /** A transaction isolation level. `read uncommitted` is left out: Postgres runs it as `read committed`. */
@@ -147,6 +150,7 @@ export const clickhouseDialect: Dialect = {
 		groupByAlias: true,
 		parenthesizeUnionBranches: false,
 		returning: false,
+		onConflict: false,
 	},
 	transactions: noTransactions,
 }

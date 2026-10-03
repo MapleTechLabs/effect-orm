@@ -13,7 +13,7 @@
 //   })
 //   yield* Database.run(insert, { id, orgId })
 
-import type { Comparable, Expr, Widen } from "./expr"
+import type { Comparable, Condition, Expr, Widen } from "./expr"
 import type { ColumnAccessor, InferOutput } from "./query"
 import type { Table } from "./table"
 import type { CHType, ColumnDefs, InferTS } from "./types"
@@ -65,6 +65,51 @@ export type InsertRow<Cols extends ColumnDefs, Defaulted extends string = never,
 export type InsertRowOf<T> =
 	T extends Table<any, infer Cols, infer Defaulted, infer Computed> ? InsertRow<Cols, Defaulted, Computed> : never
 
+/**
+ * The unique index or constraint a conflict is detected on: column names
+ * (Postgres infers the index from them), or a constraint by name.
+ */
+export type ConflictTarget<Cols extends ColumnDefs> =
+	| ReadonlyArray<keyof Cols & string>
+	| { readonly constraint: string }
+
+/**
+ * What `ON CONFLICT DO UPDATE` writes into the existing row: any insertable
+ * column, as a value, param or expression. A key left out (or `undefined`)
+ * keeps the existing value.
+ */
+export type ConflictSet<Cols extends ColumnDefs, Computed extends string = never> = {
+	readonly [K in Exclude<keyof Cols & string, Known<Computed>>]?: InsertValue<Cols[K]> | undefined
+}
+
+export interface OnConflictDoNothing<Cols extends ColumnDefs> {
+	/** Omit to skip a row that conflicts on any unique index or constraint. */
+	readonly target?: ConflictTarget<Cols>
+	/** The partial index's predicate, for a target on a partial unique index. */
+	readonly targetWhere?: ($: ColumnAccessor<Cols>) => Condition
+}
+
+export interface OnConflictDoUpdate<Cols extends ColumnDefs, Computed extends string = never> {
+	/** Required: Postgres must know which index the update is for. */
+	readonly target: ConflictTarget<Cols>
+	readonly targetWhere?: ($: ColumnAccessor<Cols>) => Condition
+	/**
+	 * The columns to write into the existing row. As a callback, `$` is the
+	 * existing row and `excluded` the row that was proposed for insertion:
+	 * `(($, excluded) => ({ count: $.count.add(excluded.count) }))`.
+	 */
+	readonly set:
+		| ConflictSet<Cols, Computed>
+		| (($: ColumnAccessor<Cols>, excluded: ColumnAccessor<Cols>) => ConflictSet<Cols, Computed>)
+	/** Update only the existing rows this holds for; the others are skipped. */
+	readonly where?: ($: ColumnAccessor<Cols>, excluded: ColumnAccessor<Cols>) => Condition
+}
+
+/** @internal — what an insert does on conflict. */
+export type ConflictClause =
+	| ({ readonly action: "nothing" } & OnConflictDoNothing<any>)
+	| ({ readonly action: "update" } & OnConflictDoUpdate<any, any>)
+
 /** @internal — runtime insert state */
 export interface CHInsertState {
 	readonly table: Table<string, ColumnDefs>
@@ -72,6 +117,8 @@ export interface CHInsertState {
 	readonly rows?: ReadonlyArray<Readonly<Record<string, unknown>>>
 	/** Set by `returning`: the RETURNING list, as a select callback. */
 	readonly returningFn?: ($: any) => Record<string, Expr<any>>
+	/** Set by `onConflictDoNothing` / `onConflictDoUpdate`. */
+	readonly conflict?: ConflictClause
 }
 
 export interface CHInsert<
@@ -108,6 +155,19 @@ export interface CHInsert<
 	returning<S extends Record<string, Expr<any>>>(
 		fn: ($: ColumnAccessor<Cols>) => S,
 	): CHInsert<Cols, Defaulted, Computed, InferOutput<S>>
+
+	/**
+	 * `ON CONFLICT DO NOTHING`: skip a row that conflicts. With `returning`, a
+	 * skipped row returns nothing. Postgres only; replaces any earlier
+	 * `onConflict*`.
+	 */
+	onConflictDoNothing(options?: OnConflictDoNothing<Cols>): CHInsert<Cols, Defaulted, Computed, Output>
+
+	/**
+	 * `ON CONFLICT (target) DO UPDATE SET ...`: an upsert. Postgres only;
+	 * replaces any earlier `onConflict*`.
+	 */
+	onConflictDoUpdate(options: OnConflictDoUpdate<Cols, Computed>): CHInsert<Cols, Defaulted, Computed, Output>
 }
 
 const makeInsert = <Cols extends ColumnDefs, Defaulted extends string, Computed extends string, Output>(
@@ -129,6 +189,8 @@ const makeInsert = <Cols extends ColumnDefs, Defaulted extends string, Computed 
 				: ($: any) => Object.fromEntries((args as ReadonlyArray<string>).map((column) => [column, $[column]]))
 		return makeInsert({ ...state, returningFn })
 	}) as CHInsert<Cols, Defaulted, Computed, Output>["returning"],
+	onConflictDoNothing: (options = {}) => makeInsert({ ...state, conflict: { action: "nothing", ...options } }),
+	onConflictDoUpdate: (options) => makeInsert({ ...state, conflict: { action: "update", ...options } }),
 })
 
 /** Start an INSERT into `table`. Give its rows with `values`. */
