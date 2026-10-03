@@ -8,6 +8,7 @@
 
 import { Context, Effect, Layer } from "effect"
 import * as SqlClient from "effect/sql/SqlClient"
+import { firstLine } from "../database/sql-error"
 import { MigrateSqlError } from "./errors"
 
 export interface MigrationDriverApi {
@@ -20,19 +21,6 @@ export interface MigrationDriverApi {
 export class MigrationDriver extends Context.Service<MigrationDriver, MigrationDriverApi>()(
 	"@maple-dev/effect-orm/MigrationDriver",
 ) {}
-
-/** The innermost message: drivers wrap the server's error in generic ones. */
-const firstLine = (cause: unknown): string => {
-	let current: unknown = cause
-	let message = String(cause)
-	for (let depth = 0; depth < 8 && typeof current === "object" && current !== null; depth++) {
-		if ("message" in current && typeof current.message === "string" && current.message.length > 0) message = current.message
-		const next: unknown = "reason" in current ? current.reason : "cause" in current ? current.cause : undefined
-		if (next === undefined || next === current) break
-		current = next
-	}
-	return message.split("\n")[0]?.trim().slice(0, 500) ?? message
-}
 
 const sqlError = (sql: string) => (cause: unknown) => new MigrateSqlError({ message: firstLine(cause), sql, cause })
 

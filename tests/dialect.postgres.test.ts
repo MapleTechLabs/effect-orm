@@ -5,7 +5,8 @@ import { Effect } from "effect"
 import { postgresCases } from "./dialect-cases.postgres"
 import { runOn } from "./postgres-support"
 
-const db = new PGlite()
+// PGlite 0.5 takes the session time zone from the host; the fixtures assume UTC.
+const db = new PGlite({ postgresqlconf: "timezone = 'UTC'" })
 afterAll(() => db.close())
 
 describe("postgres dialect fixtures", () => {

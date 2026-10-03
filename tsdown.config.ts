@@ -9,6 +9,7 @@ export default defineConfig({
 		postgres: "./src/postgres.ts",
 		schema: "./src/schema.ts",
 		migrate: "./src/migrate.ts",
+		database: "./src/database.ts",
 		kit: "./src/kit.ts",
 		"kit/bin": "./src/kit/bin.ts",
 		"benchmark/index": "./src/benchmark/index.ts",
