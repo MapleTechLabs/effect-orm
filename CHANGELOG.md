@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **Breaking:** branded column types compare strictly. A comparison, an insert or update value,
+  and an `INSERT ... SELECT` into a column that decodes to a branded type (`Brand<...>`) take
+  that brand: a value of it, a column of the same brand, or a param declared with the type
+  (`param.of(type, name)`). A plain string, another brand (`UserId` for `OrgId`), `param.string`
+  and unbranded columns are type errors. Literal unions still compare against their primitive.
+  Migrate `$.OrgId.eq(param.string("orgId"))` to `$.OrgId.eq(param.of(orgIdType, "orgId"))`.
+- Add `brand(type, schema)` (root, `/types`, `/postgres`): a column type narrowed by a schema,
+  keeping the base type's SQL type and wire codec. Add `SelectRowOf<typeof table>`, the whole row
+  a table decodes to.
 - Add Postgres schema definitions and migrations. `S.pg.table` (with `S.pg.column`, `S.pg.index`,
   `S.pg.uniqueIndex`, `S.pg.foreignKey`) defines tables with primary keys, partial and expression
   indexes, foreign keys, defaults and identity columns; `dialect: "postgres"` in the kit config

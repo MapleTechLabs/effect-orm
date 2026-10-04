@@ -58,6 +58,7 @@ Note `/sql` exports a `compile` (fragment → string) distinct from the root `co
 | ----------- | ----------------------------------------- |
 | `table`     | `(name, columns, options?) => Table`      |
 | `custom`    | `(sql, schema, literalSchema?) => CHType` |
+| `brand`     | `(type, schema) => CHType`: the type narrowed by `schema` (a branded id, a literal union); see [Branded columns](./tables-and-types.md#branded-columns) |
 | `from`      | `(table, alias?) => CHQuery`              |
 | `fromQuery` | `(query, alias) => CHQuery`               |
 | `fromUnion` | `(union, alias) => CHQuery`               |
@@ -286,7 +287,7 @@ Types: `WindowSpec`, `CompiledWindowSpec`, `WindowFrameBound`, `WindowRowsFrame`
 
 **Everything else** — `Table`, `TableOptions`, `Expr`, `ColumnRef`, `Condition`, `Comparable`
 (what a value of a type may be compared against), `MapValueOf`, `Subquery`, `ParamMarker`,
-`ParamKind`, `CHQuery`, `CHUnionQuery`, `CHInsert`, `CHInsertStart`, `CHUpdate`, `CHUpdateStart`, `CHDelete`, `CHWrite`, `UpdateSet`, `UpdateSetOf`, `InsertRow`, `InsertRowOf`, `InsertValue`, `InsertSelectMisfits`, `InsertSelectMissing`, `InsertSettingValue`, `ConflictTarget`, `ConflictSet`, `OnConflictDoNothing`, `OnConflictDoUpdate`, `ColumnAccessor`, `JoinedColumnAccessor`,
+`ParamKind`, `CHQuery`, `CHUnionQuery`, `CHInsert`, `CHInsertStart`, `CHUpdate`, `CHUpdateStart`, `CHDelete`, `CHWrite`, `UpdateSet`, `UpdateSetOf`, `InsertRow`, `InsertRowOf`, `SelectRowOf`, `InsertValue`, `InsertSelectMisfits`, `InsertSelectMissing`, `InsertSettingValue`, `ConflictTarget`, `ConflictSet`, `OnConflictDoNothing`, `OnConflictDoUpdate`, `ColumnAccessor`, `JoinedColumnAccessor`,
 `JoinOnCallback`, `CompiledQuery`, `CompiledQueryInput`, `CompiledQueryRowSchema`, `RowSchemaMismatch`, `TenantScope`, `Dialect`, `DialectClauses`, `DialectTransactions`, `IsolationLevel`, `TransactionSettings`, `ParamStyle`, `FnResult`,
 `WindowFunnelMode`, `WindowSpec`, `WindowRowsFrame`, `WindowFrameBound`,
 `WindowOrderDirection`, `CompiledWindowSpec`.

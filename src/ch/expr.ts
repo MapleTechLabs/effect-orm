@@ -6,7 +6,7 @@
 // Typed expressions that compile to SqlFragment. Every Expr<T> carries a
 // phantom TSType so TypeScript can infer output row types from SELECT clauses.
 
-import { DateTime, Result, Schema } from "effect"
+import { type Brand, DateTime, Result, Schema } from "effect"
 import type { SqlFragment } from "../sql/sql-fragment"
 import { raw, str, ident, compile, as_ as sqlAs, known } from "../sql/sql-fragment"
 import { activeSqlSyntax } from "../sql/sql-syntax"
@@ -27,17 +27,23 @@ import { markTenantColumn, markTenantPredicate, tenantColumnOf, tenantPredicates
 export type Comparable<TSType> = TSType extends DateTime.Utc ? DateTime.Utc | Date | string : TSType
 
 /**
- * A branded primitive compares as the primitive it brands.
+ * What a comparison widens a column's type to: a literal union to its
+ * primitive (`"open" | "closed"` compares against any `string`; the server
+ * checks the value), but a branded type stays branded.
  *
- * A column may decode to a branded type (`T.custom("String", OrgId)`), but the
- * wire value it is compared against is the plain primitive — a param, another
- * column, a literal. Without widening, `$.OrgId.eq(param.string("orgId"))`
- * stops compiling the moment the column's schema brands its decoded type,
- * which would make branding a breaking change instead of an annotation. The
- * type-level mirror of `literalSchema`: comparisons may accept more than the
- * column decodes to.
+ * A brand is the claim that a value is one kind of id and not another, so an
+ * `OrgId` column compares against an `OrgId`: a value, another `OrgId` column,
+ * or a param declared with the column's type (`param.of(OrgIdColumn, "orgId")`).
+ * A plain `string`, a `UserId`, or `param.string` is a type error, which is
+ * what catches `$.OrgId.eq(userId)`.
  */
-export type Widen<TSType> = TSType extends string ? string : TSType extends number ? number : TSType
+export type Widen<TSType> = TSType extends Brand.Brand<any>
+	? TSType
+	: TSType extends string
+		? string
+		: TSType extends number
+			? number
+			: TSType
 
 // Params in the type
 //
@@ -119,8 +125,8 @@ export interface Expr<TSType, P = never> {
 	toFragment(): SqlFragment
 
 	// Comparison — returns Condition. `Expr<TSType>` is listed alongside the
-	// widened form because `Expr` is invariant: a branded column must accept
-	// both its own refs and plain-primitive exprs (params, other columns).
+	// widened form because `Expr` is invariant: a literal-union column must
+	// accept both its own refs and plain-primitive exprs (params, other columns).
 	// The widened arms sit in contravariant positions, which TypeScript's
 	// `extends Expr<infer T>` inference would prefer — the reason `InferOutput`
 	// reads the `_phantom` property instead of structurally inferring T.

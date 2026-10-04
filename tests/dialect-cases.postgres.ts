@@ -41,6 +41,8 @@ const typed = CH.table("typed", {
 	Doc: PG.jsonb(Schema.Struct({ region: Schema.String })),
 	Tags: PG.array(PG.text),
 	Missing: PG.nullable(PG.int4),
+	// A brand over int8, read from text: the base codec still parses the string.
+	Branded: PG.brand(PG.int8, Schema.Number.pipe(Schema.brand("Count"))),
 })
 const typedRow = `SELECT
 	'a''b'::text AS "Text",
@@ -58,6 +60,7 @@ const typedRow = `SELECT
 	'2026-01-01 00:00:00.25+00'::text AS "AtText",
 	'2026-01-01T00:00:00.25Z'::timestamptz AS "AtString",
 	'{"region": "eu"}'::jsonb AS "Doc",
+	'12'::text AS "Branded",
 	ARRAY['x', 'y']::text[] AS "Tags",
 	NULL::int4 AS "Missing"`
 const typedRows = () => CH.from(typed).withCTE("typed", typedRow)
@@ -165,6 +168,7 @@ export const postgresCases: readonly PostgresCase[] = [
 			"float8",
 			"numeric",
 			"custom",
+			"brand",
 			"timestamptz",
 			"jsonb",
 			"array",
@@ -190,6 +194,7 @@ export const postgresCases: readonly PostgresCase[] = [
 					"Doc",
 					"Tags",
 					"Missing",
+					"Branded",
 				),
 				{},
 			),
@@ -211,6 +216,7 @@ export const postgresCases: readonly PostgresCase[] = [
 				Doc: { region: "eu" },
 				Tags: ["x", "y"],
 				Missing: null,
+				Branded: 12,
 			},
 		],
 	},

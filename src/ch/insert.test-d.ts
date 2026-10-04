@@ -39,11 +39,16 @@ const Plain = CH.table("plain", { A: CH.string, B: CH.uint32 })
 // @ts-expect-error B is required
 CH.insertInto(Plain).values({ A: "a" })
 
-// A branded column takes its branded value and a plain-string param.
+// A branded column takes its branded value or a param of its type, not a plain string.
 const OrgId = Schema.String.pipe(Schema.brand("OrgId"))
-const Branded = CH.table("branded", { OrgId: CH.custom("String", OrgId) })
+const OrgIdType = CH.custom("String", OrgId)
+const Branded = CH.table("branded", { OrgId: OrgIdType })
 CH.insertInto(Branded).values({ OrgId: OrgId.make("o") })
+CH.insertInto(Branded).values({ OrgId: CH.param.of(OrgIdType, "org") })
+// @ts-expect-error a plain-string param is not an OrgId
 CH.insertInto(Branded).values({ OrgId: CH.param.string("org") })
+// @ts-expect-error nor is a plain string
+CH.insertInto(Branded).values({ OrgId: "o" })
 
 // defineTable: defaults are optional, computed columns are not in the row.
 const Spans = S.defineTable("spans", {
@@ -98,8 +103,10 @@ expectTypeOf<keyof CH.InsertRowOf<typeof Docs>>().toEqualTypeOf<"id">()
 CH.insertInto(Docs).values({ id: 1, search: "x" })
 CH.from(Docs).select("search")
 
-// INSERT ... SELECT follows the comparison rule: a branded column takes a plain string.
+// INSERT ... SELECT follows the comparison rule: a branded column takes its brand, not a plain string.
 const BrandedTarget = CH.table("branded_target", { OrgId: CH.custom("String", OrgId) })
+CH.insertInto(BrandedTarget).select(CH.from(Branded).select(($) => ({ OrgId: $.OrgId })))
+// @ts-expect-error a plain-string column is not an OrgId
 CH.insertInto(BrandedTarget).select(CH.from(Plain).select(($) => ({ OrgId: $.A })))
 
 // RETURNING: column names or a callback, as in select.

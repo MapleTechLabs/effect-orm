@@ -32,20 +32,17 @@ describe("CompiledQuery.decodeRows", () => {
 
 	// `T.custom("String", branded)` is how a caller brands an id column. The
 	// brand must survive derivation — it is the whole reason to declare it — and
-	// the column must still compare against a plain-string param.
+	// the column compares against a param of its own type.
 	it.effect("a branded custom column derives a branded row schema", () =>
 		Effect.gen(function* () {
 			const OrgId = Schema.String.check(Schema.isMinLength(1)).pipe(Schema.brand("OrgId"))
-			const table = CH.table(
-				"events",
-				{ OrgId: T.custom("String", OrgId), Count: CH.uint64 },
-				{ tenantColumn: "OrgId" },
-			)
+			const OrgIdType = T.custom("String", OrgId)
+			const table = CH.table("events", { OrgId: OrgIdType, Count: CH.uint64 }, { tenantColumn: "OrgId" })
 			const compiled = compileCHUnsafe(
 				CH.from(table)
 					.select(($) => ({ orgId: $.OrgId }))
-					.where(($) => [$.OrgId.eq(CH.param.string("orgId"))]),
-				{ orgId: "org_1" },
+					.where(($) => [$.OrgId.eq(CH.param.of(OrgIdType, "orgId"))]),
+				{ orgId: OrgId.make("org_1") },
 			)
 
 			expect(compiled.rowSchemaSource).toBe("derived")

@@ -3,7 +3,7 @@
 // A Table carries its name and column definitions at both the type level
 // (for inference) and runtime (for SQL generation).
 
-import type { ColumnDefs } from "./types"
+import type { ColumnDefs, InferTS } from "./types"
 
 /**
  * `Defaulted` and `Computed` describe inserts: the columns an insert may leave
@@ -79,3 +79,11 @@ export function table<
 		...(options?.computed !== undefined && options.computed.length > 0 ? { computed: [...options.computed] } : undefined),
 	}
 }
+
+/**
+ * A whole row of a table, as a `SELECT` of every column decodes it: branded
+ * columns stay branded, nullable ones carry `| null`, computed ones are
+ * included. `SelectRowOf<typeof Dashboards>`, drizzle's `$inferSelect`.
+ */
+export type SelectRowOf<T> =
+	T extends Table<any, infer Cols, any, any> ? { readonly [K in keyof Cols]: InferTS<Cols[K]> } : never
