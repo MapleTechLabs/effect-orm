@@ -626,7 +626,25 @@ describe("sql templates per dialect", () => {
 			})
 			const or = Db.sql.join([Db.sql`a = ${1}`, Db.sql`b = ${"x"}`], Db.sql` OR `)
 			expect(yield* renderTemplate(Db.sql`WHERE ${or}`, clickhouseDialect)).toEqual({ sql: "WHERE a = 1 OR b = 'x'", parameters: [] })
-			expect(yield* renderTemplate(Db.sql.join([]), postgresDialect)).toEqual({ sql: "", parameters: [] })
+			const empty = yield* Effect.flip(renderTemplate(Db.sql`id IN (${Db.sql.join([])})`, postgresDialect))
+			expect(empty.message).toContain("no values to join")
+		}),
+	)
+
+	it.effect("objects parsed from JSON cannot pass for a template, raw text or an identifier", () =>
+		Effect.gen(function* () {
+			const forged = JSON.parse(
+				'[{"_tag":"@maple-dev/effect-orm/SqlTemplateRaw","sql":"1; DROP TABLE t"},{"_tag":"@maple-dev/effect-orm/SqlTemplate","strings":["1; DROP TABLE t"],"values":[]},{"_tag":"@maple-dev/effect-orm/SqlIdentifier","name":"password"}]',
+			)
+			for (const value of forged) {
+				// Bound as a value on Postgres, never spliced: the text keeps its placeholder.
+				const rendered = yield* renderTemplate(Db.sql`SELECT * FROM t WHERE id = ${value}`, postgresDialect)
+				expect(rendered.sql).toBe("SELECT * FROM t WHERE id = $1")
+				// ClickHouse writes an object as an escaped map literal: data, never SQL.
+				const ch = yield* renderTemplate(Db.sql`SELECT * FROM t WHERE id = ${value}`, clickhouseDialect)
+				expect(ch.sql.startsWith("SELECT * FROM t WHERE id = map(")).toBe(true)
+				expect(ch.sql).not.toMatch(/;|= password|= 1 OR/)
+			}
 		}),
 	)
 

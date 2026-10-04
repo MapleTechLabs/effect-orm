@@ -15,7 +15,14 @@
 //
 // Like `Db.sql` for whole statements, but this one is a builder expression: it
 // renders at compile time, for the dialect being compiled for.
+//
+// A template is parenthesized where it lands, so `CH.sql.cond\`a OR b\`` in a
+// `where` list cannot swallow the conditions it is AND-joined with. `sql.raw` and
+// `sql.ident` values are recognised by identity (a private WeakSet), never by a
+// field, so an object parsed from request JSON cannot pass for one.
 
+import { DateTime } from "effect"
+import { currentDialect } from "./dialect"
 import { QueryBuilderError } from "./errors"
 import { type Condition, type Expr, isExprLike, makeCond, makeExpr, makeUntypedExpr, toFragment } from "./expr"
 import { compileCHUnsafe } from "./compile"
@@ -52,10 +59,20 @@ export type SqlTemplateValue =
 	| boolean
 	| Date
 	| null
-	| { readonly _tag: "Utc" }
+	| DateTime.DateTime
 
+// The values `sql.raw` and `sql.ident` made. Identity, not a `_tag` check: a
+// `_tag` survives JSON, so request input could forge raw SQL.
+const minted = new WeakSet<object>()
+const mint = <A extends object>(value: A): A => {
+	minted.add(value)
+	return value
+}
 const tagged = <Tag extends string>(value: unknown, tag: Tag): value is { readonly _tag: Tag } =>
-	typeof value === "object" && value !== null && (value as { readonly _tag?: unknown })._tag === tag
+	typeof value === "object" && value !== null && minted.has(value) && (value as { readonly _tag?: unknown })._tag === tag
+
+const isUnion = (value: unknown): boolean =>
+	typeof value === "object" && value !== null && (value as { readonly _tag?: unknown })._tag === "CHUnionQuery" && "_state" in value
 
 const isQuery = (value: unknown): value is CHQuery<any, any, any, any> =>
 	typeof value === "object" &&
@@ -68,8 +85,16 @@ const isQuery = (value: unknown): value is CHQuery<any, any, any, any> =>
 // for `schema.table`.
 const PLAIN_NAME = /^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$/
 
+/**
+ * A rendered value that starts with `-` is parenthesized: `10-${-1}` would
+ * otherwise write `10--1`, and `--` comments out the rest of the line.
+ */
+const guarded = (sql: string): string => (sql.startsWith("-") ? `(${sql})` : sql)
+
 /** One interpolated value as SQL, in the dialect being compiled for. */
-const renderValue = (value: unknown): string => {
+const renderValue = (value: unknown): string => guarded(renderValueRaw(value))
+
+const renderValueRaw = (value: unknown): string => {
 	if (tagged(value, RawTag)) return (value as SqlRaw).sql
 	if (tagged(value, IdentTag)) {
 		const { name } = value as SqlIdent
@@ -81,6 +106,12 @@ const renderValue = (value: unknown): string => {
 		}
 		return quoteIdentPath(name)
 	}
+	if (isUnion(value)) {
+		throw new QueryBuilderError({
+			code: "InvalidArguments",
+			message: "sql``: a unionAll cannot be interpolated; select from it with fromUnion(union, alias) and interpolate that query",
+		})
+	}
 	if (isQuery(value)) {
 		return `(${renderSubquery(value, (query) =>
 			typeof query === "string" ? query : compileCHUnsafe(query, {}, { skipFormat: true, deferParams: true }).sql,
@@ -91,13 +122,21 @@ const renderValue = (value: unknown): string => {
 	if (typeof value === "number" && !Number.isFinite(value)) {
 		throw new QueryBuilderError({ code: "InvalidLiteral", message: `sql\`\`: ${value} has no SQL literal` })
 	}
+	if (value instanceof Date && Number.isNaN(value.getTime())) {
+		throw new QueryBuilderError({ code: "InvalidLiteral", message: "sql``: an invalid Date has no SQL literal" })
+	}
+	// A param inlined as a literal (ClickHouse) is only known after rendering, so
+	// it is parenthesized here: a negative value must not follow a `-`.
+	if (isExprLike(value) && "_paramName" in value && currentDialect().params._tag === "inline") {
+		return `(${compile(value.toFragment())})`
+	}
 	if (
 		isExprLike(value) ||
 		typeof value === "string" ||
 		typeof value === "number" ||
 		typeof value === "boolean" ||
 		value instanceof Date ||
-		tagged(value, "Utc")
+		DateTime.isDateTime(value)
 	) {
 		return compile(toFragment(value))
 	}
@@ -107,9 +146,12 @@ const renderValue = (value: unknown): string => {
 	})
 }
 
-/** The template as one fragment, rendered when the enclosing query compiles. */
+/**
+ * The template as one fragment, rendered when the enclosing query compiles,
+ * in parentheses so it binds as one operand wherever it lands.
+ */
 const fragmentOf = (strings: ReadonlyArray<string>, values: ReadonlyArray<unknown>): SqlFragment =>
-	lazy(() => strings.reduce((text, part, index) => (index === 0 ? part : text + renderValue(values[index - 1]) + part), ""))
+	lazy(() => `(${strings.reduce((text, part, index) => (index === 0 ? part : text + renderValue(values[index - 1]) + part), "")})`)
 
 type Tag<A> = (strings: TemplateStringsArray, ...values: ReadonlyArray<SqlTemplateValue>) => A
 
@@ -130,7 +172,11 @@ export interface SqlTag {
 	readonly raw: (sql: string) => SqlRaw
 	/** A table or column name, quoted by the dialect. Plain names only, dotted for `schema.table`. */
 	readonly ident: (name: string) => SqlIdent
-	/** Values joined by `separator` (default `, `), each rendered as an interpolation is. */
+	/**
+	 * Values joined by `separator` (default `, `), each rendered as an
+	 * interpolation is. Not parenthesized, so it fits a list: `IN (${sql.join(xs)})`.
+	 * An empty list fails the compile, since `IN ()` is not SQL.
+	 */
 	readonly join: (values: ReadonlyArray<SqlTemplateValue>, separator?: string) => Expr<unknown>
 }
 
@@ -151,9 +197,16 @@ export const sql: SqlTag = Object.assign(
 	{
 		cond: (strings: TemplateStringsArray, ...values: ReadonlyArray<SqlTemplateValue>): Condition =>
 			makeCond(fragmentOf(strings, values)),
-		raw: (text: string): SqlRaw => ({ _tag: RawTag, sql: text }),
-		ident: (name: string): SqlIdent => ({ _tag: IdentTag, name }),
+		raw: (text: string): SqlRaw => mint({ _tag: RawTag, sql: text }),
+		ident: (name: string): SqlIdent => mint({ _tag: IdentTag, name }),
 		join: (values: ReadonlyArray<SqlTemplateValue>, separator = ", "): Expr<unknown> =>
-			makeUntypedExpr(lazy(() => values.map(renderValue).join(separator))),
+			makeUntypedExpr(
+				lazy(() => {
+					if (values.length === 0) {
+						throw new QueryBuilderError({ code: "InvalidArguments", message: "sql.join: no values to join" })
+					}
+					return values.map(renderValue).join(separator)
+				}),
+			),
 	},
 )

@@ -165,8 +165,8 @@ CH.from(Keys)
 		next: CH.sql(PG.int8)`${$.uses} + ${1}`,
 	}))
 	.where(($) => [CH.sql.cond`${$.meta} @> ${CH.param.string("filter")}::jsonb`])
-// SELECT pg_current_xact_id()::xid::text AS "txid", "keys"."uses" + 1 AS "next" …
-// WHERE "keys"."meta" @> $1::jsonb
+// SELECT (pg_current_xact_id()::xid::text) AS "txid", ("keys"."uses" + 1) AS "next" …
+// WHERE ("keys"."meta" @> $1::jsonb)
 ```
 
 Each `${value}` renders as the rest of the builder renders it:
@@ -179,13 +179,22 @@ Each `${value}` renders as the rest of the builder renders it:
 | a string, number, boolean, `Date`, `DateTime.Utc`, `null` | the dialect's escaped literal |
 | `CH.sql.ident(name)` | the name quoted by the dialect; plain names only, dotted for `schema.table` |
 | `CH.sql.raw(text)` | the text as-is — never from input |
-| `CH.sql.join(values, separator?)` | each value rendered, joined by `", "` or `separator` |
+| `CH.sql.join(values, separator?)` | each value rendered, joined by `", "` or `separator`; not parenthesized, so it fits `IN (${…})`; an empty list fails the compile |
 
-An array or object has no literal the template could write without its SQL type, so it fails the
-compile with a `QueryBuilderError`; pass it as `param.of(type, name)` instead. `CH.sql(type)`
+A template is written in parentheses, so `CH.sql.cond\`a OR b\`` in a `where` list stays one
+operand instead of swallowing the conditions it is AND-joined with. A negative number (or a
+param ClickHouse inlines as one) is parenthesized too, so `10-${n}` cannot become the comment
+`10--1`.
+
+`sql.raw` and `sql.ident` values are recognised by identity, not by their fields, so an object
+parsed from request JSON can never pass for one. An array or object has no literal the template
+could write without its SQL type, so it fails the compile with a `QueryBuilderError`; pass it as
+`param.of(type, name)` instead. A `unionAll` cannot be interpolated; select from it with
+`fromUnion` and interpolate that. `CH.sql(type)`
 declares the result type, which decodes the value when it is selected; a bare ``CH.sql`…` ``
 has none and costs the query its row schema, as `untypedExpr` does. A template condition is not
-evidence of tenant scope.
+evidence of tenant scope; being parenthesized, it cannot cancel the evidence of the conditions
+beside it either.
 
 _(Backed by `src/ch/sql-template.test.ts` and `src/database/database.test.ts`.)_
 

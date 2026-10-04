@@ -124,7 +124,9 @@ const claimed = yield* Db.query(
 
 `sql.join(values, separator?)` binds one value per item (or splices a `sql` item), joined by
 `sql\`, \`` unless you pass another separator; `sql.raw(text)` splices text you control; and
-`sql.empty` writes nothing, for an optional part:
+`sql.empty` writes nothing, for an optional part. A `join` of no values fails when the statement
+renders, since `IN ()` is not SQL. Templates, identifiers and raw text are recognised by identity,
+so an object parsed from request JSON is bound as a value, never spliced:
 
 ```ts
 Db.sql`SELECT * FROM t WHERE id IN (${Db.sql.join(ids)})${archived ? Db.sql` AND archived` : Db.sql.empty}`

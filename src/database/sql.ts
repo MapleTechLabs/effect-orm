@@ -33,6 +33,17 @@ export interface SqlTemplate {
 	readonly values: ReadonlyArray<unknown>
 }
 
+// The templates, identifiers and raw text `sql` made. Recognised by identity,
+// not by `_tag`: a `_tag` survives JSON, so a value parsed from a request body
+// could otherwise pass for a template or raw text and be spliced as SQL.
+const minted = new WeakSet<object>()
+const mint = <A extends object>(value: A): A => {
+	minted.add(value)
+	return value
+}
+// `join` of no values, which would write `IN ()`: refused when rendered.
+const emptyJoins = new WeakSet<object>()
+
 /**
  * A statement with every `${value}` bound, never spliced into the text. A
  * `sql\`...\`` inside another is spliced as SQL, so statements compose.
@@ -55,31 +66,35 @@ export const sql: {
 	/** A template that writes nothing, for an optional part: `${cond ? sql\`AND x\` : sql.empty}`. */
 	readonly empty: SqlTemplate
 } = Object.assign(
-	(strings: TemplateStringsArray, ...values: ReadonlyArray<unknown>): SqlTemplate => ({
-		_tag: SqlTemplateTag,
-		strings: [...strings],
-		values,
-	}),
+	(strings: TemplateStringsArray, ...values: ReadonlyArray<unknown>): SqlTemplate =>
+		mint({ _tag: SqlTemplateTag, strings: [...strings], values }),
 	{
-		identifier: (name: string): SqlIdentifier => ({ _tag: IdentifierTag, name }),
+		identifier: (name: string): SqlIdentifier => mint({ _tag: IdentifierTag, name }),
 		join: (values: ReadonlyArray<unknown>, separator?: SqlTemplate): SqlTemplate => {
-			const sep: SqlTemplate = separator ?? { _tag: SqlTemplateTag, strings: [", "], values: [] }
+			const sep: SqlTemplate = separator ?? mint({ _tag: SqlTemplateTag, strings: [", "], values: [] })
 			const interleaved = values.flatMap((value, index) => (index === 0 ? [value] : [sep, value]))
-			return { _tag: SqlTemplateTag, strings: Array.from({ length: interleaved.length + 1 }, () => ""), values: interleaved }
+			const joined = mint({
+				_tag: SqlTemplateTag,
+				strings: Array.from({ length: interleaved.length + 1 }, () => ""),
+				values: interleaved,
+			} satisfies SqlTemplate)
+			if (values.length === 0) emptyJoins.add(joined)
+			return joined
 		},
-		raw: (text: string): SqlRawText => ({ _tag: RawTag, sql: text }),
-		empty: { _tag: SqlTemplateTag, strings: [""], values: [] } satisfies SqlTemplate,
+		raw: (text: string): SqlRawText => mint({ _tag: RawTag, sql: text }),
+		empty: mint({ _tag: SqlTemplateTag, strings: [""], values: [] } satisfies SqlTemplate),
 	},
 )
 
 const isRaw = (value: unknown): value is SqlRawText =>
-	typeof value === "object" && value !== null && "_tag" in value && value._tag === RawTag
+	typeof value === "object" && value !== null && minted.has(value) && "_tag" in value && value._tag === RawTag
 
 const isIdentifier = (value: unknown): value is SqlIdentifier =>
-	typeof value === "object" && value !== null && "_tag" in value && value._tag === IdentifierTag
+	typeof value === "object" && value !== null && minted.has(value) && "_tag" in value && value._tag === IdentifierTag
 
+/** Whether `value` is a template `sql` made: by identity, so JSON cannot forge one. */
 export const isSqlTemplate = (value: unknown): value is SqlTemplate =>
-	typeof value === "object" && value !== null && "_tag" in value && value._tag === SqlTemplateTag
+	typeof value === "object" && value !== null && minted.has(value) && "_tag" in value && value._tag === SqlTemplateTag
 
 // ClickHouse writes identifiers bare, so only plain names are accepted, for
 // every dialect: letters, digits and `_`, dotted for `schema.table`.
@@ -106,8 +121,11 @@ export const renderTemplate = (
 	Effect.try({
 		try: () => {
 			const parameters: Array<unknown> = []
-			const render = (current: SqlTemplate): string =>
-				current.strings.reduce((text, part, index) => {
+			const render = (current: SqlTemplate): string => {
+				if (emptyJoins.has(current)) {
+					throw new QueryBuilderError({ code: "InvalidArguments", message: "sql.join: no values to join" })
+				}
+				return current.strings.reduce((text, part, index) => {
 					if (index === 0) return part
 					const value = current.values[index - 1]
 					if (isSqlTemplate(value)) return text + render(value) + part
@@ -117,6 +135,7 @@ export const renderTemplate = (
 					parameters.push(value)
 					return text + dialect.params.placeholder(parameters.length, "") + part
 				}, "")
+			}
 			return { sql: render(template), parameters }
 		},
 		catch: (cause) =>
