@@ -67,7 +67,10 @@ export interface LockOptions {
 	readonly skipLocked?: boolean
 	/** `NOWAIT`: fail at once instead of waiting. Not with `skipLocked`. */
 	readonly noWait?: boolean
-	/** `OF alias, ...`: lock only these tables' rows (the FROM alias or table name, or join aliases). */
+	/**
+	 * `OF name, ...`: lock only these tables' rows. Each is an alias or an
+	 * unqualified table name (`jobs`, not `public.jobs`, which Postgres refuses).
+	 */
 	readonly of?: ReadonlyArray<string>
 }
 
