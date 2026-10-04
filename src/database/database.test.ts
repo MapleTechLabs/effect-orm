@@ -491,6 +491,35 @@ layer(Live, { excludeTestServices: true })("Database on PGlite", (it) => {
 		}),
 	)
 
+	it.effect("update and deleteFrom change rows and return them", () =>
+		Effect.gen(function* () {
+			yield* Db.execute(Db.sql`CREATE TABLE tickets (id int4 PRIMARY KEY, org text NOT NULL, seats int4 NOT NULL, tags text[] NOT NULL)`)
+			const Tickets = CH.table("tickets", { id: PG.int4, org: PG.text, seats: PG.int4, tags: PG.array(PG.text) }, { tenantColumn: "org" })
+			yield* Db.run(
+				CH.insertInto(Tickets).values([
+					{ id: 1, org: "a", seats: 1, tags: [] },
+					{ id: 2, org: "a", seats: 5, tags: [] },
+					{ id: 3, org: "b", seats: 9, tags: [] },
+				]),
+			)
+			const bumped = yield* Db.run(
+				CH.update(Tickets)
+					.set(($) => ({ seats: $.seats.add(1), tags: ["x", "it's"] }))
+					.where(($) => [$.org.eq(CH.param.string("org")), $.seats.lt(5)])
+					.returning("id", "seats", "tags"),
+				{ org: "a" },
+			)
+			expect(bumped).toEqual([{ id: 1, seats: 2, tags: ["x", "it's"] }])
+			// Without RETURNING, a write runs through `execute` and returns nothing.
+			expect(yield* Db.run(CH.update(Tickets).set({ seats: 0 }).where(($) => [$.id.eq(2)]))).toEqual([])
+			const removed = yield* Db.run(CH.deleteFrom(Tickets).where(($) => [$.org.eq("a")]).returning("id"))
+			expect([...removed].map((r) => r.id).sort()).toEqual([1, 2])
+			expect(yield* Db.run(CH.from(Tickets).select("id", "seats"))).toEqual([{ id: 3, seats: 9 }])
+			yield* Db.run(CH.deleteFrom(Tickets).allRows())
+			expect(yield* Db.run(CH.from(Tickets).select("id"))).toEqual([])
+		}),
+	)
+
 	it.effect("an insert inside a failed transaction rolls back", () =>
 		Effect.gen(function* () {
 			const table = yield* freshTable

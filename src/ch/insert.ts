@@ -72,7 +72,9 @@ type SelectedRow<Q> = Q extends { readonly _phantom?: { readonly output: infer O
 
 /** Selected columns the table cannot take: not an insertable column, or of another type. */
 export type InsertSelectMisfits<Output, Cols extends ColumnDefs, Computed extends string = never> = {
-	// The rule a comparison uses: a branded column takes the plain primitive.
+	// The rule `values` and comparisons use: a column takes its widened
+	// primitive, so a branded column takes a plain string. That also lets a plain
+	// string into a literal-union column; the server checks those values.
 	[K in keyof Output]: K extends Exclude<keyof Cols & string, Known<Computed>>
 		? [Output[K]] extends [InferTS<Cols[K]> | Widen<InferTS<Cols[K]>>]
 			? never

@@ -256,6 +256,17 @@ export {
 	insertInto,
 } from "./insert"
 
+// Update and delete builders
+export {
+	type CHDelete,
+	type CHUpdate,
+	type CHUpdateStart,
+	type UpdateSet,
+	type UpdateSetOf,
+	deleteFrom,
+	update,
+} from "./update"
+
 // Compilation
 export {
 	// `compileCH` / `compileCHUnsafe` are the internal names; the public API is
@@ -268,6 +279,7 @@ export {
 	type CompiledQuery,
 	type CompiledQueryInput,
 	type CompiledQueryRowSchema,
+	type CHWrite,
 	type InsertCompileOptions,
 	type RowSchemaMismatch,
 	type TenantScope,

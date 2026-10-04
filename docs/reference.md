@@ -62,6 +62,8 @@ Note `/sql` exports a `compile` (fragment → string) distinct from the root `co
 | `fromQuery` | `(query, alias) => CHQuery`               |
 | `fromUnion` | `(union, alias) => CHQuery`               |
 | `unionAll`  | `(...queries) => CHUnionQuery`            |
+| `update`     | `(table) => CHUpdateStart`, then `CHUpdate`: `.set(record \| fn)`, `.where(fn)` or `.allRows()`, `.returning(...)`, `.settings(record)`. See [Updating and deleting](./updates-and-deletes.md) |
+| `deleteFrom` | `(table) => CHDelete`: `.where(fn)` or `.allRows()`, `.returning(...)`, `.settings(record)` |
 | `insertInto` | `(table) => CHInsertStart`, then `CHInsert`; `.values(row \| rows)` or `.select(query)` sets its rows, `.settings(record)` ClickHouse `SETTINGS`, `.returning(...)` the RETURNING list, `.onConflictDoNothing(options?)` / `.onConflictDoUpdate(options)` the ON CONFLICT clause (Postgres). See [Inserting rows](./inserts.md) |
 
 ### `CHQuery` methods
@@ -279,7 +281,7 @@ Types: `WindowSpec`, `CompiledWindowSpec`, `WindowFrameBound`, `WindowRowsFrame`
 
 **Everything else** — `Table`, `TableOptions`, `Expr`, `ColumnRef`, `Condition`, `Comparable`
 (what a value of a type may be compared against), `MapValueOf`, `Subquery`, `ParamMarker`,
-`ParamKind`, `CHQuery`, `CHUnionQuery`, `CHInsert`, `CHInsertStart`, `InsertRow`, `InsertRowOf`, `InsertValue`, `InsertSelectMisfits`, `InsertSelectMissing`, `InsertSettingValue`, `ConflictTarget`, `ConflictSet`, `OnConflictDoNothing`, `OnConflictDoUpdate`, `ColumnAccessor`, `JoinedColumnAccessor`,
+`ParamKind`, `CHQuery`, `CHUnionQuery`, `CHInsert`, `CHInsertStart`, `CHUpdate`, `CHUpdateStart`, `CHDelete`, `CHWrite`, `UpdateSet`, `UpdateSetOf`, `InsertRow`, `InsertRowOf`, `InsertValue`, `InsertSelectMisfits`, `InsertSelectMissing`, `InsertSettingValue`, `ConflictTarget`, `ConflictSet`, `OnConflictDoNothing`, `OnConflictDoUpdate`, `ColumnAccessor`, `JoinedColumnAccessor`,
 `JoinOnCallback`, `CompiledQuery`, `CompiledQueryInput`, `CompiledQueryRowSchema`, `RowSchemaMismatch`, `TenantScope`, `Dialect`, `DialectClauses`, `DialectTransactions`, `IsolationLevel`, `TransactionSettings`, `ParamStyle`, `FnResult`,
 `WindowFunnelMode`, `WindowSpec`, `WindowRowsFrame`, `WindowFrameBound`,
 `WindowOrderDirection`, `CompiledWindowSpec`.

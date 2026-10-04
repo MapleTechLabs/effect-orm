@@ -162,3 +162,21 @@ expectTypeOf(PG.compileUnsafe(insert, {})).toEqualTypeOf<CH.CompiledQuery<never,
 expectTypeOf(CH.compileUnsafe(CH.from(Plain).select("A"), {})).toEqualTypeOf<
 	CH.CompiledQuery<{ readonly A: string }, undefined>
 >()
+
+// UPDATE / DELETE
+const Ctr = CH.table("ctr", { key: PG.text, count: PG.int8, gen: PG.text }, { computed: ["gen"] })
+CH.update(Ctr).set({ count: 1 }).where(($) => [$.key.eq("k")])
+CH.update(Ctr).set(($) => ({ count: $.count.add(1) })).allRows()
+// @ts-expect-error a value of another type
+CH.update(Ctr).set({ count: "1" })
+// @ts-expect-error gen is generated
+CH.update(Ctr).set({ gen: "x" })
+// @ts-expect-error set() first
+CH.update(Ctr).where(($) => [$.key.eq("k")])
+const updated = CH.update(Ctr).set({ count: 1 }).allRows().returning("count")
+expectTypeOf<RowOf<typeof updated>>().toEqualTypeOf<{ readonly count: number }>()
+const deleted = CH.deleteFrom(Ctr).where(($) => [$.key.eq("k")]).returning()
+expectTypeOf<RowOf<typeof deleted>>().toEqualTypeOf<{ readonly key: string; readonly count: number; readonly gen: string }>()
+expectTypeOf<RowOf<ReturnType<typeof CH.deleteFrom<"ctr", typeof Ctr.columns>>>>().toEqualTypeOf<never>()
+expectTypeOf(PG.compileUnsafe(updated)).toEqualTypeOf<CH.CompiledQuery<{ readonly count: number }, undefined>>()
+expectTypeOf<CH.UpdateSetOf<typeof Ctr>>().toEqualTypeOf<CH.UpdateSet<typeof Ctr.columns, "gen">>()
