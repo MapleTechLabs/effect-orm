@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- `returning()` with no arguments returns every column, as in Drizzle. `insertInto(table)` now
+  returns `CHInsertStart`, which offers only `values` and `select`, so an insert without rows
+  no longer type-checks. Add `TableOptions.computed` for generated columns. `INSERT ... SELECT`
+  accepts a plain primitive into a branded column, as comparisons do.
 - Add `insertInto(table).values(rows)` (see `docs/inserts.md`): INSERT ... VALUES from the same
   table definitions, for ClickHouse and Postgres. The row type requires every column that is not
   nullable and has no default; values are encoded through the column codecs, written as literals

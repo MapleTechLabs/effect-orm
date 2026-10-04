@@ -72,8 +72,9 @@ type SelectedRow<Q> = Q extends { readonly _phantom?: { readonly output: infer O
 
 /** Selected columns the table cannot take: not an insertable column, or of another type. */
 export type InsertSelectMisfits<Output, Cols extends ColumnDefs, Computed extends string = never> = {
+	// The rule a comparison uses: a branded column takes the plain primitive.
 	[K in keyof Output]: K extends Exclude<keyof Cols & string, Known<Computed>>
-		? [Output[K]] extends [InferTS<Cols[K]>]
+		? [Output[K]] extends [InferTS<Cols[K]> | Widen<InferTS<Cols[K]>>]
 			? never
 			: K
 		: K
@@ -207,14 +208,15 @@ export interface CHInsert<
 	settings(settings: Readonly<Record<string, InsertSettingValue>>): CHInsert<Cols, Defaulted, Computed, Output>
 
 	/**
-	 * Return the inserted rows: column names, or a callback building an
-	 * expression per alias, as in `select`. `Database.run` then decodes them
-	 * through the derived row schema. Postgres only; on a dialect without
-	 * RETURNING (ClickHouse) compiling is a defect. Calling it again replaces
-	 * the list.
+	 * Return the inserted rows: every column with no arguments (Drizzle's bare
+	 * `.returning()`), the named columns, or a callback building an expression
+	 * per alias, as in `select`. `Database.run` then decodes them through the
+	 * derived row schema. Postgres only; on a dialect without RETURNING
+	 * (ClickHouse) compiling is a defect. Calling it again replaces the list.
 	 */
+	returning(): CHInsert<Cols, Defaulted, Computed, { readonly [P in keyof Cols & string]: InferTS<Cols[P]> }>
 	returning<K extends keyof Cols & string>(
-		...columns: K[]
+		...columns: [K, ...Array<K>]
 	): CHInsert<Cols, Defaulted, Computed, { readonly [P in K]: InferTS<Cols[P]> }>
 	returning<S extends Record<string, Expr<any>>>(
 		fn: ($: ColumnAccessor<Cols>) => S,
@@ -250,21 +252,32 @@ const makeInsert = <Cols extends ColumnDefs, Defaulted extends string, Computed 
 	settings: (settings) => makeInsert({ ...state, settings: { ...settings } }),
 	returning: ((...args: ReadonlyArray<unknown>) => {
 		const [first] = args
+		const columns = args.length === 0 ? Object.keys(state.table.columns) : (args as ReadonlyArray<string>)
 		const returningFn =
 			typeof first === "function"
 				? (first as ($: any) => Record<string, Expr<any>>)
-				: ($: any) => Object.fromEntries((args as ReadonlyArray<string>).map((column) => [column, $[column]]))
+				: ($: any) => Object.fromEntries(columns.map((column) => [column, $[column]]))
 		return makeInsert({ ...state, returningFn })
 	}) as CHInsert<Cols, Defaulted, Computed, Output>["returning"],
 	onConflictDoNothing: (options = {}) => makeInsert({ ...state, conflict: { action: "nothing", ...options } }),
 	onConflictDoUpdate: (options) => makeInsert({ ...state, conflict: { action: "update", ...options } }),
 })
 
-/** Start an INSERT into `table`. Give its rows with `values`. */
+/**
+ * An insert that has no rows yet: only `values` and `select`, so one cannot
+ * be compiled or run before it says what to insert.
+ */
+export type CHInsertStart<
+	Cols extends ColumnDefs = ColumnDefs,
+	Defaulted extends string = never,
+	Computed extends string = never,
+> = Pick<CHInsert<Cols, Defaulted, Computed>, "values" | "select">
+
+/** Start an INSERT into `table`. Give its rows with `values` or `select`. */
 export function insertInto<Name extends string, Cols extends ColumnDefs, Defaulted extends string, Computed extends string>(
 	table: Table<Name, Cols, Defaulted, Computed>,
-): CHInsert<Cols, Defaulted, Computed> {
-	return makeInsert({ table: table as Table<string, ColumnDefs> })
+): CHInsertStart<Cols, Defaulted, Computed> {
+	return makeInsert<Cols, Defaulted, Computed, never>({ table: table as Table<string, ColumnDefs> })
 }
 
 export const isInsert = (value: unknown): value is CHInsert<any, any, any, any> =>

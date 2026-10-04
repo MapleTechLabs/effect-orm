@@ -81,6 +81,27 @@ const Keys = CH.table("api_keys", { id: PG.uuid, created_at: PG.timestamptz }, {
 CH.insertInto(Keys).values({ id: "k" })
 CH.insertInto(Keys).values({ id: "k", created_at: new Date() as unknown as DateTime.Utc })
 
+// A bare returning() returns every column.
+const returningAll = CH.insertInto(Keys).values({ id: "k" }).returning()
+expectTypeOf<RowOf<typeof returningAll>>().toEqualTypeOf<{ readonly id: string; readonly created_at: DateTime.Utc }>()
+
+// An insert with no rows yet cannot be compiled or run.
+// @ts-expect-error values() or select() first
+CH.compileUnsafe(CH.insertInto(Keys))
+// @ts-expect-error values() or select() first
+CH.insertInto(Keys).returning("id")
+
+// table() can mark generated columns: not insertable, still readable.
+const Docs = CH.table("docs", { id: PG.int4, search: PG.text }, { computed: ["search"] })
+expectTypeOf<keyof CH.InsertRowOf<typeof Docs>>().toEqualTypeOf<"id">()
+// @ts-expect-error search is generated
+CH.insertInto(Docs).values({ id: 1, search: "x" })
+CH.from(Docs).select("search")
+
+// INSERT ... SELECT follows the comparison rule: a branded column takes a plain string.
+const BrandedTarget = CH.table("branded_target", { OrgId: CH.custom("String", OrgId) })
+CH.insertInto(BrandedTarget).select(CH.from(Plain).select(($) => ({ OrgId: $.A })))
+
 // RETURNING: column names or a callback, as in select.
 const returningNames = CH.insertInto(Keys).values({ id: "k" }).returning("id", "created_at")
 expectTypeOf<RowOf<typeof returningNames>>().toEqualTypeOf<{ readonly id: string; readonly created_at: DateTime.Utc }>()

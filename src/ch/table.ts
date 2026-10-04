@@ -39,7 +39,11 @@ export interface Table<
 	readonly computed?: ReadonlyArray<Computed>
 }
 
-export interface TableOptions<Columns extends ColumnDefs, Defaulted extends keyof Columns & string = never> {
+export interface TableOptions<
+	Columns extends ColumnDefs,
+	Defaulted extends keyof Columns & string = never,
+	Computed extends keyof Columns & string = never,
+> {
 	readonly tenantColumn?: keyof Columns & string
 	/**
 	 * Columns the database fills when an insert leaves them out: a Postgres
@@ -48,18 +52,30 @@ export interface TableOptions<Columns extends ColumnDefs, Defaulted extends keyo
 	 * from its column options.
 	 */
 	readonly defaults?: ReadonlyArray<Defaulted>
+	/**
+	 * Columns the database computes and an insert may not write: a Postgres
+	 * `GENERATED ALWAYS` column, a ClickHouse `MATERIALIZED` or `ALIAS` one.
+	 * They stay readable. `defineTable` works this out from its column options.
+	 */
+	readonly computed?: ReadonlyArray<Computed>
 }
 
 export function table<
 	const Name extends string,
 	const Columns extends ColumnDefs,
 	const Defaulted extends keyof Columns & string = never,
->(name: Name, columns: Columns, options?: TableOptions<Columns, Defaulted>): Table<Name, Columns, Defaulted, never> {
+	const Computed extends keyof Columns & string = never,
+>(
+	name: Name,
+	columns: Columns,
+	options?: TableOptions<Columns, Defaulted, Computed>,
+): Table<Name, Columns, Defaulted, Computed> {
 	return {
 		_tag: "Table",
 		name,
 		columns,
 		...(options?.tenantColumn !== undefined ? { tenantColumn: options.tenantColumn } : undefined),
 		...(options?.defaults !== undefined && options.defaults.length > 0 ? { defaults: [...options.defaults] } : undefined),
+		...(options?.computed !== undefined && options.computed.length > 0 ? { computed: [...options.computed] } : undefined),
 	}
 }

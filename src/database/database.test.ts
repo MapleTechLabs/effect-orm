@@ -475,6 +475,22 @@ layer(Live, { excludeTestServices: true })("Database on PGlite", (it) => {
 		}),
 	)
 
+	it.effect("jsonb and array values bind in an upsert's SET as in VALUES", () =>
+		Effect.gen(function* () {
+			yield* Db.execute(Db.sql`CREATE TABLE docs (id int4 PRIMARY KEY, meta jsonb NOT NULL, tags text[] NOT NULL)`)
+			const Docs = CH.table("docs", { id: PG.int4, meta: PG.jsonb(), tags: PG.array(PG.text) })
+			const upsert = (meta: unknown, tags: ReadonlyArray<string>) =>
+				Db.run(
+					CH.insertInto(Docs)
+						.values({ id: 1, meta, tags })
+						.onConflictDoUpdate({ target: ["id"], set: { meta, tags } })
+						.returning("meta", "tags"),
+				)
+			expect(yield* upsert({ a: [1, "x"] }, ["p"])).toEqual([{ meta: { a: [1, "x"] }, tags: ["p"] }])
+			expect(yield* upsert({ b: { c: null } }, ["q", "it's"])).toEqual([{ meta: { b: { c: null } }, tags: ["q", "it's"] }])
+		}),
+	)
+
 	it.effect("an insert inside a failed transaction rolls back", () =>
 		Effect.gen(function* () {
 			const table = yield* freshTable

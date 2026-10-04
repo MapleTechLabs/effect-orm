@@ -242,6 +242,7 @@ export {
 // Insert builder
 export {
 	type CHInsert,
+	type CHInsertStart,
 	type ConflictSet,
 	type ConflictTarget,
 	type InsertRow,
