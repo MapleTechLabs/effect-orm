@@ -15,6 +15,7 @@ import { compileCH, compileUnion, CompiledQueryDecodeError, type CompiledQuery }
 import { noTransactions, type Dialect, type IsolationLevel, type TransactionSettings } from "../ch/dialect"
 import type { QueryBuilderError } from "../ch/errors"
 import type { CHInsert } from "../ch/insert"
+import type { CHDelete, CHUpdate } from "../ch/update"
 import type { CHQuery } from "../ch/query"
 import type { CHUnionQuery } from "../ch/union"
 import {
@@ -39,7 +40,13 @@ export interface Statement {
 export type StatementInput = SqlTemplate | Statement
 
 /** What `run` takes: a built query, a union, an insert, or one already compiled. */
-export type Runnable = CHQuery<any, any, any, any> | CHUnionQuery<any> | CHInsert<any, any, any, any> | CompiledQuery<any, any>
+export type Runnable =
+	| CHQuery<any, any, any, any>
+	| CHUnionQuery<any>
+	| CHInsert<any, any, any, any>
+	| CHUpdate<any, any, any>
+	| CHDelete<any, any>
+	| CompiledQuery<any, any>
 
 /** The decoded row of a `Runnable`. */
 export type RowOf<Q> =
@@ -85,7 +92,7 @@ export interface DatabaseApi {
 	readonly dialect: Dialect
 	/**
 	 * Compile a query for this database's dialect, run it, and decode its rows.
-	 * An insert returns its RETURNING rows, or none without `returning`.
+	 * A write returns its RETURNING rows, or none without `returning`.
 	 * `params` fills the query's `param.*` markers. A query compiled elsewhere
 	 * runs as it is, if it was compiled for this dialect.
 	 */
@@ -259,16 +266,18 @@ export const fromSqlClient = (sql: SqlClient.SqlClient, options: FromSqlClientOp
 				: Effect.succeed(runnable)
 		}
 		if ("_tag" in runnable && runnable._tag === "CHUnionQuery") return compileUnion(runnable, params, { dialect })
-		if ("_tag" in runnable && runnable._tag === "CHInsert") return compileCH(runnable, params, { dialect })
+		if ("_tag" in runnable && (runnable._tag === "CHInsert" || runnable._tag === "CHUpdate" || runnable._tag === "CHDelete")) {
+			return compileCH(runnable, params, { dialect })
+		}
 		return compileCH(runnable as CHQuery<any, any, any, any>, params, { dialect })
 	}
 
-	// An insert without RETURNING sends back no rows, so it runs the way `execute`
+	// A write without RETURNING sends back no rows, so it runs the way `execute`
 	// does: through `command`, which a ClickHouse client needs for a statement
 	// with no result set.
 	const run: DatabaseApi["run"] = (runnable, params = {}) =>
 		Effect.flatMap(compileFor(runnable, params), (compiled) =>
-			compiled.kind === "insert" && compiled.returning === undefined
+			compiled.kind !== "select" && compiled.returning === undefined
 				? Effect.as(execute(compiled), [])
 				: Effect.flatMap(rows(compiled), (wire) => compiled.decodeRows(wire)),
 		)

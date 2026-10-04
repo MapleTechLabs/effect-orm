@@ -81,6 +81,27 @@ const Keys = CH.table("api_keys", { id: PG.uuid, created_at: PG.timestamptz }, {
 CH.insertInto(Keys).values({ id: "k" })
 CH.insertInto(Keys).values({ id: "k", created_at: new Date() as unknown as DateTime.Utc })
 
+// A bare returning() returns every column.
+const returningAll = CH.insertInto(Keys).values({ id: "k" }).returning()
+expectTypeOf<RowOf<typeof returningAll>>().toEqualTypeOf<{ readonly id: string; readonly created_at: DateTime.Utc }>()
+
+// An insert with no rows yet cannot be compiled or run.
+// @ts-expect-error values() or select() first
+CH.compileUnsafe(CH.insertInto(Keys))
+// @ts-expect-error values() or select() first
+CH.insertInto(Keys).returning("id")
+
+// table() can mark generated columns: not insertable, still readable.
+const Docs = CH.table("docs", { id: PG.int4, search: PG.text }, { computed: ["search"] })
+expectTypeOf<keyof CH.InsertRowOf<typeof Docs>>().toEqualTypeOf<"id">()
+// @ts-expect-error search is generated
+CH.insertInto(Docs).values({ id: 1, search: "x" })
+CH.from(Docs).select("search")
+
+// INSERT ... SELECT follows the comparison rule: a branded column takes a plain string.
+const BrandedTarget = CH.table("branded_target", { OrgId: CH.custom("String", OrgId) })
+CH.insertInto(BrandedTarget).select(CH.from(Plain).select(($) => ({ OrgId: $.A })))
+
 // RETURNING: column names or a callback, as in select.
 const returningNames = CH.insertInto(Keys).values({ id: "k" }).returning("id", "created_at")
 expectTypeOf<RowOf<typeof returningNames>>().toEqualTypeOf<{ readonly id: string; readonly created_at: DateTime.Utc }>()
@@ -141,3 +162,21 @@ expectTypeOf(PG.compileUnsafe(insert, {})).toEqualTypeOf<CH.CompiledQuery<never,
 expectTypeOf(CH.compileUnsafe(CH.from(Plain).select("A"), {})).toEqualTypeOf<
 	CH.CompiledQuery<{ readonly A: string }, undefined>
 >()
+
+// UPDATE / DELETE
+const Ctr = CH.table("ctr", { key: PG.text, count: PG.int8, gen: PG.text }, { computed: ["gen"] })
+CH.update(Ctr).set({ count: 1 }).where(($) => [$.key.eq("k")])
+CH.update(Ctr).set(($) => ({ count: $.count.add(1) })).allRows()
+// @ts-expect-error a value of another type
+CH.update(Ctr).set({ count: "1" })
+// @ts-expect-error gen is generated
+CH.update(Ctr).set({ gen: "x" })
+// @ts-expect-error set() first
+CH.update(Ctr).where(($) => [$.key.eq("k")])
+const updated = CH.update(Ctr).set({ count: 1 }).allRows().returning("count")
+expectTypeOf<RowOf<typeof updated>>().toEqualTypeOf<{ readonly count: number }>()
+const deleted = CH.deleteFrom(Ctr).where(($) => [$.key.eq("k")]).returning()
+expectTypeOf<RowOf<typeof deleted>>().toEqualTypeOf<{ readonly key: string; readonly count: number; readonly gen: string }>()
+expectTypeOf<RowOf<ReturnType<typeof CH.deleteFrom<"ctr", typeof Ctr.columns>>>>().toEqualTypeOf<never>()
+expectTypeOf(PG.compileUnsafe(updated)).toEqualTypeOf<CH.CompiledQuery<{ readonly count: number }, undefined>>()
+expectTypeOf<CH.UpdateSetOf<typeof Ctr>>().toEqualTypeOf<CH.UpdateSet<typeof Ctr.columns, "gen">>()

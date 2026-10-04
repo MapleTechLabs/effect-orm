@@ -86,7 +86,7 @@ describe("insertInto", () => {
 		expect(CH.compileUnsafe(first).sql).not.toContain("'b'")
 		expect(CH.compileUnsafe(second).sql).toContain("('c'")
 		expect(CH.compileUnsafe(second).sql).not.toContain("'a'")
-		expect(base._state.rows).toBeUndefined()
+		expect((base as unknown as CH.CHInsert)._state.rows).toBeUndefined()
 	})
 
 	it("a value that could spell a param marker stays a value", () => {
@@ -115,6 +115,12 @@ describe("insertInto", () => {
 				expect(DateTime.formatIso(row!.createdAt)).toBe(at)
 			}),
 		)
+
+		it("with no arguments returns every column, like Drizzle's bare returning()", () => {
+			const compiled = PG.compileUnsafe(CH.insertInto(Keys).values({ id: "a", org_id: "o", name: "n", meta: {} }).returning())
+			expect(compiled.returning).toEqual(["id", "org_id", "name", "created_at", "revoked", "meta"])
+			expect(compiled.rowSchemaSource).toBe("derived")
+		})
 
 		it("takes column names, and calling it again replaces the list", () => {
 			const insert = CH.insertInto(Keys).values({ id: "a", org_id: "o", name: "n", meta: {} })
@@ -351,9 +357,10 @@ describe("insertInto", () => {
 			}),
 		)
 
+		// The type refuses it (`CHInsertStart`); this is the runtime guard behind it.
 		it.effect("compiling without values is a defect", () =>
 			Effect.gen(function* () {
-				const exit = yield* Effect.exit(CH.compile(CH.insertInto(Events)))
+				const exit = yield* Effect.exit(CH.compile(CH.insertInto(Events) as unknown as CH.CHInsert))
 				expect(failure(exit)).toBeInstanceOf(QueryBuilderDefect)
 			}),
 		)
@@ -365,6 +372,17 @@ describe("insertInto", () => {
 			expect(PG.compileUnsafe(CH.insertInto(Wide).values(rows.slice(1))).parameters).toHaveLength(65535)
 		})
 	})
+
+	it.effect("a column table() marks computed cannot be inserted", () =>
+		Effect.gen(function* () {
+			const Docs = CH.table("docs", { id: PG.int4, body: PG.text, search: PG.text }, { computed: ["search"] })
+			expect(Docs.computed).toEqual(["search"])
+			const error = yield* Effect.flip(PG.compile(CH.insertInto(Docs).values({ id: 1, body: "b", search: "x" } as any)))
+			expect(error.message).toContain("writes search, which the database computes")
+			// Still readable, and returned by a bare returning().
+			expect(PG.compileUnsafe(CH.insertInto(Docs).values({ id: 1, body: "b" }).returning()).returning).toEqual(["id", "body", "search"])
+		}),
+	)
 
 	describe("defineTable", () => {
 		const Spans = S.defineTable("spans", {

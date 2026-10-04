@@ -475,6 +475,51 @@ layer(Live, { excludeTestServices: true })("Database on PGlite", (it) => {
 		}),
 	)
 
+	it.effect("jsonb and array values bind in an upsert's SET as in VALUES", () =>
+		Effect.gen(function* () {
+			yield* Db.execute(Db.sql`CREATE TABLE docs (id int4 PRIMARY KEY, meta jsonb NOT NULL, tags text[] NOT NULL)`)
+			const Docs = CH.table("docs", { id: PG.int4, meta: PG.jsonb(), tags: PG.array(PG.text) })
+			const upsert = (meta: unknown, tags: ReadonlyArray<string>) =>
+				Db.run(
+					CH.insertInto(Docs)
+						.values({ id: 1, meta, tags })
+						.onConflictDoUpdate({ target: ["id"], set: { meta, tags } })
+						.returning("meta", "tags"),
+				)
+			expect(yield* upsert({ a: [1, "x"] }, ["p"])).toEqual([{ meta: { a: [1, "x"] }, tags: ["p"] }])
+			expect(yield* upsert({ b: { c: null } }, ["q", "it's"])).toEqual([{ meta: { b: { c: null } }, tags: ["q", "it's"] }])
+		}),
+	)
+
+	it.effect("update and deleteFrom change rows and return them", () =>
+		Effect.gen(function* () {
+			yield* Db.execute(Db.sql`CREATE TABLE tickets (id int4 PRIMARY KEY, org text NOT NULL, seats int4 NOT NULL, tags text[] NOT NULL)`)
+			const Tickets = CH.table("tickets", { id: PG.int4, org: PG.text, seats: PG.int4, tags: PG.array(PG.text) }, { tenantColumn: "org" })
+			yield* Db.run(
+				CH.insertInto(Tickets).values([
+					{ id: 1, org: "a", seats: 1, tags: [] },
+					{ id: 2, org: "a", seats: 5, tags: [] },
+					{ id: 3, org: "b", seats: 9, tags: [] },
+				]),
+			)
+			const bumped = yield* Db.run(
+				CH.update(Tickets)
+					.set(($) => ({ seats: $.seats.add(1), tags: ["x", "it's"] }))
+					.where(($) => [$.org.eq(CH.param.string("org")), $.seats.lt(5)])
+					.returning("id", "seats", "tags"),
+				{ org: "a" },
+			)
+			expect(bumped).toEqual([{ id: 1, seats: 2, tags: ["x", "it's"] }])
+			// Without RETURNING, a write runs through `execute` and returns nothing.
+			expect(yield* Db.run(CH.update(Tickets).set({ seats: 0 }).where(($) => [$.id.eq(2)]))).toEqual([])
+			const removed = yield* Db.run(CH.deleteFrom(Tickets).where(($) => [$.org.eq("a")]).returning("id"))
+			expect([...removed].map((r) => r.id).sort()).toEqual([1, 2])
+			expect(yield* Db.run(CH.from(Tickets).select("id", "seats"))).toEqual([{ id: 3, seats: 9 }])
+			yield* Db.run(CH.deleteFrom(Tickets).allRows())
+			expect(yield* Db.run(CH.from(Tickets).select("id"))).toEqual([])
+		}),
+	)
+
 	it.effect("an insert inside a failed transaction rolls back", () =>
 		Effect.gen(function* () {
 			const table = yield* freshTable

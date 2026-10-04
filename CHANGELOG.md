@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Add `update(table).set(...).where(...)` and `deleteFrom(table).where(...)` (see
+  `docs/updates-and-deletes.md`), with `returning` on Postgres and `settings` on ClickHouse,
+  where they compile to an `ALTER TABLE ... UPDATE` mutation and a lightweight `DELETE`. A write
+  with no `where()` is refused unless `allRows()` says so, and one whose conditions all came out
+  `undefined` fails. Tenant scope is derived from the WHERE. `CompiledQuery.kind` gains `update`
+  and `delete`; `DialectClauses.insertSettings` is renamed `writeSettings` (unreleased), and
+  `DialectClauses.alterTableUpdate` is added.
+- `returning()` with no arguments returns every column, as in Drizzle. `insertInto(table)` now
+  returns `CHInsertStart`, which offers only `values` and `select`, so an insert without rows
+  no longer type-checks. Add `TableOptions.computed` for generated columns. `INSERT ... SELECT`
+  accepts a plain primitive into a branded column, as comparisons do.
 - Add `insertInto(table).values(rows)` (see `docs/inserts.md`): INSERT ... VALUES from the same
   table definitions, for ClickHouse and Postgres. The row type requires every column that is not
   nullable and has no default; values are encoded through the column codecs, written as literals
@@ -20,7 +31,7 @@
   against the table at the type level. Tenant scope follows the read and where the written
   tenant comes from.
 - Add `settings(record)` to an insert (ClickHouse): `INSERT ... SETTINGS name = value`. Add
-  `DialectClauses.insertSettings`, optional.
+  `DialectClauses.writeSettings`, optional.
 - Add `CompiledQuery.kind` (`"select"` or `"insert"`); `rawCompiledQuery` takes it as an option.
 - Add `ParamStyle.maxParameters`; Postgres sets 65535, and a statement over it fails to compile.
 - Add `@maple-dev/effect-orm/database`, opt-in (see `docs/database.md`): a `Database` over the

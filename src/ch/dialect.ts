@@ -65,9 +65,12 @@ export interface DialectClauses {
 	/** `ON CONFLICT ... DO NOTHING / DO UPDATE` after an INSERT. Absent means
 	 *  no: an insert with `onConflict*` fails to compile for the dialect. */
 	readonly onConflict?: boolean
-	/** `SETTINGS` on an INSERT (ClickHouse). Absent means no: an insert with
-	 *  `.settings()` fails to compile for the dialect. */
-	readonly insertSettings?: boolean
+	/** `SETTINGS` on an INSERT, UPDATE or DELETE (ClickHouse). Absent means
+	 *  no: a write with `.settings()` fails to compile for the dialect. */
+	readonly writeSettings?: boolean
+	/** UPDATE is written `ALTER TABLE t UPDATE ... WHERE ...`, a ClickHouse
+	 *  mutation, rather than `UPDATE t SET ... WHERE ...`. */
+	readonly alterTableUpdate?: boolean
 }
 
 /** A transaction isolation level. `read uncommitted` is left out: Postgres runs it as `read committed`. */
@@ -154,7 +157,8 @@ export const clickhouseDialect: Dialect = {
 		parenthesizeUnionBranches: false,
 		returning: false,
 		onConflict: false,
-		insertSettings: true,
+		writeSettings: true,
+		alterTableUpdate: true,
 	},
 	transactions: noTransactions,
 }

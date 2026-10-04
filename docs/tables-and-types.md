@@ -24,7 +24,8 @@ query time. Treat the declaration as a contract you keep in sync with your migra
 
 The third argument takes options. `tenantColumn` names the column that carries tenancy (see
 [Tenant scoping](./tenant-scoping.md)); `defaults` lists the columns the database fills in when
-an insert leaves them out (see [Inserting rows](./inserts.md#which-columns-have-defaults)).
+an insert leaves them out, and `computed` the ones an insert may not write at all (see
+[Inserting rows](./inserts.md#which-columns-have-defaults)).
 
 ## Column types
 

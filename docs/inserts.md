@@ -53,7 +53,11 @@ Each row is typed from the table:
 `defaults`: a Postgres `serial` or `DEFAULT now()`, a ClickHouse `DEFAULT`. A table declared
 with [`defineTable`](./migrations.md) works this out from its column options: a column with
 `default` or `defaultExpr` is optional, and a `materialized` or `alias` column cannot be inserted
-at all (it is not in the row type, and a row that names it anyway fails to compile).
+at all (it is not in the row type, and a row that names it anyway fails to compile). On `table()`,
+list such columns (a Postgres `GENERATED ALWAYS` column) with `computed`; they stay readable.
+
+`insertInto(table)` offers only `values` and `select` until it has rows (its type is
+`CHInsertStart`), so an insert cannot be compiled or run before it says what to insert.
 
 ClickHouse fills every column it is not given with a default, even without a `DEFAULT` clause:
 `0` for a number, `''` for a string. The row type still requires those columns unless you list
@@ -124,8 +128,8 @@ timeout; run those in slices.
 ## Returning
 
 On Postgres, `returning` adds a RETURNING list and `Database.run` returns the inserted rows,
-decoded. It takes column names, or a callback building one expression per alias, as `select`
-does:
+decoded. With no arguments it returns every column, as Drizzle's bare `.returning()` does; it
+also takes column names, or a callback building one expression per alias, as `select` does:
 
 ```ts
 const created = CH.insertInto(ApiKeys)
