@@ -9,7 +9,7 @@
 import { renderSubquery } from "./subquery-context"
 import { compileCHUnsafe } from "./compile"
 import { type Condition, type Expr, makeCond, makeExpr, makeUntypedExpr } from "./expr"
-import type { CHQuery } from "./query"
+import type { CHQuery, NeedsSelect, SingleColumnOf } from "./query"
 import type { CHType } from "./types"
 import { compile, lazy } from "../sql/sql-fragment"
 
@@ -37,12 +37,18 @@ const toSql = (subquery: Subquery): string =>
 // An inner tenant filter cannot confine an otherwise unfiltered outer source.
 
 /** `EXISTS (subquery)` — for correlated subqueries (see `outerRef`). */
-export function exists(subquery: Subquery): Condition {
+export function exists<O extends Record<string, any>>(subquery: string | (CHQuery<any, O, any, any> & NeedsSelect<O>)): Condition {
 	return makeCond(lazy(() => `EXISTS (${toSql(subquery)})`))
 }
 
-/** `expr IN (subquery)`. */
-export function inSubquery<T>(expr: Expr<T>, subquery: Subquery): Condition {
+/**
+ * `expr IN (subquery)`. The subquery must select exactly one column, of a type
+ * `expr` can be compared with. The SQL-string arm is unchecked.
+ */
+export function inSubquery<T, O extends Record<string, any>>(
+	expr: Expr<T>,
+	subquery: string | (CHQuery<any, O, any, any> & SingleColumnOf<O, T>),
+): Condition {
 	return makeCond(lazy(() => `${compile(expr.toFragment())} IN (${toSql(subquery)})`))
 }
 
@@ -52,7 +58,10 @@ export function inSubquery<T>(expr: Expr<T>, subquery: Subquery): Condition {
  * Note ClickHouse's NULL semantics: if the subquery yields any NULL, `NOT IN`
  * is never true. Project a non-nullable column, or filter the NULLs inside.
  */
-export function notInSubquery<T>(expr: Expr<T>, subquery: Subquery): Condition {
+export function notInSubquery<T, O extends Record<string, any>>(
+	expr: Expr<T>,
+	subquery: string | (CHQuery<any, O, any, any> & SingleColumnOf<O, T>),
+): Condition {
 	return makeCond(lazy(() => `${compile(expr.toFragment())} NOT IN (${toSql(subquery)})`))
 }
 

@@ -5,7 +5,7 @@
 // OFFSET wrapping.
 
 import type { ColumnDefs } from "./types"
-import type { CHQuery } from "./query"
+import type { CHQuery, CompatibleTypes, OutputOf, RowCount } from "./query"
 
 // Union state (runtime)
 
@@ -28,9 +28,9 @@ export interface CHUnionQuery<Output extends Record<string, any> = {}> {
 
 	orderBy(...specs: Array<[keyof Output & string, "asc" | "desc"]>): CHUnionQuery<Output>
 
-	limit(n: number): CHUnionQuery<Output>
+	limit<N extends number>(n: RowCount<N>): CHUnionQuery<Output>
 
-	offset(n: number): CHUnionQuery<Output>
+	offset<N extends number>(n: RowCount<N>): CHUnionQuery<Output>
 
 	format(fmt: "JSON" | "JSONEachRow"): CHUnionQuery<Output>
 }
@@ -68,11 +68,41 @@ function makeUnionQuery<Output extends Record<string, any>>(state: CHUnionState)
 
 // Entry point
 
-export function unionAll<Output extends Record<string, any>>(
-	...queries: Array<CHQuery<ColumnDefs, Output, any>>
-): CHUnionQuery<Output> {
+type AnyQuery = CHQuery<ColumnDefs, any, any, any>
+
+/** The aliases branch `O` disagrees with the first branch `O0` on: missing,
+ *  extra, or of a type the first branch's column cannot hold. */
+type BranchMisfits<O0, O> = {
+	[K in keyof O0 | keyof O]: K extends keyof O0
+		? K extends keyof O
+			? CompatibleTypes<O0[K], O[K]> extends true
+				? never
+				: K
+			: K
+		: K
+}[keyof O0 | keyof O]
+
+/**
+ * `unknown` when every branch selects the first branch's aliases, of types
+ * that can share a column; otherwise a property naming the aliases that differ.
+ * Branches are matched by alias, not position, so their order may differ.
+ */
+export type UnionBranchesFit<Q extends ReadonlyArray<AnyQuery>> = [keyof OutputOf<Q[0]>] extends [never]
+	? { readonly selectRequired: "every unionAll branch needs a select()" }
+	: [{ [I in keyof Q]: BranchMisfits<OutputOf<Q[0]>, OutputOf<Q[I]>> }[number]] extends [never]
+		? unknown
+		: { readonly unionColumnsDiffer: { [I in keyof Q]: BranchMisfits<OutputOf<Q[0]>, OutputOf<Q[I]>> }[number] }
+
+/** The union's row: the first branch's aliases, each typed as any branch's. */
+export type UnionOutput<Q extends ReadonlyArray<AnyQuery>> = {
+	readonly [K in keyof OutputOf<Q[0]>]: OutputOf<Q[number]>[K]
+}
+
+export function unionAll<const Q extends readonly [AnyQuery, ...Array<AnyQuery>]>(
+	...queries: Q & UnionBranchesFit<Q>
+): CHUnionQuery<UnionOutput<Q>> {
 	return makeUnionQuery({
-		queries,
+		queries: queries as ReadonlyArray<AnyQuery>,
 		outerOrderBySpecs: [],
 	})
 }

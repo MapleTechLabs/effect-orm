@@ -19,8 +19,10 @@ $.Timestamp.gte(new Date(...))            // Timestamp >= '2026-01-01 00:00:00'
 
 ### Testing for NULL
 
-`.eq(null)` emits `= NULL`; it does not test whether a value is missing. Use `.isNull()` (or
-`.isNotNull()` for present values), which write `IS NULL` and work on every dialect:
+`= NULL` is never true in SQL, so a comparison does not take `null`: `.eq(null)`,
+`.in_(null)` and the like are type errors, and a `null` that arrives at runtime fails
+compilation with a `QueryBuilderError`. Use `.isNull()` (or `.isNotNull()` for present
+values), which write `IS NULL` and work on every dialect:
 
 ```ts title="null-filter.ts"
 import * as CH from "@maple-dev/effect-orm"
@@ -62,7 +64,9 @@ Every `Expr<T>` carries:
 Each accepts a raw value or another `Expr<T>`. String literals are escaped; booleans emit as
 `1` / `0`.
 
-`in_` carries a trailing underscore because `in` is a reserved word in JavaScript.
+`in_` carries a trailing underscore because `in` is a reserved word in JavaScript. An empty
+list is written as the constant it means, `1 = 0` for `in_()` and `1 = 1` for `notIn()`, since
+`IN ()` is not SQL.
 
 ### String-only
 

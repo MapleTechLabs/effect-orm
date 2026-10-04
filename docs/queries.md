@@ -58,13 +58,13 @@ _(Backed by `docs/queries.md > select by column name`.)_
 Entries may be `undefined`, which drops them — that is what makes optional filters clean. See
 [`when` / `whenTrue`](./expressions.md#optional-predicates).
 
-**Calling `where` again replaces the previous callback.** It does not append predicates.
-Put the complete filter set in one callback, including tenant and time bounds. Both flat
+**Calling `where` again adds conditions**, ANDed with the earlier ones, as in Kysely. A shared
+base that filters by tenant keeps that filter however many `.where(...)` calls follow. Both flat
 conditions and `.and()` preserve [tenant scoping](./tenant-scoping.md); `.or()` does not.
+`having` accumulates the same way.
 
-The same replacement rule applies to `select`, `groupBy`, `having`, `orderBy`, `limit`,
-`offset`, and `format`. Joins and CTEs accumulate. Immutable does not mean additive:
-a second `.where(...)` on a shared base can remove its tenant filter.
+`select`, `groupBy`, `orderBy`, `limit`, `offset`, and `format` replace the previous value. Joins
+and CTEs accumulate.
 
 ## `groupBy`
 
@@ -127,9 +127,10 @@ Postgres wants those keys to lead the ORDER BY. Both ClickHouse and Postgres sup
 .limit(50).offset(100)
 ```
 
-Both take numbers, not `param.*` expressions, and are rounded with `Math.round` before
-emission. That is not input validation: reject non-finite, negative, or fractional values at
-your request boundary, and enforce an application maximum. Use a stable `orderBy` when paging;
+Both take non-negative integers, not `param.*` expressions. A negative or fractional literal is
+a type error; a value that arrives at runtime (`NaN`, `-1`, `1.5`) fails compilation with a
+`QueryBuilderError` instead of being rounded. Still enforce an application maximum at your
+request boundary. Use a stable `orderBy` when paging;
 [Recipes](./recipes.md#paginate-a-grouped-result) shows where an offset is appropriate.
 
 ## `format`

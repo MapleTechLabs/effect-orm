@@ -16,7 +16,7 @@ import { noTransactions, type Dialect, type IsolationLevel, type TransactionSett
 import type { QueryBuilderError } from "../ch/errors"
 import type { CHInsert } from "../ch/insert"
 import type { CHDelete, CHUpdate } from "../ch/update"
-import type { CHQuery } from "../ch/query"
+import type { CHQuery, NeedsSelect } from "../ch/query"
 import type { CHUnionQuery } from "../ch/union"
 import {
 	DatabaseError,
@@ -47,6 +47,12 @@ export type Runnable =
 	| CHUpdate<any, any, any>
 	| CHDelete<any, any>
 	| CompiledQuery<any, any>
+
+/**
+ * `unknown` when a `Runnable` can run as it is. A query with no SELECT list
+ * cannot; a write without `where`/`allRows` is not a `Runnable` at all.
+ */
+export type RunCheck<Q> = Q extends CHQuery<any, infer Output, any, any> ? NeedsSelect<Output> : unknown
 
 /** The decoded row of a `Runnable`. */
 export type RowOf<Q> =
@@ -97,7 +103,7 @@ export interface DatabaseApi {
 	 * runs as it is, if it was compiled for this dialect.
 	 */
 	readonly run: <Q extends Runnable>(
-		query: Q,
+		query: Q & RunCheck<Q>,
 		params?: Record<string, unknown>,
 	) => Effect.Effect<ReadonlyArray<RowOf<Q>>, DatabaseError | QueryBuilderError | CompiledQueryDecodeError>
 	/** Run a statement and return its rows, decoded through `schema` when given. */
@@ -443,7 +449,7 @@ export const layerSqlClient = (options: FromSqlClientOptions): Layer.Layer<Datab
 
 /** `run` on the `Database` in context. */
 export const run = <Q extends Runnable>(
-	query: Q,
+	query: Q & RunCheck<Q>,
 	params?: Record<string, unknown>,
 ): Effect.Effect<ReadonlyArray<RowOf<Q>>, DatabaseError | QueryBuilderError | CompiledQueryDecodeError, Database> =>
 	Effect.flatMap(Effect.service(Database), (db) => db.run(query, params))

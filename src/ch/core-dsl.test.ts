@@ -312,6 +312,7 @@ describe("condition combinators", () => {
 describe("compile edge cases", () => {
 	it("throws QueryBuilderError when no select", () => {
 		const q = CH.from(TestTable).format("JSON")
+		// @ts-expect-error -- a query with no select() is a type error too
 		expect(() => compileCHUnsafe(q, {})).toThrow()
 	})
 

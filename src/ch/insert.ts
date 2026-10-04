@@ -14,7 +14,7 @@
 //   yield* Database.run(insert, { id, orgId })
 
 import type { Comparable, Condition, Expr, Widen } from "./expr"
-import type { CHQuery, ColumnAccessor, InferOutput } from "./query"
+import type { CHQuery, ColumnAccessor, InferOutput, NeedsSelect } from "./query"
 import type { Table } from "./table"
 import type { CHUnionQuery } from "./union"
 import type { CHType, ColumnDefs, InferTS } from "./types"
@@ -198,7 +198,7 @@ export interface CHInsert<
 	 * their types. Replaces any `values`.
 	 */
 	select<Q extends CHQuery<any, any, any, any> | CHUnionQuery<any>>(
-		query: Q & SelectFits<SelectedRow<Q>, Cols, Defaulted, Computed>,
+		query: Q & SelectFits<SelectedRow<Q>, Cols, Defaulted, Computed> & NeedsSelect<SelectedRow<Q>>,
 	): CHInsert<Cols, Defaulted, Computed, Output>
 
 	/**

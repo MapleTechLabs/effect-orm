@@ -13,7 +13,7 @@ import { compileCHUnsafe } from "../ch/compile"
 import { clickhouseDialect, withDialect } from "../ch/dialect"
 import type { Expr } from "../ch/expr"
 import { encodeColumnLiteral } from "../ch/literal"
-import { createColumnAccessor, type CHQuery, type ColumnAccessor } from "../ch/query"
+import { createColumnAccessor, type CHQuery, type ColumnAccessor, type NeedsSelect } from "../ch/query"
 import type { Table } from "../ch/table"
 import type { CHType, ColumnDefs, InferTS } from "../ch/types"
 import { compile as compileFragment } from "../sql/sql-fragment"
@@ -392,7 +392,7 @@ export function materializedView<
 	name: Name,
 	options: {
 		readonly to: SchemaTable<TargetName, Cols>
-		readonly as: CHQuery<any, Output, any, any>
+		readonly as: CHQuery<any, Output, any, any> & NeedsSelect<Output>
 	} & ([MisfitColumns<Output, Cols>] extends [never]
 		? unknown
 		: { readonly targetCannotTake: MisfitColumns<Output, Cols> }),

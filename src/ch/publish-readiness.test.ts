@@ -156,7 +156,7 @@ describe("publishing regressions", () => {
 		expect(compiled.sql).toMatch(/'c' AS first,\s*'d' AS last/)
 		expect(() =>
 			CH.compileUnionUnsafe(
-				CH.unionAll(a, CH.from(One).select(() => ({ first: CH.lit("c") })) as never),
+				CH.unionAll(a, CH.from(One).select(() => ({ first: CH.lit("c") })) as unknown as typeof a),
 				{},
 			),
 		).toThrow("same column aliases")

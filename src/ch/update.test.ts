@@ -70,6 +70,7 @@ describe("update", () => {
 				PG.compile(CH.update(Counters).set({ search: "x" } as any).where(($) => [$.key.eq("k")])),
 			)
 			expect(computed.message).toContain('sets "search"')
+			// @ts-expect-error -- an empty SET is a type error too
 			const empty = yield* Effect.flip(PG.compile(CH.update(Counters).set({}).where(($) => [$.key.eq("k")])))
 			expect(empty.message).toContain("sets no columns")
 			const returning = yield* Effect.exit(CH.compile(CH.update(Spans).set({ Ms: 0 }).allRows().returning()))
@@ -142,6 +143,7 @@ describe("deleteFrom", () => {
 
 	it.effect("refuses a delete with no where(), or whose conditions filter nothing", () =>
 		Effect.gen(function* () {
+			// @ts-expect-error -- a delete without where() or allRows() is a type error too
 			expect(failure(yield* Effect.exit(CH.compile(CH.deleteFrom(Spans))))).toBeInstanceOf(QueryBuilderDefect)
 			for (const conditions of [[], [CH.rawCond("")], [undefined, CH.rawCond("  ")]]) {
 				const error = yield* Effect.flip(PG.compile(CH.deleteFrom(Counters).where(() => conditions)))

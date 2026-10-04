@@ -50,8 +50,11 @@ describe("literals encode through the column's type", () => {
 		expect(whereSql(($) => [$.Live.eq(false)])).toBe("events.Live = 0")
 	})
 
-	it("writes null as NULL", () => {
-		expect(whereSql(($) => [$.Note.eq(null)])).toBe("events.Note = NULL")
+	it("refuses a comparison against null, which SQL never matches", () => {
+		// @ts-expect-error -- `null` is not an operand; use isNull()
+		expect(() => whereSql(($) => [$.Note.eq(null)])).toThrow(/isNull\(\)/)
+		expect(() => whereSql(($) => [$.Note.in_(null as unknown as string)])).toThrow(/isNull\(\)/)
+		expect(whereSql(($) => [$.Note.isNull()])).toBe("events.Note IS NULL")
 	})
 
 	it("escapes strings", () => {
@@ -77,7 +80,7 @@ describe("literals encode through the column's type", () => {
 
 	it("refuses a value the column cannot hold", () => {
 		expect(() => compareUnchecked("Count", "lots")).toThrow(/column Count.*Expected number/s)
-		expect(() => compareUnchecked("OrgId", undefined)).toThrow(/column OrgId.*undefined/s)
+		expect(() => compareUnchecked("OrgId", undefined)).toThrow(/compared against undefined/)
 	})
 })
 

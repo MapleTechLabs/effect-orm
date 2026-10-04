@@ -180,5 +180,5 @@ inspected. Whatever you pass is taken at face value — which is why it also req
 `"single-tenant"` proves a structural restriction to one value, not that the requester is allowed
 to access that value. Resolve tenant IDs from trusted context. Treat `"untenanted"` as acceptable
 only for tables your application intentionally models as shared; omitting `tenantColumn` from
-a real tenant table bypasses that evidence. Repeated `.where()` calls replace the earlier
-filter, so assemble tenant and optional predicates in the same callback.
+a real tenant table bypasses that evidence. Repeated `.where()` calls AND with the earlier
+ones, so a tenant filter on a shared base query survives later filters.

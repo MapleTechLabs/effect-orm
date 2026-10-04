@@ -12,6 +12,7 @@ import { raw, str, ident, compile, as_ as sqlAs, lazy } from "../sql/sql-fragmen
 import { activeSqlSyntax } from "../sql/sql-syntax"
 import { chDateTimeLiteral, CHFloatResult, CHNumber, string as chString, type CHType, type InferTS } from "./types"
 import { encodeColumnLiteral } from "./literal"
+import { QueryBuilderError } from "./errors"
 import { markTenantColumn, markTenantPredicate, tenantColumnOf, tenantPredicatesOf } from "./tenant"
 
 // Core interfaces
@@ -59,17 +60,20 @@ export interface Expr<TSType> {
 	// The widened arms sit in contravariant positions, which TypeScript's
 	// `extends Expr<infer T>` inference would prefer — the reason `InferOutput`
 	// reads the `_phantom` property instead of structurally inferring T.
-	eq(other: Comparable<Widen<TSType>> | Expr<TSType> | Expr<Widen<TSType>>): Condition
-	neq(other: Comparable<Widen<TSType>> | Expr<TSType> | Expr<Widen<TSType>>): Condition
-	gt(other: Comparable<Widen<TSType>> | Expr<TSType> | Expr<Widen<TSType>>): Condition
-	gte(other: Comparable<Widen<TSType>> | Expr<TSType> | Expr<Widen<TSType>>): Condition
-	lt(other: Comparable<Widen<TSType>> | Expr<TSType> | Expr<Widen<TSType>>): Condition
-	lte(other: Comparable<Widen<TSType>> | Expr<TSType> | Expr<Widen<TSType>>): Condition
+	//
+	// A plain value is never `null`: `x = NULL` is never true in SQL, so it is
+	// refused here and at compile time. Use `isNull()` / `isNotNull()`.
+	eq(other: Operand<TSType>): Condition
+	neq(other: Operand<TSType>): Condition
+	gt(other: Operand<TSType>): Condition
+	gte(other: Operand<TSType>): Condition
+	lt(other: Operand<TSType>): Condition
+	lte(other: Operand<TSType>): Condition
 
-	// String operations
-	like(this: Expr<string>, pattern: string): Condition
-	notLike(this: Expr<string>, pattern: string): Condition
-	ilike(this: Expr<string>, pattern: string): Condition
+	// String operations. A `Nullable(String)` matches like a `String`.
+	like(this: Expr<string | null>, pattern: string): Condition
+	notLike(this: Expr<string | null>, pattern: string): Condition
+	ilike(this: Expr<string | null>, pattern: string): Condition
 
 	// NULL and ranges
 	/** `expr IS NULL`. */
@@ -77,19 +81,14 @@ export interface Expr<TSType> {
 	/** `expr IS NOT NULL`. */
 	isNotNull(): Condition
 	/** `expr BETWEEN low AND high`, both ends included. */
-	between(
-		low: Comparable<Widen<TSType>> | Expr<TSType> | Expr<Widen<TSType>>,
-		high: Comparable<Widen<TSType>> | Expr<TSType> | Expr<Widen<TSType>>,
-	): Condition
+	between(low: Operand<TSType>, high: Operand<TSType>): Condition
 	/** `expr NOT BETWEEN low AND high`. */
-	notBetween(
-		low: Comparable<Widen<TSType>> | Expr<TSType> | Expr<Widen<TSType>>,
-		high: Comparable<Widen<TSType>> | Expr<TSType> | Expr<Widen<TSType>>,
-	): Condition
+	notBetween(low: Operand<TSType>, high: Operand<TSType>): Condition
 
-	// IN / NOT IN
-	in_(...values: Array<Comparable<Widen<TSType>>>): Condition
-	notIn(...values: Array<Comparable<Widen<TSType>>>): Condition
+	// IN / NOT IN. An empty list is false (`IN`) or true (`NOT IN`), written
+	// `1 = 0` / `1 = 1`, rather than the `IN ()` no database accepts.
+	in_(...values: Array<Comparable<Widen<NonNullable<TSType>>>>): Condition
+	notIn(...values: Array<Comparable<Widen<NonNullable<TSType>>>>): Condition
 
 	// JSON represents non-finite division results as null. Other arithmetic
 	// propagates SQL NULL from either operand.
@@ -108,6 +107,15 @@ export interface Expr<TSType> {
 	): Expr<number | Extract<TSType | R, null>>
 	mod<R extends number | null>(this: Expr<number | null>, n: R | Expr<R>): Expr<Quotient<TSType, R>>
 }
+
+/**
+ * What a comparison takes on its right: a value of the column's type (never
+ * `null`), or an expression of it.
+ */
+export type Operand<TSType> =
+	| Comparable<Widen<NonNullable<TSType>>>
+	| Expr<TSType>
+	| Expr<Widen<TSType>>
 
 /**
  * What `/` and `%` decode to. A numeric literal divisor of magnitude >= 1
@@ -192,6 +200,37 @@ const dateTimeLiteral = (value: DateTime.Utc): string =>
 
 // Expr implementation
 
+/**
+ * A plain `null` (or `undefined`) on the right of a comparison. `x = NULL` is
+ * never true, so this is refused rather than written. A failure, not a defect:
+ * the value usually comes from data the types said could not be null.
+ */
+const refusedNull = (value: null | undefined): never => {
+	throw new QueryBuilderError({
+		code: "InvalidArguments",
+		message: `compared against ${String(value)}, which SQL never matches; use isNull() / isNotNull()`,
+	})
+}
+
+/**
+ * `expr IN (…)` / `expr NOT IN (…)`. An empty list has no SQL spelling, so it
+ * is written as the constant it means: nothing is in it, everything is not.
+ */
+const inCond = (
+	fragment: SqlFragment,
+	op: "IN" | "NOT IN",
+	values: ReadonlyArray<() => SqlFragment>,
+): Condition =>
+	makeCond(
+		lazy(() =>
+			values.length === 0
+				? op === "IN"
+					? "1 = 0"
+					: "1 = 1"
+				: `${compile(fragment)} ${op} (${values.map((v) => compile(v())).join(", ")})`,
+		),
+	)
+
 /** Whether a codec accepts `null` — asked, not inferred from its AST, so it
  *  stays right across Effect versions and across `T.custom` schemas. */
 const acceptsNull = (schema: Schema.Codec<any, any> | undefined): boolean =>
@@ -248,6 +287,7 @@ export function makeExpr<T>(
 ): Expr<T> {
 	/** An operand: another expression as-is, a plain value through the codec. */
 	function operand(value: unknown): SqlFragment {
+		if (value === null || value === undefined) return refusedNull(value)
 		return literal !== undefined && !isExprLike(value) ? literal(value) : toFragment(value)
 	}
 
@@ -275,14 +315,8 @@ export function makeExpr<T>(
 		notLike: (pattern: string) => makeCond(lazy(() => `${compile(fragment)} NOT LIKE ${compile(str(pattern))}`)),
 		ilike: (pattern: string) => makeCond(lazy(() => `${compile(fragment)} ILIKE ${compile(str(pattern))}`)),
 
-		in_: (...values) => {
-			const escaped = () => values.map((v) => compile(operand(v))).join(", ")
-			return makeCond(lazy(() => `${compile(fragment)} IN (${escaped()})`))
-		},
-		notIn: (...values) => {
-			const escaped = () => values.map((v) => compile(operand(v))).join(", ")
-			return makeCond(lazy(() => `${compile(fragment)} NOT IN (${escaped()})`))
-		},
+		in_: (...values) => inCond(fragment, "IN", values.map((v) => () => operand(v))),
+		notIn: (...values) => inCond(fragment, "NOT IN", values.map((v) => () => operand(v))),
 
 		// NOTE: these do NOT parenthesize their result, so chaining follows SQL
 		// operator precedence rather than call order — `a.sub(b).div(c)` compiles
@@ -452,18 +486,15 @@ export function outerRef<T = string>(name: string): Expr<T> {
 }
 
 export function inList<T extends string>(expr: Expr<T>, values: readonly string[]): Condition {
-	const escaped = () => values.map((v) => compile(str(v))).join(", ")
-	return makeCond(lazy(() => `${compile(expr.toFragment())} IN (${escaped()})`))
+	return inCond(expr.toFragment(), "IN", values.map((v) => () => str(v)))
 }
 
 export function inExprList<T>(expr: Expr<T>, values: readonly Expr<T>[]): Condition {
-	const escaped = () => values.map((v) => compile(v.toFragment())).join(", ")
-	return makeCond(lazy(() => `${compile(expr.toFragment())} IN (${escaped()})`))
+	return inCond(expr.toFragment(), "IN", values.map((v) => () => v.toFragment()))
 }
 
 export function notInList(expr: Expr<string>, values: readonly string[]): Condition {
-	const escaped = () => values.map((v) => compile(str(v))).join(", ")
-	return makeCond(lazy(() => `${compile(expr.toFragment())} NOT IN (${escaped()})`))
+	return inCond(expr.toFragment(), "NOT IN", values.map((v) => () => str(v)))
 }
 
 /**

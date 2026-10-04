@@ -8,7 +8,7 @@
 // 4. Assembling into SqlQuery and calling the existing compileQuery()
 
 import { custom, dateTime, dateTime64, type CHType, type ColumnDefs } from "./types"
-import type { CHQuery, CHQueryState } from "./query"
+import type { CHQuery, CHQueryState, NeedsSelect } from "./query"
 import type { CHUnionQuery } from "./union"
 import { isInsert, type CHInsert } from "./insert"
 import { isDelete, isUpdate, type CHDelete, type CHUpdate } from "./update"
@@ -95,6 +95,22 @@ const orderByClause = (specs: ReadonlyArray<[string, "asc" | "desc"]>): Array<st
 		}
 		return `${quoteIdent(column)} ${direction.toUpperCase()}`
 	})
+
+/**
+ * A `limit` / `offset` value. It often comes from a request (a page size), so a
+ * bad one is a failure, not a defect: `LIMIT -1` or `LIMIT NaN` is not SQL, and
+ * rounding `1.5` would quietly change the page.
+ */
+const rowCount = (clause: "limit" | "offset", value: number | undefined) => {
+	if (value == null) return undefined
+	if (!Number.isSafeInteger(value) || value < 0) {
+		throw new QueryBuilderError({
+			code: "InvalidArguments",
+			message: `${clause}(${value}): expected a non-negative integer`,
+		})
+	}
+	return raw(String(value))
+}
 
 /**
  * A `groupBy` key: the select alias where the dialect resolves aliases there,
@@ -559,7 +575,7 @@ export function compileCH<
 	Params extends Record<string, any> = {},
 	Decoded extends Output = Output,
 >(
-	query: CHQuery<Cols, Output, Joins, Route>,
+	query: CHQuery<Cols, Output, Joins, Route> & NeedsSelect<Output>,
 	/** Values for the query's `param.*` markers. Optional when it has none. */
 	params?: Params,
 	options?: {
@@ -607,7 +623,7 @@ export function compileCHUnsafe<
 	Params extends Record<string, any> = {},
 	Decoded extends Output = Output,
 >(
-	query: CHQuery<Cols, Output, Joins, Route>,
+	query: CHQuery<Cols, Output, Joins, Route> & NeedsSelect<Output>,
 	/** Values for the query's `param.*` markers. Optional when it has none. */
 	params?: Params,
 	options?: {
@@ -698,6 +714,7 @@ function compileInner<
 	// passed `state.columns` (empty for a `fromQuery`/`fromUnion`) and no join
 	// columns at all, so `$.p.ServiceName` and `$.bucket` compiled to correct SQL
 	// with no schema, and the query derived nothing.
+	assertDistinctNames(state)
 	const $ = makeAccessor(state)
 
 	// SELECT
@@ -889,8 +906,8 @@ function compileInner<
 				.filter((c): c is NonNullable<typeof c> => c != null)
 				.map((c) => c.toFragment()),
 			orderBy: orderByClause(state.orderBySpecs).map(raw),
-			limit: state.limitValue != null ? raw(String(Math.round(state.limitValue))) : undefined,
-			offset: state.offsetValue != null ? raw(String(Math.round(state.offsetValue))) : undefined,
+			limit: rowCount("limit", state.limitValue),
+			offset: rowCount("offset", state.offsetValue),
 			format: options?.skipFormat ? undefined : formatClause(state.formatValue),
 		}
 
@@ -937,6 +954,39 @@ function compileInner<
 		),
 		tenantScope === "single-tenant" ? scope.bound : undefined,
 	)
+}
+
+/**
+ * Every source in a query needs its own name. Two joins under one alias, or a
+ * join named like the FROM source, make every qualified column ambiguous; a
+ * join named like a FROM column hides that column from `$`; two CTEs under one
+ * name are refused by both databases. The join cases are type errors too
+ * (`FreshAlias`); this catches the ones the type cannot see.
+ */
+function assertDistinctNames(state: CHQueryState): void {
+	const fromAlias = sourceAlias(state)
+	const columns = new Set(Object.keys(columnsOf(state)))
+	const seen = new Set<string>([fromAlias])
+	for (const join of state.typedJoins) {
+		if (seen.has(join.alias)) {
+			throw new QueryBuilderDefect({
+				message: `CHQuery: join alias ${JSON.stringify(join.alias)} is already the name of another source in this query`,
+			})
+		}
+		if (columns.has(join.alias)) {
+			throw new QueryBuilderDefect({
+				message: `CHQuery: join alias ${JSON.stringify(join.alias)} is also a column of the FROM source; pick another alias`,
+			})
+		}
+		seen.add(join.alias)
+	}
+	const ctes = new Set<string>()
+	for (const cte of state.ctes) {
+		if (ctes.has(cte.name)) {
+			throw new QueryBuilderDefect({ message: `CHQuery: withCTE(${JSON.stringify(cte.name)}) is defined twice` })
+		}
+		ctes.add(cte.name)
+	}
 }
 
 interface TenantSource {
@@ -1226,10 +1276,10 @@ function compileUnionInner<Output extends Record<string, any>, Params extends Re
 			sql += `\nORDER BY ${orderByClause(state.outerOrderBySpecs).join(", ")}`
 		}
 		if (state.outerLimitValue != null) {
-			sql += `\nLIMIT ${Math.round(state.outerLimitValue)}`
+			sql += `\nLIMIT ${compileSqlFragment(rowCount("limit", state.outerLimitValue)!)}`
 		}
 		if (state.outerOffsetValue != null) {
-			sql += `\nOFFSET ${Math.round(state.outerOffsetValue)}`
+			sql += `\nOFFSET ${compileSqlFragment(rowCount("offset", state.outerOffsetValue)!)}`
 		}
 	}
 
