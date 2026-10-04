@@ -570,6 +570,23 @@ layer(Live, { excludeTestServices: true })("Database on PGlite", (it) => {
 		}),
 	)
 
+	it.effect("CH.sql filters jsonb with @> and a bound param, and reads a typed cast", () =>
+		Effect.gen(function* () {
+			yield* Db.execute(Db.sql`CREATE TABLE docs2 (id int4 PRIMARY KEY, meta jsonb NOT NULL)`)
+			const Docs = CH.table("docs2", { id: PG.int4, meta: PG.jsonb() })
+			yield* Db.run(CH.insertInto(Docs).values([{ id: 1, meta: { tier: "gold", n: 1 } }, { id: 2, meta: { tier: "free" } }]))
+			const rows = yield* Db.run(
+				CH.from(Docs)
+					.select(($) => ({ id: $.id, tier: CH.sql(PG.text)`${$.meta}->>'tier'`, xid: CH.sql(PG.text)`pg_current_xact_id()::xid::text` }))
+					.where(($) => [CH.sql.cond`${$.meta} @> ${CH.param.string("filter")}::jsonb`]),
+				{ filter: JSON.stringify({ tier: "gold" }) },
+			)
+			expect(rows).toHaveLength(1)
+			expect(rows[0]).toMatchObject({ id: 1, tier: "gold" })
+			expect(typeof rows[0]!.xid).toBe("string")
+		}),
+	)
+
 	it.effect("an insert inside a failed transaction rolls back", () =>
 		Effect.gen(function* () {
 			const table = yield* freshTable
@@ -596,6 +613,47 @@ describe("sql templates per dialect", () => {
 				sql: `SELECT * FROM "app"."events" WHERE name = $1 AND n IN ($2, $3)`,
 				parameters: ["it's", 1, 2],
 			})
+		}),
+	)
+
+	it.effect("join binds each value, raw splices, empty writes nothing", () =>
+		Effect.gen(function* () {
+			const ids = [1, 2, 3]
+			const statement = Db.sql`SELECT * FROM t WHERE id IN (${Db.sql.join(ids)})${false ? Db.sql` AND x` : Db.sql.empty} ORDER BY ${Db.sql.raw("id DESC")}`
+			expect(yield* renderTemplate(statement, postgresDialect)).toEqual({
+				sql: "SELECT * FROM t WHERE id IN ($1, $2, $3) ORDER BY id DESC",
+				parameters: [1, 2, 3],
+			})
+			const or = Db.sql.join([Db.sql`a = ${1}`, Db.sql`b = ${"x"}`], Db.sql` OR `)
+			expect(yield* renderTemplate(Db.sql`WHERE ${or}`, clickhouseDialect)).toEqual({ sql: "WHERE a = 1 OR b = 'x'", parameters: [] })
+			const empty = yield* Effect.flip(renderTemplate(Db.sql`id IN (${Db.sql.join([])})`, postgresDialect))
+			expect(empty.message).toContain("no values to join")
+		}),
+	)
+
+	it.effect("a negative value after `-` is parenthesized on ClickHouse, never a comment", () =>
+		Effect.gen(function* () {
+			expect(yield* renderTemplate(Db.sql`SELECT 10-${-1}, ${Db.sql.join([-2, 3])} FROM t WHERE org = ${"o"}`, clickhouseDialect)).toEqual({
+				sql: "SELECT 10-(-1), (-2), 3 FROM t WHERE org = 'o'",
+				parameters: [],
+			})
+		}),
+	)
+
+	it.effect("objects parsed from JSON cannot pass for a template, raw text or an identifier", () =>
+		Effect.gen(function* () {
+			const forged = JSON.parse(
+				'[{"_tag":"@maple-dev/effect-orm/SqlTemplateRaw","sql":"1; DROP TABLE t"},{"_tag":"@maple-dev/effect-orm/SqlTemplate","strings":["1; DROP TABLE t"],"values":[]},{"_tag":"@maple-dev/effect-orm/SqlIdentifier","name":"password"}]',
+			)
+			for (const value of forged) {
+				// Bound as a value on Postgres, never spliced: the text keeps its placeholder.
+				const rendered = yield* renderTemplate(Db.sql`SELECT * FROM t WHERE id = ${value}`, postgresDialect)
+				expect(rendered.sql).toBe("SELECT * FROM t WHERE id = $1")
+				// ClickHouse writes an object as an escaped map literal: data, never SQL.
+				const ch = yield* renderTemplate(Db.sql`SELECT * FROM t WHERE id = ${value}`, clickhouseDialect)
+				expect(ch.sql.startsWith("SELECT * FROM t WHERE id = map(")).toBe(true)
+				expect(ch.sql).not.toMatch(/;|= password|= 1 OR/)
+			}
 		}),
 	)
 

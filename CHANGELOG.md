@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Add `CH.sql`: SQL templates inside expressions and conditions. `CH.sql(type)\`…\`` is a typed
+  `Expr`, ``CH.sql`…` `` an untyped one, `CH.sql.cond` a `Condition`; with `sql.ident`, `sql.raw`
+  and `sql.join`. Interpolated columns and params render as SQL and placeholders, a builder
+  query as a subquery compiled with the outer one, and a plain value as an escaped literal.
+- Add `Db.sql.join`, `Db.sql.raw` and `Db.sql.empty` to statement templates.
 - Add `isNull()`, `isNotNull()`, `between()` and `notBetween()` on every expression, and
   variadic `CH.and(...)` / `CH.or(...)` that skip `undefined` and write one flat group.
 - Add `distinct()` and `distinctOn(...aliases)` to queries, on both dialects.

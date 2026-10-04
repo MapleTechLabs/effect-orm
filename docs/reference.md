@@ -118,6 +118,7 @@ time; see [Params and compilation](./params-and-compilation.md#what-each-kind-ac
 | Export                    | Purpose                                                    |
 | ------------------------- | ---------------------------------------------------------- |
 | `lit(value)`              | Literal `Expr` from a `string` or `number`                 |
+| `sql(type)\`…\`` / `sql\`…\`` / `sql.cond\`…\`` | A template `Expr` (typed or untyped) or `Condition`; `sql.ident`, `sql.raw`, `sql.join`. See [Extending](./extending.md#chsql--sql-templates-inside-a-query). Types `SqlTag`, `SqlTemplateValue`, `SqlRaw`, `SqlIdent` |
 | `rawExpr(sql, type)`      | Unescaped `Expr` from SQL text, with a declared type       |
 | `untypedExpr<T>(sql)`     | Unescaped `Expr` with no type — costs the row schema       |
 | `rawCond(sql)`            | Unescaped `Condition` from SQL text                        |
