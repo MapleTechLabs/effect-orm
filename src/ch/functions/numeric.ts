@@ -1,6 +1,9 @@
-import { compileTypedFnCall, defineFn, numericResultSchema, firstTypedNonNull } from "../define-fn"
+import { numericResultSchema, firstTypedNonNull } from "../define-fn"
 import type { Expr } from "../expr"
 import * as T from "../types"
+import { builtins } from "./builtin"
+
+const { compileTypedFnCall, defineFn } = builtins("clickhouse", "scalar")
 
 // Type conversion (defineFn one-liners)
 

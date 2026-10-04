@@ -75,6 +75,19 @@ Takes **output keys** (the aliases from `select`), not raw column names:
 .groupBy("name")
 ```
 
+Once a query groups or aggregates, every column it reads outside an aggregate must be a
+`groupBy` key, as both databases require. Compiling one that breaks the rule is a
+`QueryBuilderDefect` naming the alias and column, instead of a server error:
+
+- `select(($) => ({ name: $.Name, n: CH.count() }))` with no `groupBy("name")`;
+- an aggregate in `where` or a join's `on` (filter on it in `having`);
+- `groupBy` naming an aggregate alias.
+
+An expression over a grouped column (`CH.lower($.Name)` with `Name` grouped) and a repeat of a
+grouped expression are fine. Only SQL the builder writes is checked: a window (`CH.over`), a
+`CH.sql` template, `rawExpr` and functions declared with `defineFn` / `makeExpr` are not looked
+inside, so they can hide a mistake from this check but never trigger a false one.
+
 ## `having`
 
 Filter groups after aggregation. The callback has the input-column accessor, so either repeat

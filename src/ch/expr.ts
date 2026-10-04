@@ -8,7 +8,7 @@
 
 import { DateTime, Result, Schema } from "effect"
 import type { SqlFragment } from "../sql/sql-fragment"
-import { raw, str, ident, compile, as_ as sqlAs, lazy } from "../sql/sql-fragment"
+import { raw, str, ident, compile, as_ as sqlAs, known } from "../sql/sql-fragment"
 import { activeSqlSyntax } from "../sql/sql-syntax"
 import { chDateTimeLiteral, CHFloatResult, CHNumber, string as chString, type CHType, type InferTS } from "./types"
 import { encodeColumnLiteral } from "./literal"
@@ -180,12 +180,12 @@ export function toFragment(value: unknown): SqlFragment {
 	if (isExprLike(value)) return value.toFragment()
 	if (typeof value === "string") return str(value)
 	if (typeof value === "number") return raw(String(value))
-	if (typeof value === "boolean") return lazy(() => untypedLiteral(value))
+	if (typeof value === "boolean") return known(() => untypedLiteral(value))
 	// A DateTime column compares against a DateTime value, so the literal has to
 	// be the dialect's own form (ClickHouse's is tz-less) rather than whatever
 	// `String(value)` produces.
-	if (DateTime.isDateTime(value)) return lazy(() => dateTimeLiteral(DateTime.toUtc(value)))
-	if (value instanceof Date) return lazy(() => dateTimeLiteral(DateTime.makeUnsafe(value)))
+	if (DateTime.isDateTime(value)) return known(() => dateTimeLiteral(DateTime.toUtc(value)))
+	if (value instanceof Date) return known(() => dateTimeLiteral(DateTime.makeUnsafe(value)))
 	return raw(String(value))
 }
 
@@ -222,7 +222,7 @@ const inCond = (
 	values: ReadonlyArray<() => SqlFragment>,
 ): Condition =>
 	makeCond(
-		lazy(() =>
+		known(() =>
 			values.length === 0
 				? op === "IN"
 					? "1 = 0"
@@ -257,7 +257,7 @@ const arith = <Result>(
 	// `+`, `-`, `*` can overflow a Float64 to `inf`, sent as JSON null: NaN.
 	const overflows = op === "+" || op === "-" || op === "*"
 	return makeExpr(
-		lazy(() => `${compile(lhs)} ${op} ${compile(toFragment(rhs))}`),
+		known(() => `${compile(lhs)} ${op} ${compile(toFragment(rhs))}`),
 		(nullable ? Schema.NullOr(CHNumber) : overflows ? CHFloatResult : CHNumber) as Schema.Codec<Result, any>,
 	)
 }
@@ -297,23 +297,23 @@ export function makeExpr<T>(
 		...(schema !== undefined ? { schema } : undefined),
 		toFragment: () => fragment,
 
-		eq: (other) => makeCond(lazy(() => `${compile(fragment)} = ${compile(operand(other))}`)),
-		neq: (other) => makeCond(lazy(() => `${compile(fragment)} != ${compile(operand(other))}`)),
-		gt: (other) => makeCond(lazy(() => `${compile(fragment)} > ${compile(operand(other))}`)),
-		gte: (other) => makeCond(lazy(() => `${compile(fragment)} >= ${compile(operand(other))}`)),
-		lt: (other) => makeCond(lazy(() => `${compile(fragment)} < ${compile(operand(other))}`)),
-		lte: (other) => makeCond(lazy(() => `${compile(fragment)} <= ${compile(operand(other))}`)),
+		eq: (other) => makeCond(known(() => `${compile(fragment)} = ${compile(operand(other))}`)),
+		neq: (other) => makeCond(known(() => `${compile(fragment)} != ${compile(operand(other))}`)),
+		gt: (other) => makeCond(known(() => `${compile(fragment)} > ${compile(operand(other))}`)),
+		gte: (other) => makeCond(known(() => `${compile(fragment)} >= ${compile(operand(other))}`)),
+		lt: (other) => makeCond(known(() => `${compile(fragment)} < ${compile(operand(other))}`)),
+		lte: (other) => makeCond(known(() => `${compile(fragment)} <= ${compile(operand(other))}`)),
 
-		isNull: () => makeCond(lazy(() => `${compile(fragment)} IS NULL`)),
-		isNotNull: () => makeCond(lazy(() => `${compile(fragment)} IS NOT NULL`)),
+		isNull: () => makeCond(known(() => `${compile(fragment)} IS NULL`)),
+		isNotNull: () => makeCond(known(() => `${compile(fragment)} IS NOT NULL`)),
 		between: (low, high) =>
-			makeCond(lazy(() => `${compile(fragment)} BETWEEN ${compile(operand(low))} AND ${compile(operand(high))}`)),
+			makeCond(known(() => `${compile(fragment)} BETWEEN ${compile(operand(low))} AND ${compile(operand(high))}`)),
 		notBetween: (low, high) =>
-			makeCond(lazy(() => `${compile(fragment)} NOT BETWEEN ${compile(operand(low))} AND ${compile(operand(high))}`)),
+			makeCond(known(() => `${compile(fragment)} NOT BETWEEN ${compile(operand(low))} AND ${compile(operand(high))}`)),
 
-		like: (pattern: string) => makeCond(lazy(() => `${compile(fragment)} LIKE ${compile(str(pattern))}`)),
-		notLike: (pattern: string) => makeCond(lazy(() => `${compile(fragment)} NOT LIKE ${compile(str(pattern))}`)),
-		ilike: (pattern: string) => makeCond(lazy(() => `${compile(fragment)} ILIKE ${compile(str(pattern))}`)),
+		like: (pattern: string) => makeCond(known(() => `${compile(fragment)} LIKE ${compile(str(pattern))}`)),
+		notLike: (pattern: string) => makeCond(known(() => `${compile(fragment)} NOT LIKE ${compile(str(pattern))}`)),
+		ilike: (pattern: string) => makeCond(known(() => `${compile(fragment)} ILIKE ${compile(str(pattern))}`)),
 
 		in_: (...values) => inCond(fragment, "IN", values.map((v) => () => operand(v))),
 		notIn: (...values) => inCond(fragment, "NOT IN", values.map((v) => () => operand(v))),
@@ -437,7 +437,7 @@ export function makeColumnRef<Name extends string, ColType extends CHType<string
 		{
 			columnName: name as Name,
 			get(key: string): Expr<any> {
-				return makeExpr<any>(lazy(() => `${compile(fragment)}[${compile(str(key))}]`), columnType?.element?.schema)
+				return makeExpr<any>(known(() => `${compile(fragment)}[${compile(str(key))}]`), columnType?.element?.schema)
 			},
 		},
 	) as ColumnRef<Name, ColType>
@@ -451,11 +451,11 @@ export function makeCond(fragment: SqlFragment): Condition {
 		toFragment: () => fragment,
 		and(other) {
 			return markTenantPredicate(
-				makeCond(lazy(() => `(${compile(fragment)} AND ${compile(other.toFragment())})`)),
+				makeCond(known(() => `(${compile(fragment)} AND ${compile(other.toFragment())})`)),
 				[...tenantPredicatesOf(this), ...tenantPredicatesOf(other)],
 			)
 		},
-		or: (other) => makeCond(lazy(() => `(${compile(fragment)} OR ${compile(other.toFragment())})`)),
+		or: (other) => makeCond(known(() => `(${compile(fragment)} OR ${compile(other.toFragment())})`)),
 	}
 }
 
@@ -508,7 +508,7 @@ export function and(...conditions: ReadonlyArray<Condition | undefined>): Condit
 	const present = conditions.filter((c): c is Condition => c !== undefined)
 	if (present.length <= 1) return present[0]
 	return markTenantPredicate(
-		makeCond(lazy(() => `(${present.map((c) => compile(c.toFragment())).join(" AND ")})`)),
+		makeCond(known(() => `(${present.map((c) => compile(c.toFragment())).join(" AND ")})`)),
 		present.flatMap((c) => tenantPredicatesOf(c)),
 	)
 }
@@ -522,12 +522,12 @@ export function or(...conditions: ReadonlyArray<Condition | undefined>): Conditi
 export function or(...conditions: ReadonlyArray<Condition | undefined>): Condition | undefined {
 	const present = conditions.filter((c): c is Condition => c !== undefined)
 	if (present.length <= 1) return present[0]
-	return makeCond(lazy(() => `(${present.map((c) => compile(c.toFragment())).join(" OR ")})`))
+	return makeCond(known(() => `(${present.map((c) => compile(c.toFragment())).join(" OR ")})`))
 }
 
 /** Wrap a condition in NOT (...). */
 export function not(condition: Condition): Condition {
-	return makeCond(lazy(() => `NOT (${compile(condition.toFragment())})`))
+	return makeCond(known(() => `NOT (${compile(condition.toFragment())})`))
 }
 
 // Raw expression (escape hatch)

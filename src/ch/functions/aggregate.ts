@@ -1,12 +1,15 @@
-import { defineFn, compileTypedFnCall, numericResultSchema, overflowResultSchema } from "../define-fn"
+import { numericResultSchema, overflowResultSchema } from "../define-fn"
 import { QueryBuilderError } from "../errors"
 import { makeExpr } from "../expr"
-import { compile, lazy } from "../../sql/sql-fragment"
+import { compile } from "../../sql/sql-fragment"
 import type { Expr, Condition } from "../expr"
 import { type DateTime, Schema } from "effect"
 import * as T from "../types"
 
 import { arrayOfArg, sameAs, schemaOf } from "../define-fn"
+import { builtins } from "./builtin"
+
+const { compileTypedFnCall, defineFn, lazy } = builtins("clickhouse", "aggregate")
 
 /** `groupUniqArrayIf(x, cond)` collects `x`s, so it decodes as an array of `x`. */
 const arraySchemaOf = <T>(expr: unknown) => {

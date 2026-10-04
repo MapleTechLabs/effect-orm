@@ -1,8 +1,12 @@
 import { makeExpr, toFragment } from "../expr"
-import { compile, lazy } from "../../sql/sql-fragment"
+import { compile } from "../../sql/sql-fragment"
 import type { Expr, Condition } from "../expr"
 import { Schema } from "effect"
-import { compileTypedFnCall, defineFn, firstTypedNonNull, mergeResultSchemas, numericResultSchema, schemaOf } from "../define-fn"
+import { firstTypedNonNull, mergeResultSchemas, numericResultSchema, schemaOf } from "../define-fn"
+import { builtins } from "./builtin"
+
+const { compileTypedFnCall, defineFn, lazy } = builtins("clickhouse", "scalar")
+const portable = builtins("portable", "scalar")
 
 // if / multiIf (handwritten — standard fn shape but special arg types)
 
@@ -45,7 +49,7 @@ type Coalesced<Args extends readonly Expr<any>[]> = Args extends readonly [
 			: null
 
 export const coalesce = <const Args extends Expr<any>[]>(...exprs: Args): Expr<Coalesced<Args>> =>
-	defineFn<Args, Coalesced<Args>>("coalesce", firstTypedNonNull())(...exprs)
+	portable.defineFn<Args, Coalesced<Args>>("coalesce", firstTypedNonNull())(...exprs)
 
 /**
  * `ifNull(expr, fallback)` — `expr` unless it is NULL, else `fallback`. The
@@ -57,7 +61,7 @@ export const ifNull = <T>(expr: Expr<T | null>, fallback: Expr<T>): Expr<T> =>
 export function nullIf<T>(expr: Expr<T>, value: Expr<T> | T): Expr<T | null> {
 	// The result is `expr` or NULL, so it decodes as `expr` does — nullably.
 	const schema = schemaOf<T>(expr)
-	return compileTypedFnCall<T | null>("nullIf", schema && Schema.NullOr(schema), expr, value)
+	return portable.compileTypedFnCall<T | null>("nullIf", schema && Schema.NullOr(schema), expr, value)
 }
 
 /**

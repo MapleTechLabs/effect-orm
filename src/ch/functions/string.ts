@@ -1,9 +1,13 @@
-import { acceptsSqlNull, compileFnCall, compileTypedFnCall, defineFn } from "../define-fn"
+import { acceptsSqlNull } from "../define-fn"
 import { Schema } from "effect"
 import { makeCond } from "../expr"
-import { compile, str, lazy } from "../../sql/sql-fragment"
+import { compile, str } from "../../sql/sql-fragment"
 import type { Condition, Expr } from "../expr"
 import * as T from "../types"
+import { builtins } from "./builtin"
+
+const { compileFnCall, compileTypedFnCall, defineFn, lazy } = builtins("clickhouse", "scalar")
+const portable = builtins("portable", "scalar")
 
 // Standard string functions (defineFn one-liners)
 
@@ -14,7 +18,7 @@ const stringResult = <A>(name: string, expr: Expr<A>): Expr<string | Extract<A, 
 
 export const toString_ = <A>(expr: Expr<A>): Expr<string | Extract<A, null>> => stringResult("toString", expr)
 export const length_ = defineFn<[Expr<string>], number>("length", T.uint64)
-export const lower_ = defineFn<[Expr<string>], string>("lower", T.string)
+export const lower_ = portable.defineFn<[Expr<string>], string>("lower", T.string)
 export const positionCaseInsensitive = defineFn<[Expr<string>, Expr<string>], number>(
 	"positionCaseInsensitive",
 	T.uint64,

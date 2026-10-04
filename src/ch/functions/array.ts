@@ -1,9 +1,12 @@
 import { makeCond, makeExpr, toFragment } from "../expr"
-import { str, compile, lazy } from "../../sql/sql-fragment"
+import { str, compile } from "../../sql/sql-fragment"
 import type { Condition, Expr } from "../expr"
 import { Schema } from "effect"
 import * as T from "../types"
-import { defineFn, elementOf, elementSchema, mergeResultSchemas, sameAs, schemaOf } from "../define-fn"
+import { elementOf, elementSchema, mergeResultSchemas, sameAs, schemaOf } from "../define-fn"
+import { builtins } from "./builtin"
+
+const { defineFn, lazy } = builtins("clickhouse", "scalar")
 
 // Array constructors (handwritten — bracket syntax, not fn() call)
 

@@ -1,8 +1,12 @@
 import { makeExpr, toFragment } from "../expr"
-import { compile, lazy } from "../../sql/sql-fragment"
+import { compile } from "../../sql/sql-fragment"
 import type { Expr } from "../expr"
 import { schemaOf } from "../define-fn"
 import { QueryBuilderError } from "../errors"
+import { builtins } from "./builtin"
+
+const { lazy } = builtins("clickhouse", "scalar")
+const window = builtins("clickhouse", "window")
 
 export type WindowOrderDirection = "asc" | "desc"
 
@@ -82,7 +86,7 @@ function renderWindowSpec(spec: WindowSpec): string {
 
 export function over<T>(expr: Expr<T>, spec: CompiledWindowSpec): Expr<T> {
 	// A window changes which rows feed the value, never how the value decodes.
-	return makeExpr(lazy(() => `${compile(expr.toFragment())} OVER (${spec.sql})`), schemaOf<T>(expr))
+	return makeExpr(window.lazy(() => `${compile(expr.toFragment())} OVER (${spec.sql})`), schemaOf<T>(expr))
 }
 
 export function lagInFrame<T>(

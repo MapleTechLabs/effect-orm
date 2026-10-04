@@ -7,6 +7,7 @@
 import { describe, expect, it } from "@effect/vitest"
 import * as CH from "./index"
 import { compileCHUnsafe, compileUnionUnsafe } from "./compile"
+import * as PG from "../postgres"
 
 const Users = CH.table("users", { Id: CH.string, Name: CH.string, Nick: CH.nullable(CH.string), Age: CH.uint64 })
 const Orders = CH.table("orders", { Id: CH.string, UserId: CH.string, Amount: CH.uint64 })
@@ -103,5 +104,93 @@ describe("source names", () => {
 					.select("Id"),
 			),
 		).toThrow(/defined twice/)
+	})
+})
+
+describe("aggregates and GROUP BY", () => {
+	const q = () => CH.from(Users)
+
+	it("refuses an aggregate in WHERE or a join's ON", () => {
+		expect(() => compileCHUnsafe(q().select("Id").where(() => [CH.count().gt(1)]))).toThrow(/WHERE has an aggregate/)
+		expect(() =>
+			compileCHUnsafe(
+				q()
+					.innerJoin(Orders, "o", (u, o) => u.Id.eq(o.UserId).and(CH.sum(o.Amount).gt(1)))
+					.select("Id"),
+			),
+		).toThrow(/ON clause of join "o" has an aggregate/)
+	})
+
+	it("refuses a column that is neither grouped nor aggregated", () => {
+		expect(() => compileCHUnsafe(q().select(($) => ({ Name: $.Name, n: CH.count() })))).toThrow(
+			/"Name" reads users.Name/,
+		)
+		expect(() =>
+			compileCHUnsafe(q().select(($) => ({ Name: $.Name, Age: $.Age, n: CH.count() })).groupBy("Name")),
+		).toThrow(/"Age" reads users.Age/)
+		expect(() => compileCHUnsafe(q().select(($) => ({ x: $.Age.add(CH.count()) })))).toThrow(/"x" reads users.Age/)
+		expect(() =>
+			compileCHUnsafe(
+				q()
+					.select(($) => ({ Name: $.Name, n: CH.count() }))
+					.groupBy("Name")
+					.having(($) => [$.Age.gt(1)]),
+			),
+		).toThrow(/having\(\) reads users.Age/)
+	})
+
+	it("refuses grouping by an aggregate", () => {
+		expect(() => compileCHUnsafe(q().select(() => ({ n: CH.count() })).groupBy("n"))).toThrow(/names an aggregate/)
+	})
+
+	it("accepts grouped columns, expressions over them, and repeats of a grouped expression", () => {
+		const grouped = q()
+			.select(($) => ({ Name: $.Name, upper: CH.lower($.Name), n: CH.count(), total: CH.sum($.Age) }))
+			.groupBy("Name")
+			.having(($) => [$.Name.neq(""), CH.count().gt(1)])
+		expect(compileCHUnsafe(grouped).sql).toContain("GROUP BY Name")
+		const byExpr = q()
+			.select(($) => ({ k: CH.lower($.Name), again: CH.lower($.Name), n: CH.count() }))
+			.groupBy("k")
+		expect(compileCHUnsafe(byExpr).sql).toContain("GROUP BY k")
+		expect(compileCHUnsafe(q().select(() => ({ n: CH.count(), one: CH.lit(1) }))).sql).toContain("count()")
+	})
+
+	it("does not count what is inside a window or SQL the builder did not write", () => {
+		const windowed = q().select(($) => ({
+			Name: $.Name,
+			running: CH.over(CH.sum($.Age), CH.windowSpec({ orderBy: [[$.Name, "asc"]] })),
+		}))
+		expect(compileCHUnsafe(windowed).sql).toContain("OVER")
+		const opaque = q()
+			.select(($) => ({ Name: $.Name, t: CH.sql(CH.float64)`quantileTDigest(0.9)(${$.Age})` }))
+			.groupBy("Name")
+		expect(compileCHUnsafe(opaque).sql).toContain("quantileTDigest")
+	})
+
+	it("keeps a subquery's columns out of the outer check", () => {
+		const inner = CH.from(Orders).select("UserId").where(($) => [$.Amount.gt(1)])
+		const outer = q()
+			.select(($) => ({ Name: $.Name, n: CH.count() }))
+			.where(($) => [CH.inSubquery($.Id, inner)])
+			.groupBy("Name")
+		expect(compileCHUnsafe(outer).sql).toContain("IN (")
+	})
+})
+
+describe("function sets", () => {
+	it("refuses a ClickHouse function on Postgres, and a Postgres one on ClickHouse", () => {
+		expect(() => PG.compileUnsafe(CH.from(Users).select(() => ({ n: CH.count() })))).toThrow(
+			/count\(\) is a ClickHouse function/,
+		)
+		expect(() => compileCHUnsafe(CH.from(Users).select(() => ({ n: PG.count() })))).toThrow(/count\(\) is a Postgres function/)
+		expect(PG.compileUnsafe(CH.from(Users).select(() => ({ n: PG.count() }))).sql).toContain("count(*)")
+	})
+
+	it("renders the portable ones anywhere", () => {
+		const sql = PG.compileUnsafe(
+			CH.from(Users).select(($) => ({ n: CH.coalesce($.Nick, $.Name), l: CH.lower($.Name), z: CH.nullIf($.Name, "") })),
+		).sql
+		expect(sql).toContain("coalesce(")
 	})
 })

@@ -1,9 +1,12 @@
 import { type DateTime, SchemaAST } from "effect"
 import { makeExpr } from "../expr"
 import { schemaOf } from "../define-fn"
-import { str, compile, lazy } from "../../sql/sql-fragment"
+import { str, compile } from "../../sql/sql-fragment"
 import type { Expr } from "../expr"
 import * as T from "../types"
+import { builtins } from "./builtin"
+
+const { lazy } = builtins("clickhouse", "scalar")
 
 /**
  * A DateTime-valued expression: a column, a param, or `now()`.

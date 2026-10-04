@@ -337,7 +337,7 @@ describe("CompiledQuery.tenantScope", () => {
 		// The shape that satisfied the old `sql.includes("OrgId")` guard.
 		const compiled = compileCHUnsafe(
 			CH.from(events)
-				.select(($) => ({ OrgId: $.OrgId, count: $.Count }))
+				.select(($) => ({ OrgId: $.OrgId, count: CH.sum($.Count) }))
 				.groupBy("OrgId"),
 			{},
 		)
