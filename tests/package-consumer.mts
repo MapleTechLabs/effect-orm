@@ -30,6 +30,7 @@ assert.equal(T.custom("String", Schema.String).sql, "String")
 assert.equal(T.untyped("Tuple(String)").sql, "Tuple(String)")
 const length = CH.defineFn<[CH.Expr<string>], number>("length", T.uint64)
 assert.equal(SQL.compile(length(CH.lit("abc")).toFragment()), "length('abc')")
+// @ts-expect-error -- a missing param is a type error too; this checks the runtime failure
 const invalid = Effect.runSync(Effect.exit(CH.compile(query, {})))
 assert.equal(invalid._tag, "Failure")
 
