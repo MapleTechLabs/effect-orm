@@ -68,6 +68,8 @@ export {
 	notInList,
 	// Negating a condition is table stakes; it was `/expr`-only.
 	not,
+	and,
+	or,
 	outerRef,
 	// Reference an output alias (a GROUP BY key or aggregate) that isn't on the
 	// column accessor — the usual way to write a `having()` body.
@@ -234,6 +236,7 @@ export {
 	type JoinOnCallback,
 	type InferOutput,
 	type InferQueryOutput,
+	type LockOptions,
 	from,
 	fromQuery,
 	fromUnion,

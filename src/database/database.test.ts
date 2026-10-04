@@ -520,6 +520,56 @@ layer(Live, { excludeTestServices: true })("Database on PGlite", (it) => {
 		}),
 	)
 
+	it.effect("claims a job with FOR UPDATE SKIP LOCKED, and reads with DISTINCT ON, IS NULL and BETWEEN", () =>
+		Effect.gen(function* () {
+			yield* Db.execute(Db.sql`CREATE TABLE jobs (id int4 PRIMARY KEY, org text NOT NULL, state text NOT NULL, done_at timestamptz)`)
+			const Jobs = CH.table("jobs", { id: PG.int4, org: PG.text, state: PG.text, done_at: PG.nullable(PG.timestamptz) })
+			yield* Db.run(
+				CH.insertInto(Jobs).values([
+					{ id: 1, org: "a", state: "queued" },
+					{ id: 2, org: "a", state: "queued" },
+					{ id: 3, org: "b", state: "queued" },
+				]),
+			)
+			const claim = Db.transaction(
+				Effect.gen(function* () {
+					const [job] = yield* Db.run(
+						CH.from(Jobs)
+							.select("id")
+							.where(($) => [$.state.eq("queued"), $.done_at.isNull()])
+							.orderBy(["id", "asc"])
+							.limit(1)
+							.forUpdate({ skipLocked: true }),
+					)
+					if (job === undefined) return undefined
+					yield* Db.run(CH.update(Jobs).set({ state: "running" }).where(($) => [$.id.eq(job.id)]))
+					return job.id
+				}),
+			)
+			expect(yield* claim).toBe(1)
+			expect(yield* claim).toBe(2)
+			const firstPerOrg = yield* Db.run(
+				CH.from(Jobs)
+					.select(($) => ({ org: $.org, id: $.id }))
+					.distinctOn("org")
+					.orderBy(["org", "asc"], ["id", "desc"]),
+			)
+			expect(firstPerOrg).toEqual([
+				{ org: "a", id: 2 },
+				{ org: "b", id: 3 },
+			])
+			const inRange = yield* Db.run(
+				CH.from(Jobs).select("id").where(($) => [$.id.between(2, CH.param.int("hi")), CH.or($.org.eq("b"), $.state.eq("running"))]).orderBy(["id", "asc"]),
+				{ hi: 3 },
+			)
+			expect(inRange).toEqual([{ id: 2 }, { id: 3 }])
+			expect(yield* Db.run(CH.from(Jobs).select("state").distinct().orderBy(["state", "asc"]))).toEqual([
+				{ state: "queued" },
+				{ state: "running" },
+			])
+		}),
+	)
+
 	it.effect("an insert inside a failed transaction rolls back", () =>
 		Effect.gen(function* () {
 			const table = yield* freshTable

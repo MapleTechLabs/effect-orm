@@ -71,6 +71,22 @@ export interface Expr<TSType> {
 	notLike(this: Expr<string>, pattern: string): Condition
 	ilike(this: Expr<string>, pattern: string): Condition
 
+	// NULL and ranges
+	/** `expr IS NULL`. */
+	isNull(): Condition
+	/** `expr IS NOT NULL`. */
+	isNotNull(): Condition
+	/** `expr BETWEEN low AND high`, both ends included. */
+	between(
+		low: Comparable<Widen<TSType>> | Expr<TSType> | Expr<Widen<TSType>>,
+		high: Comparable<Widen<TSType>> | Expr<TSType> | Expr<Widen<TSType>>,
+	): Condition
+	/** `expr NOT BETWEEN low AND high`. */
+	notBetween(
+		low: Comparable<Widen<TSType>> | Expr<TSType> | Expr<Widen<TSType>>,
+		high: Comparable<Widen<TSType>> | Expr<TSType> | Expr<Widen<TSType>>,
+	): Condition
+
 	// IN / NOT IN
 	in_(...values: Array<Comparable<Widen<TSType>>>): Condition
 	notIn(...values: Array<Comparable<Widen<TSType>>>): Condition
@@ -247,6 +263,13 @@ export function makeExpr<T>(
 		gte: (other) => makeCond(lazy(() => `${compile(fragment)} >= ${compile(operand(other))}`)),
 		lt: (other) => makeCond(lazy(() => `${compile(fragment)} < ${compile(operand(other))}`)),
 		lte: (other) => makeCond(lazy(() => `${compile(fragment)} <= ${compile(operand(other))}`)),
+
+		isNull: () => makeCond(lazy(() => `${compile(fragment)} IS NULL`)),
+		isNotNull: () => makeCond(lazy(() => `${compile(fragment)} IS NOT NULL`)),
+		between: (low, high) =>
+			makeCond(lazy(() => `${compile(fragment)} BETWEEN ${compile(operand(low))} AND ${compile(operand(high))}`)),
+		notBetween: (low, high) =>
+			makeCond(lazy(() => `${compile(fragment)} NOT BETWEEN ${compile(operand(low))} AND ${compile(operand(high))}`)),
 
 		like: (pattern: string) => makeCond(lazy(() => `${compile(fragment)} LIKE ${compile(str(pattern))}`)),
 		notLike: (pattern: string) => makeCond(lazy(() => `${compile(fragment)} NOT LIKE ${compile(str(pattern))}`)),
@@ -441,6 +464,34 @@ export function inExprList<T>(expr: Expr<T>, values: readonly Expr<T>[]): Condit
 export function notInList(expr: Expr<string>, values: readonly string[]): Condition {
 	const escaped = () => values.map((v) => compile(str(v))).join(", ")
 	return makeCond(lazy(() => `${compile(expr.toFragment())} NOT IN (${escaped()})`))
+}
+
+/**
+ * Conditions AND-joined, an `undefined` one skipped: `and(a, when(x, f), b)`.
+ * With none left it is `undefined`, which a `where` list skips in turn. Tenant
+ * evidence carries through, as with `.and`.
+ */
+export function and(...conditions: ReadonlyArray<Condition>): Condition
+export function and(...conditions: ReadonlyArray<Condition | undefined>): Condition | undefined
+export function and(...conditions: ReadonlyArray<Condition | undefined>): Condition | undefined {
+	const present = conditions.filter((c): c is Condition => c !== undefined)
+	if (present.length <= 1) return present[0]
+	return markTenantPredicate(
+		makeCond(lazy(() => `(${present.map((c) => compile(c.toFragment())).join(" AND ")})`)),
+		present.flatMap((c) => tenantPredicatesOf(c)),
+	)
+}
+
+/**
+ * Conditions OR-joined, an `undefined` one skipped. With none left it is
+ * `undefined`. An OR proves no tenant, so it carries no tenant evidence.
+ */
+export function or(...conditions: ReadonlyArray<Condition>): Condition
+export function or(...conditions: ReadonlyArray<Condition | undefined>): Condition | undefined
+export function or(...conditions: ReadonlyArray<Condition | undefined>): Condition | undefined {
+	const present = conditions.filter((c): c is Condition => c !== undefined)
+	if (present.length <= 1) return present[0]
+	return makeCond(lazy(() => `(${present.map((c) => compile(c.toFragment())).join(" OR ")})`))
 }
 
 /** Wrap a condition in NOT (...). */

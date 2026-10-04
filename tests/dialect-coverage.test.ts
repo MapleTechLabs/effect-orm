@@ -31,6 +31,10 @@ const exemptions = {
 		"Caller-defined SQL types and codecs; no finite dialect contract. Public tarball smoke exercises the factory.",
 	"type:untyped":
 		"Explicitly unvalidated escape hatch; no decoding guarantee. Public tarball smoke exercises the factory.",
+	"query:forUpdate": "Postgres row lock; ClickHouse refuses it at compile (core case `locking`), so there is no live ClickHouse run.",
+	"query:forNoKeyUpdate": "Postgres row lock; ClickHouse refuses it at compile (core case `locking`), so there is no live ClickHouse run.",
+	"query:forShare": "Postgres row lock; ClickHouse refuses it at compile (core case `locking`), so there is no live ClickHouse run.",
+	"query:forKeyShare": "Postgres row lock; ClickHouse refuses it at compile (core case `locking`), so there is no live ClickHouse run.",
 }
 
 export const dialectInventory = [
@@ -106,7 +110,7 @@ export const coreInventory = [
 		...functionsOf(CH.lit(1), "expr"),
 		...functionsOf(CH.lit(1).eq(1), "condition"),
 		...Object.keys(CH.param).map((name) => `param:${name}`),
-		...["from", "fromQuery", "unionAll", "lit", "not"].map((name) => `function:${name}`),
+		...["from", "fromQuery", "unionAll", "lit", "not", "and", "or"].map((name) => `function:${name}`),
 	]),
 ].sort()
 

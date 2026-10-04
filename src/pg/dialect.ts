@@ -104,6 +104,7 @@ export const postgresDialect: Dialect = {
 		parenthesizeUnionBranches: true,
 		returning: true,
 		onConflict: true,
+		locking: true,
 	},
 	paramCodecs: {
 		bool: Schema.Boolean,

@@ -77,6 +77,8 @@ Note `/sql` exports a `compile` (fragment → string) distinct from the root `co
 | `orderBy(...[col, dir])`                                | **Tuples**, not two strings                                           |
 | `limit(n)` / `offset(n)`                                | Rounded before emission                                               |
 | `format(fmt)`                                           | `"JSON"` \| `"JSONEachRow"`                                           |
+| `distinct()` / `distinctOn(...aliases)`                 | `SELECT DISTINCT` / `SELECT DISTINCT ON (…)`                          |
+| `forUpdate` / `forNoKeyUpdate` / `forShare` / `forKeyShare` | Postgres row locks; options `LockOptions` (`skipLocked`, `noWait`, `of`) |
 | `innerJoin` / `leftJoin` / `crossJoin`                  | `(table, alias, on?)`                                                 |
 | `innerJoinQuery` / `leftJoinQuery` / `crossJoinQuery`   | `(query, alias, on?)`                                                 |
 | `withCTE(name, query)` / `withCTE(name, sql, options?)` | Typed query derives scope; SQL form can declare `options.tenantScope` |
@@ -89,7 +91,7 @@ Note `/sql` exports a `compile` (fragment → string) distinct from the root `co
 
 | Export               | Signature                                                                            |
 | -------------------- | ------------------------------------------------------------------------------------ |
-| `compile`            | `(query, params, options?) => Effect<CompiledQuery<Output>, QueryBuilderError>`; also `(insert, params?, options?)`, whose options (`InsertCompileOptions`) are only `dialect` |
+| `compile`            | `(query, params?, options?) => Effect<CompiledQuery<Output>, QueryBuilderError>`; also `(insert, params?, options?)`, whose options (`InsertCompileOptions`) are only `dialect` |
 | `compileUnsafe`      | The same, returning `CompiledQuery<Output>` and throwing instead                     |
 | `compileUnion`       | `(union, params, options?) => Effect<CompiledQuery<Output>, QueryBuilderError>`      |
 | `compileUnionUnsafe` | The same, throwing instead                                                           |
@@ -125,13 +127,15 @@ time; see [Params and compilation](./params-and-compilation.md#what-each-kind-ac
 | `inExprList(expr, exprs)` | Same for expression lists                                  |
 | `notInList(expr, values)` | `expr NOT IN ('a', 'b')`                                   |
 | `not(condition)`          | `NOT (…)`                                                  |
+| `and(...conds)` / `or(...conds)` | One flat `(… AND …)` / `(… OR …)`; skips `undefined`, returns `undefined` when none are left |
 | `dynamicColumn(name, t?)` | An `Expr` from a runtime column name — a `GROUP BY` alias  |
 | `exists(q)`               | `EXISTS (…)` from a query or pre-compiled SQL              |
 | `inSubquery(expr, q)`     | `expr IN (…)` from a query or pre-compiled SQL             |
 | `notInSubquery(expr, q)`  | `expr NOT IN (…)`; note the NULL semantics                 |
 | `outerRef<T>(name)`       | Reference an outer column in a correlated subquery         |
 
-`Expr<T>` methods: `eq`, `neq`, `gt`, `gte`, `lt`, `lte`, `in_`, `notIn`, `like`, `notLike`,
+`Expr<T>` methods: `eq`, `neq`, `gt`, `gte`, `lt`, `lte`, `in_`, `notIn`, `between`, `notBetween`,
+`isNull`, `isNotNull`, `like`, `notLike`,
 `ilike` (string-only), and `add`, `sub`, `mul`, `div`, `mod` (number-only, **no parentheses**). `div` and `mod` decode
 as `number | null` — ClickHouse sends `inf`/`nan` as JSON `null` — except by a numeric literal of
 magnitude ≥ 1 (`Quotient<L, R>`), which keeps the dividend's nullability; use

@@ -108,6 +108,19 @@ Untyped callers receive `QueryBuilderDefect`; use a tuple for each sort key.
 
 _(Backed by `docs/queries.md > orderBy takes tuples` and `> orderBy rejects a bare string`.)_
 
+## `distinct` / `distinctOn`
+
+```ts
+.select("ServiceName").distinct()
+// SELECT DISTINCT ServiceName …
+
+.select(($) => ({ org: $.OrgId, id: $.Id })).distinctOn("org").orderBy(["org", "asc"], ["id", "desc"])
+// SELECT DISTINCT ON (org) … — the newest row per org
+```
+
+`distinctOn` takes selected aliases and keeps the first row of each group in ORDER BY order;
+Postgres wants those keys to lead the ORDER BY. Both ClickHouse and Postgres support it.
+
 ## `limit` / `offset`
 
 ```ts
@@ -127,6 +140,27 @@ your request boundary, and enforce an application maximum. Use a stable `orderBy
 
 Accepts `"JSON"` or `"JSONEachRow"`. Most clients set the format themselves; use this only
 when you are sending raw SQL somewhere that does not.
+
+## Row locks
+
+On Postgres, `forUpdate`, `forNoKeyUpdate`, `forShare` and `forKeyShare` add a locking clause
+after LIMIT. Each takes `{ skipLocked?, noWait?, of? }`. The usual job-queue claim:
+
+```ts
+CH.from(Jobs)
+	.select("id")
+	.where(($) => [$.state.eq("queued")])
+	.orderBy(["id", "asc"])
+	.limit(1)
+	.forUpdate({ skipLocked: true })
+// … LIMIT 1 FOR UPDATE SKIP LOCKED
+```
+
+A lock lasts until the transaction ends, so run the query inside `Database.transaction`. These
+are a `QueryBuilderDefect`, refused before anything is sent: `skipLocked` and `noWait` together;
+a qualified name in `of` (use the alias or `jobs`, not `public.jobs`); a lock on a query with
+DISTINCT, GROUP BY or HAVING, or on a `unionAll` branch, which Postgres refuses; and any lock on
+ClickHouse, which has no row locks.
 
 ## `withCTE`
 

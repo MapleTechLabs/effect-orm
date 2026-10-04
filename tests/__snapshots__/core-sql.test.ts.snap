@@ -1,5 +1,23 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
+exports[`core SQL (clickhouse) > and-or 1`] = `
+{
+  "parameters": [],
+  "sql": "WITH orders AS (
+<orders fixture>
+),
+customers AS (
+<customers fixture>
+)
+SELECT
+          orders.Id AS id
+        FROM orders
+        WHERE orders.OrgId = 'org_1'
+          AND ((orders.Status = 'paid' AND orders.Amount > 15) OR orders.Customer = 'globex')
+        ORDER BY id ASC",
+}
+`;
+
 exports[`core SQL (clickhouse) > arithmetic 1`] = `
 {
   "parameters": [],
@@ -121,6 +139,41 @@ SELECT
 }
 `;
 
+exports[`core SQL (clickhouse) > distinct 1`] = `
+{
+  "parameters": [],
+  "sql": "WITH orders AS (
+<orders fixture>
+),
+customers AS (
+<customers fixture>
+)
+SELECT DISTINCT ON (customer)
+          orders.Customer AS customer,
+          orders.Id AS id
+        FROM orders
+        WHERE orders.OrgId = 'org_1'
+        ORDER BY customer ASC, id DESC",
+}
+`;
+
+exports[`core SQL (clickhouse) > distinct-plain 1`] = `
+{
+  "parameters": [],
+  "sql": "WITH orders AS (
+<orders fixture>
+),
+customers AS (
+<customers fixture>
+)
+SELECT DISTINCT
+          orders.Status AS status
+        FROM orders
+        WHERE orders.OrgId = 'org_1'
+        ORDER BY status ASC",
+}
+`;
+
 exports[`core SQL (clickhouse) > format 1`] = `
 {
   "parameters": [],
@@ -206,6 +259,24 @@ SELECT
 }
 `;
 
+exports[`core SQL (clickhouse) > is-not-null 1`] = `
+{
+  "parameters": [],
+  "sql": "WITH orders AS (
+<orders fixture>
+),
+customers AS (
+<customers fixture>
+)
+SELECT
+          orders.Id AS id
+        FROM orders
+        WHERE orders.OrgId = 'org_1'
+          AND orders.Note IS NOT NULL
+        ORDER BY id ASC",
+}
+`;
+
 exports[`core SQL (clickhouse) > join-subqueries 1`] = `
 {
   "parameters": [],
@@ -285,6 +356,26 @@ SELECT
         ORDER BY id DESC
         LIMIT 2
         OFFSET 1",
+}
+`;
+
+exports[`core SQL (clickhouse) > null-and-range 1`] = `
+{
+  "parameters": [],
+  "sql": "WITH orders AS (
+<orders fixture>
+),
+customers AS (
+<customers fixture>
+)
+SELECT
+          orders.Id AS id
+        FROM orders
+        WHERE orders.OrgId = 'org_1'
+          AND orders.Note IS NULL
+          AND orders.Amount BETWEEN 5 AND 20
+          AND orders.Id NOT BETWEEN 3 AND 3
+        ORDER BY id ASC",
 }
 `;
 
@@ -488,6 +579,26 @@ FORMAT JSON",
 }
 `;
 
+exports[`core SQL (postgres) > and-or 1`] = `
+{
+  "parameters": [
+    "org_1",
+  ],
+  "sql": "WITH "orders" AS (
+<orders fixture>
+),
+"customers" AS (
+<customers fixture>
+)
+SELECT
+          "orders"."Id" AS "id"
+        FROM "orders"
+        WHERE "orders"."OrgId" = $1
+          AND (("orders"."Status" = 'paid' AND "orders"."Amount" > 15) OR "orders"."Customer" = 'globex')
+        ORDER BY "id" ASC",
+}
+`;
+
 exports[`core SQL (postgres) > arithmetic 1`] = `
 {
   "parameters": [
@@ -619,6 +730,45 @@ SELECT
 }
 `;
 
+exports[`core SQL (postgres) > distinct 1`] = `
+{
+  "parameters": [
+    "org_1",
+  ],
+  "sql": "WITH "orders" AS (
+<orders fixture>
+),
+"customers" AS (
+<customers fixture>
+)
+SELECT DISTINCT ON ("customer")
+          "orders"."Customer" AS "customer",
+          "orders"."Id" AS "id"
+        FROM "orders"
+        WHERE "orders"."OrgId" = $1
+        ORDER BY "customer" ASC, "id" DESC",
+}
+`;
+
+exports[`core SQL (postgres) > distinct-plain 1`] = `
+{
+  "parameters": [
+    "org_1",
+  ],
+  "sql": "WITH "orders" AS (
+<orders fixture>
+),
+"customers" AS (
+<customers fixture>
+)
+SELECT DISTINCT
+          "orders"."Status" AS "status"
+        FROM "orders"
+        WHERE "orders"."OrgId" = $1
+        ORDER BY "status" ASC",
+}
+`;
+
 exports[`core SQL (postgres) > from-subquery 1`] = `
 {
   "parameters": [
@@ -688,6 +838,26 @@ SELECT
         FROM "orders"
         INNER JOIN "customers" AS "c" ON ("orders"."Customer" = "c"."Name" AND "orders"."OrgId" = "c"."OrgId")
         WHERE "orders"."OrgId" = $1
+        ORDER BY "id" ASC",
+}
+`;
+
+exports[`core SQL (postgres) > is-not-null 1`] = `
+{
+  "parameters": [
+    "org_1",
+  ],
+  "sql": "WITH "orders" AS (
+<orders fixture>
+),
+"customers" AS (
+<customers fixture>
+)
+SELECT
+          "orders"."Id" AS "id"
+        FROM "orders"
+        WHERE "orders"."OrgId" = $1
+          AND "orders"."Note" IS NOT NULL
         ORDER BY "id" ASC",
 }
 `;
@@ -777,6 +947,49 @@ SELECT
         ORDER BY "id" DESC
         LIMIT 2
         OFFSET 1",
+}
+`;
+
+exports[`core SQL (postgres) > locking 1`] = `
+{
+  "parameters": [
+    "org_1",
+  ],
+  "sql": "WITH "orders" AS (
+<orders fixture>
+),
+"customers" AS (
+<customers fixture>
+)
+SELECT
+          "orders"."Id" AS "id"
+        FROM "orders"
+        WHERE "orders"."OrgId" = $1
+          AND "orders"."Id" = 1
+        FOR UPDATE SKIP LOCKED",
+}
+`;
+
+exports[`core SQL (postgres) > null-and-range 1`] = `
+{
+  "parameters": [
+    "org_1",
+    20,
+  ],
+  "sql": "WITH "orders" AS (
+<orders fixture>
+),
+"customers" AS (
+<customers fixture>
+)
+SELECT
+          "orders"."Id" AS "id"
+        FROM "orders"
+        WHERE "orders"."OrgId" = $1
+          AND "orders"."Note" IS NULL
+          AND "orders"."Amount" BETWEEN 5 AND $2
+          AND "orders"."Id" NOT BETWEEN 3 AND 3
+        ORDER BY "id" ASC",
 }
 `;
 

@@ -611,6 +611,84 @@ export const coreCases: readonly CoreCase[] = [
 		},
 		expected: [{ id: 1 }, { id: 2 }],
 	},
+	// Null and range predicates, variadic and/or, distinct, row locking.
+	{
+		id: "null-and-range",
+		covers: e("isNull", "between", "notBetween"),
+		build: (ctx) =>
+			ctx.compile(
+				orgOrders(ctx)
+					.select(($) => ({ id: $.Id }))
+					.where(($) => [
+						$.OrgId.eq(CH.param.string("orgId")),
+						$.Note.isNull(),
+						$.Amount.between(5, CH.param.int("hi")),
+						$.Id.notBetween(3, 3),
+					])
+					.orderBy(["id", "asc"]),
+				{ ...org, hi: 20 },
+			),
+		expected: [{ id: 2 }],
+	},
+	{
+		id: "is-not-null",
+		covers: e("isNotNull"),
+		build: (ctx) =>
+			ctx.compile(orgOrders(ctx).select(($) => ({ id: $.Id })).where(($) => [$.OrgId.eq(CH.param.string("orgId")), $.Note.isNotNull()]).orderBy(["id", "asc"]), org),
+		expected: [{ id: 1 }, { id: 4 }],
+	},
+	{
+		id: "and-or",
+		covers: ["function:and", "function:or"],
+		build: (ctx) =>
+			ctx.compile(
+				orgOrders(ctx)
+					.select(($) => ({ id: $.Id }))
+					.where(($) => [
+						$.OrgId.eq(CH.param.string("orgId")),
+						CH.or(CH.and($.Status.eq("paid"), $.Amount.gt(15)), undefined, $.Customer.eq("globex")),
+					])
+					.orderBy(["id", "asc"]),
+				org,
+			),
+		expected: [{ id: 2 }, { id: 3 }],
+	},
+	{
+		id: "distinct",
+		covers: q("distinct", "distinctOn"),
+		build: (ctx) =>
+			ctx.compile(
+				orgOrders(ctx)
+					.select(($) => ({ customer: $.Customer, id: $.Id }))
+					.distinctOn("customer")
+					.orderBy(["customer", "asc"], ["id", "desc"]),
+				org,
+			),
+		expected: [
+			{ customer: "acme", id: 2 },
+			{ customer: "globex", id: 3 },
+			{ customer: "initech", id: 4 },
+		],
+	},
+	{
+		id: "distinct-plain",
+		covers: q("distinct"),
+		build: (ctx) =>
+			ctx.compile(orgOrders(ctx).select(($) => ({ status: $.Status })).distinct().orderBy(["status", "asc"]), org),
+		expected: [{ status: "open" }, { status: "paid" }, { status: "void" }],
+	},
+	{
+		id: "locking",
+		covers: q("forUpdate", "forNoKeyUpdate", "forShare", "forKeyShare"),
+		rejects: { clickhouse: /no row locks/ },
+		build: (ctx) => {
+			// Each strength compiles; the one sent is FOR UPDATE SKIP LOCKED.
+			const base = orgOrders(ctx).select(($) => ({ id: $.Id })).where(($) => [$.OrgId.eq(CH.param.string("orgId")), $.Id.eq(1)])
+			for (const locked of [base.forNoKeyUpdate({ noWait: true }), base.forShare(), base.forKeyShare()]) ctx.compile(locked, org)
+			return ctx.compile(base.forUpdate({ skipLocked: true }), org)
+		},
+		expected: [{ id: 1 }],
+	},
 ]
 
 /** Cases a dialect cannot run yet, each with the reason. Empty is the goal. */

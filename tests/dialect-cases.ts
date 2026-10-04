@@ -212,6 +212,22 @@ export const dialectCases: readonly DialectCase[] = [
 		},
 	),
 	{
+		id: "distinct-and-distinct-on",
+		covers: ["query:distinct", "query:distinctOn"],
+		build: () =>
+			CH.compileUnsafe(
+				numbers()
+					.select(($) => ({ odd: CH.intDiv($.n, l(2)), n: $.n }))
+					.distinctOn("odd")
+					.orderBy(["odd", "asc"], ["n", "desc"]),
+				{},
+			),
+		expected: [
+			{ odd: 0, n: 1 },
+			{ odd: 1, n: 3 },
+		],
+	},
+	{
 		id: "array-join-and-membership",
 		covers: fn("arrayJoin", "has"),
 		build: () =>
