@@ -8,14 +8,17 @@ import * as Migrate from "../migrate"
 import { Hints, type Hint } from "../schema/diff"
 import { check, generate, KitError, readMigrations, type KitConfig } from "./generate"
 
-const help = `effect-orm: schema migrations for ClickHouse
+const help = `effect-orm: schema migrations for ClickHouse and Postgres
 
   generate [--name x] [--custom]   Diff the schema against the migrations folder and write the next migration
            [--hints <json>] [--hints-file <path>]
+           [--baseline [--from-drizzle]]  Start the history of a folder another tool wrote: a migration that runs
+                                   nothing, with the current schema (or drizzle-kit's last snapshot) as its snapshot
   check                            Validate the migrations folder (snapshot chain, branch conflicts)
   migrate [--strict]               Apply pending migrations (needs config.driver)
   status                           Applied, pending, partial, or changed, per migration
   verify                           Compare the database with the last applied snapshot
+  baseline <migration>             Record <migration> and every one before it as applied, without running them
   resolve <migration> <step>       Record what a step left "started" did, after checking the database:
           --ran | --not-ran        --ran skips it on the next migrate, --not-ran runs it
 
@@ -28,6 +31,8 @@ const options = {
 	config: { type: "string" },
 	name: { type: "string" },
 	custom: { type: "boolean" },
+	baseline: { type: "boolean" },
+	"from-drizzle": { type: "boolean" },
 	hints: { type: "string" },
 	"hints-file": { type: "string" },
 	strict: { type: "boolean" },
@@ -95,6 +100,7 @@ const program = (args: ReadonlyArray<string>, print: (line: string) => void) =>
 					hints,
 					...(parsed.values.name !== undefined ? { name: parsed.values.name } : undefined),
 					...(parsed.values.custom === true ? { custom: true } : undefined),
+					...(parsed.values.baseline === true ? { baseline: parsed.values["from-drizzle"] === true ? "drizzle" : "schema" } : undefined),
 					...(interactive ? { confirm: promptConfirm } : undefined),
 				})
 				out(result, () =>
@@ -107,7 +113,7 @@ const program = (args: ReadonlyArray<string>, print: (line: string) => void) =>
 			case "check": {
 				const result = yield* check(config, cwd)
 				out(result, () => [
-					`${result.migrations} migrations, ok.`,
+					`${result.migrations} migrations, ok.${result.legacy > 0 ? ` ${result.legacy} predate the first snapshot.` : ""}`,
 					...(result.leaves.length > 1 ? [`Independent branches (merged by the next generate): ${result.leaves.join(", ")}`] : []),
 				])
 				return 0
@@ -124,11 +130,33 @@ const program = (args: ReadonlyArray<string>, print: (line: string) => void) =>
 				if (migration === undefined) return yield* new KitError({ code: "config", message: `no migration named ${migrationName}` })
 				yield* withDriver(
 					config,
-					Migrate.resolveStep({ migration, step: stepId, outcome: ran ? "ran" : "not-ran", render: config.render ?? {} }),
+					Migrate.resolveStep({
+						migration,
+						step: stepId,
+						outcome: ran ? "ran" : "not-ran",
+						render: config.render ?? {},
+						...(config.dialect !== undefined ? { dialect: config.dialect } : undefined),
+					}),
 				)
 				out({ migration: migrationName, step: stepId, outcome: ran ? "ran" : "not-ran" }, () => [
 					`Recorded ${migrationName} step ${stepId} as ${ran ? "done; migrate will skip it" : "not run; migrate will run it"}.`,
 				])
+				return 0
+			}
+			case "baseline": {
+				const [, upTo] = parsed.positionals
+				if (upTo === undefined) return yield* new KitError({ code: "config", message: "usage: effect-orm baseline <migration>" })
+				const migrations = yield* readMigrations(resolve(cwd, config.out))
+				const recorded = yield* withDriver(
+					config,
+					Migrate.baseline({
+						migrations,
+						upTo,
+						render: config.render ?? {},
+						...(config.dialect !== undefined ? { dialect: config.dialect } : undefined),
+					}),
+				)
+				out(recorded, () => (recorded.length === 0 ? ["Already recorded; nothing to do."] : recorded.map((name) => `recorded ${name} as applied`)))
 				return 0
 			}
 			case "migrate":
@@ -136,17 +164,18 @@ const program = (args: ReadonlyArray<string>, print: (line: string) => void) =>
 			case "verify": {
 				const migrations = yield* readMigrations(resolve(cwd, config.out))
 				const render = config.render ?? {}
+				const dialect = config.dialect !== undefined ? { dialect: config.dialect } : undefined
 				if (command === "migrate") {
-					const ran = yield* withDriver(config, Migrate.run({ migrations, render, strict: parsed.values.strict === true }))
+					const ran = yield* withDriver(config, Migrate.run({ migrations, render, strict: parsed.values.strict === true, ...dialect }))
 					out(ran, () => (ran.length === 0 ? ["Nothing to apply."] : ran.map((m) => `applied ${m.name} (${m.steps} statements${m.resumedSteps > 0 ? `, ${m.resumedSteps} resumed` : ""})`)))
 					return 0
 				}
 				if (command === "status") {
-					const rows = yield* withDriver(config, Migrate.status(migrations, render))
+					const rows = yield* withDriver(config, Migrate.status(migrations, render, config.dialect))
 					out(rows, () => rows.map((r) => `${r.state.padEnd(8)} ${r.name}${r.appliedAt !== undefined ? `  ${r.appliedAt}` : ""}`))
 					return 0
 				}
-				const result = yield* withDriver(config, Migrate.verify(migrations))
+				const result = yield* withDriver(config, Migrate.verify(migrations, { ...dialect }))
 				out(result, () =>
 					result.against === undefined
 						? ["No applied migration with a snapshot to compare against."]

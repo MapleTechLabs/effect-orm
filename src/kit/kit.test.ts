@@ -98,4 +98,93 @@ describe("effect-orm CLI", () => {
 		writeFileSync(path, readFileSync(path, "utf8").replace('"String"', '"UInt8"'))
 		expect(await cli("check")).toBe(1)
 	})
+
+	describe("Postgres", () => {
+		const pgModule = (extra: { owner?: boolean } = {}) => `
+import * as PG from "${src}/postgres"
+import * as S from "${src}/schema"
+
+export const Dashboards = S.pg.table("dashboards", {
+	columns: {
+		org_id: PG.text,
+		id: PG.text,
+		status: S.pg.column(PG.text, { default: "open" }),
+		${extra.owner === true ? "owner: PG.nullable(PG.text)," : ""}
+	},
+	primaryKey: { columns: ["org_id", "id"], name: "dashboards_org_id_id_pk" },
+	indexes: [S.pg.index("dashboards_open_idx", ["org_id"], { where: "status = 'open'" })],
+})
+`
+		const pgConfig = (schema: string, name = "effect-orm.config.ts") =>
+			writeFileSync(join(dir, name), `export default { dialect: "postgres", schema: "./${schema}", out: "./migrations" }\n`)
+
+		it("generates Postgres migrations and refuses a ClickHouse config on the folder", async () => {
+			writeFileSync(join(dir, "pg1.ts"), pgModule())
+			pgConfig("pg1.ts")
+			expect(await cli("generate", "--name", "init")).toBe(0)
+			const [first] = folders()
+			const file = JSON.parse(readFileSync(join(dir, "migrations", first!, "migration.json"), "utf8"))
+			expect(file.dialect).toBe("postgres")
+			expect(file.ops.map((op: { op: string }) => op.op)).toEqual(["create_table", "create_index"])
+			expect(JSON.parse(readFileSync(join(dir, "migrations", first!, "snapshot.json"), "utf8")).dialect).toBe("postgres")
+
+			writeFileSync(join(dir, "pg2.ts"), pgModule({ owner: true }))
+			pgConfig("pg2.ts", "v2.config.ts")
+			expect(await cli("generate", "--name", "owner", "--config", "v2.config.ts")).toBe(0)
+			expect(lines.join("\n")).toContain('[metadata] ALTER TABLE "dashboards" ADD COLUMN IF NOT EXISTS "owner" text')
+			expect(await cli("check")).toBe(0)
+
+			writeFileSync(join(dir, "ch.config.ts"), `export default { schema: "./pg2.ts", out: "./migrations" }\n`)
+			expect(await cli("generate", "--config", "ch.config.ts")).toBe(1)
+		})
+
+		it("adopts a drizzle-kit folder: baseline from its last snapshot, then diff the definitions against it", async () => {
+			const legacy = join(dir, "migrations", "20260101000000_drizzle_init")
+			mkdirSync(legacy, { recursive: true })
+			writeFileSync(join(legacy, "migration.sql"), `CREATE TABLE "dashboards" ("org_id" text NOT NULL, "id" text NOT NULL);`)
+			writeFileSync(
+				join(legacy, "snapshot.json"),
+				JSON.stringify({
+					version: "8",
+					dialect: "postgres",
+					id: "a",
+					prevIds: [],
+					renames: [],
+					ddl: [
+						{ isRlsEnabled: false, name: "dashboards", entityType: "tables", schema: "public" },
+						{ type: "text", typeSchema: null, notNull: true, dimensions: 0, default: null, generated: null, identity: null, name: "org_id", entityType: "columns", schema: "public", table: "dashboards" },
+						{ type: "text", typeSchema: null, notNull: true, dimensions: 0, default: null, generated: null, identity: null, name: "id", entityType: "columns", schema: "public", table: "dashboards" },
+						{ type: "text", typeSchema: null, notNull: true, dimensions: 0, default: "'open'", generated: null, identity: null, name: "status", entityType: "columns", schema: "public", table: "dashboards" },
+						{ columns: ["org_id", "id"], nameExplicit: false, name: "dashboards_org_id_id_pk", entityType: "pks", schema: "public", table: "dashboards" },
+						{
+							nameExplicit: true,
+							columns: [{ value: "org_id", isExpression: false, asc: true, nullsFirst: false, opclass: null }],
+							isUnique: false,
+							where: "status = 'open'",
+							with: "",
+							method: "btree",
+							concurrently: false,
+							name: "dashboards_open_idx",
+							entityType: "indexes",
+							schema: "public",
+							table: "dashboards",
+						},
+					],
+				}),
+			)
+			writeFileSync(join(dir, "pg3.ts"), pgModule({ owner: true }))
+			pgConfig("pg3.ts")
+			expect(await cli("generate")).toBe(1)
+			expect(await cli("generate", "--baseline", "--from-drizzle", "--name", "effect_orm_baseline")).toBe(0)
+			const baseline = folders().at(-1)!
+			expect(baseline).toMatch(/_effect_orm_baseline$/)
+			expect(readFileSync(join(dir, "migrations", baseline, "migration.sql"), "utf8")).toMatch(/^-- Baseline/)
+			expect(await cli("check")).toBe(0)
+			expect(lines.at(-1)).toBe("2 migrations, ok. 1 predate the first snapshot.")
+			// The definitions add `owner`; everything else matches what drizzle-kit recorded.
+			expect(await cli("generate", "--json", "--name", "owner")).toBe(0)
+			const plan = JSON.parse(lines.at(-1)!).plan
+			expect(plan).toEqual([{ label: "metadata", sql: ['ALTER TABLE "dashboards" ADD COLUMN IF NOT EXISTS "owner" text'] }])
+		})
+	})
 })

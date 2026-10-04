@@ -42,8 +42,8 @@ export interface UnsupportedChange {
 	readonly message: string
 }
 
-export interface DiffResult {
-	readonly ops: ReadonlyArray<MigrationOp>
+export interface DiffResult<Op = MigrationOp> {
+	readonly ops: ReadonlyArray<Op>
 	readonly missingHints: ReadonlyArray<Hint>
 	readonly unsupported: ReadonlyArray<UnsupportedChange>
 }

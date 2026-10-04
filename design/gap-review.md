@@ -34,7 +34,7 @@ builder; **P1** commonly used; **P2** niche.
 | ~~`isNull` / `isNotNull` / `between`; variadic `and` / `or` that skip `undefined`~~ (built) | everywhere | S |
 | Constraint error helpers (unique, foreign key, not null); keep ClickHouse's numeric error codes, which `sqlStateOf` drops today | all upserts | S |
 | Tenant-scope enforcement in `Database`, opt in, with an explicit cross-tenant entry point | safety | S |
-| Postgres `defineTable` (indexes, unique, FKs), Postgres migrations, a drizzle-kit importer | 68 tables, 90 indexes, 47 unique, 75 folders | L; can wait, drizzle-kit can keep migrating |
+| ~~Postgres `defineTable` (indexes, unique, FKs), Postgres migrations, a drizzle-kit importer~~ Done: `S.pg.table`, `dialect: "postgres"`, `--baseline --from-drizzle` (design/migrations.md section 8) | 68 tables, 90 indexes, 47 unique, 75 folders | L |
 
 ## P1
 

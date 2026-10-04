@@ -7,7 +7,7 @@
 // to be regenerated on top of the other.
 
 import { Effect } from "effect"
-import { canonicalJson, entityKey, ORIGIN_ID, sha256Hex, sortEntities, type SchemaEntity } from "../schema/entities"
+import { canonicalJson, entityKey, ORIGIN_ID, sha256Hex, sortEntities, type AnySchemaEntity, type SchemaDialect } from "../schema/entities"
 import { migrationParents, type LoadedMigration } from "../migrate/source"
 
 export interface GraphProblem {
@@ -20,9 +20,17 @@ export interface GraphAnalysis {
 	/** Migrations nothing builds on yet. More than one means unmerged branches. */
 	readonly leaves: ReadonlyArray<LoadedMigration>
 	/** The schema the next migration starts from. */
-	readonly base: ReadonlyArray<SchemaEntity>
+	readonly base: ReadonlyArray<AnySchemaEntity>
 	/** Parents for the next migration's snapshot. */
 	readonly baseIds: ReadonlyArray<string>
+	/** The dialect the snapshots are written for; `undefined` when there are none yet. */
+	readonly dialect: SchemaDialect | undefined
+	/**
+	 * Migrations from before the first snapshot: written by another tool (a
+	 * drizzle-kit folder being adopted) or by hand. They run, but nothing diffs
+	 * against them.
+	 */
+	readonly legacy: ReadonlyArray<LoadedMigration>
 }
 
 const ancestorsOf = (
@@ -42,12 +50,12 @@ const ancestorsOf = (
 
 /** Entity changes from `from` to `to`: key -> new entity, or null for removed. */
 const changesBetween = (
-	from: ReadonlyArray<SchemaEntity>,
-	to: ReadonlyArray<SchemaEntity>,
-): Map<string, SchemaEntity | null> => {
+	from: ReadonlyArray<AnySchemaEntity>,
+	to: ReadonlyArray<AnySchemaEntity>,
+): Map<string, AnySchemaEntity | null> => {
 	const before = new Map(from.map((e) => [entityKey(e), canonicalJson(e)]))
 	const after = new Map(to.map((e) => [entityKey(e), e]))
-	const out = new Map<string, SchemaEntity | null>()
+	const out = new Map<string, AnySchemaEntity | null>()
 	for (const [key, entity] of after) if (before.get(key) !== canonicalJson(entity)) out.set(key, entity)
 	for (const key of before.keys()) if (!after.has(key)) out.set(key, null)
 	return out
@@ -56,19 +64,28 @@ const changesBetween = (
 /** The table an entity belongs to, so two branches editing one table conflict. */
 const ownerOf = (key: string): string => {
 	const [kind, rest = ""] = key.split(":")
-	return kind === "column" || kind === "index" ? `table:${rest.split(".")[0]}` : key
+	return kind === "column" || kind === "index" || kind === "foreign_key" ? `table:${rest.split(".")[0]}` : key
 }
 
 export const analyze = (migrations: ReadonlyArray<LoadedMigration>): Effect.Effect<GraphAnalysis> =>
 	Effect.gen(function* () {
 		const problems: Array<GraphProblem> = []
 		const withSnapshots = migrations.filter((m) => m.snapshot !== undefined)
+		const first = withSnapshots.reduce<string | undefined>((min, m) => (min === undefined || m.name < min ? m.name : min), undefined)
+		const legacy = migrations.filter((m) => m.snapshot === undefined && (first === undefined || m.name < first))
 		for (const m of migrations) {
-			if (m.snapshot === undefined) problems.push({ migration: m.name, message: "has no snapshot.json" })
+			if (m.snapshot === undefined && !legacy.includes(m)) {
+				problems.push({ migration: m.name, message: "has no snapshot.json, and sorts after the first migration that has one" })
+			}
 		}
+		const dialects = [...new Set(withSnapshots.map((m) => m.snapshot!.dialect))]
+		if (dialects.length > 1) {
+			problems.push({ migration: withSnapshots.at(-1)!.name, message: `the folder mixes ${dialects.join(" and ")} snapshots; keep one folder per database` })
+		}
+		const dialect = dialects[0]
 		const knownIds = new Set(withSnapshots.map((m) => m.snapshot!.id))
 		for (const m of withSnapshots) {
-			const id = yield* Effect.promise(() => sha256Hex(canonicalJson(sortEntities(m.snapshot!.entities))))
+			const id = yield* Effect.promise(() => sha256Hex(canonicalJson(sortEntities<AnySchemaEntity>(m.snapshot!.entities))))
 			if (id !== m.snapshot!.id) {
 				problems.push({ migration: m.name, message: "snapshot id does not match its entities; the snapshot was edited by hand" })
 			}
@@ -88,16 +105,16 @@ export const analyze = (migrations: ReadonlyArray<LoadedMigration>): Effect.Effe
 		}
 
 		// A broken chain makes leaves and ancestors meaningless; report it alone.
-		if (problems.length > 0) return { problems, leaves: [], base: [], baseIds: [] }
+		if (problems.length > 0) return { problems, leaves: [], base: [], baseIds: [], dialect, legacy }
 
 		const hasChild = new Set<LoadedMigration>()
 		for (const list of parents.values()) for (const p of list) hasChild.add(p)
 		const leaves = withSnapshots.filter((m) => !hasChild.has(m))
 
-		if (leaves.length === 0) return { problems, leaves, base: [], baseIds: [ORIGIN_ID] }
+		if (leaves.length === 0) return { problems, leaves, base: [], baseIds: [ORIGIN_ID], dialect, legacy }
 		if (leaves.length === 1) {
 			const leaf = leaves[0]!
-			return { problems, leaves, base: leaf.snapshot!.entities, baseIds: [leaf.snapshot!.id] }
+			return { problems, leaves, base: leaf.snapshot!.entities, baseIds: [leaf.snapshot!.id], dialect, legacy }
 		}
 
 		// Several leaves: merge them on their nearest common ancestor.
@@ -125,5 +142,5 @@ export const analyze = (migrations: ReadonlyArray<LoadedMigration>): Effect.Effe
 				else merged.set(key, entity)
 			}
 		}
-		return { problems, leaves, base: [...merged.values()], baseIds: leaves.map((l) => l.snapshot!.id) }
+		return { problems, leaves, base: [...merged.values()], baseIds: leaves.map((l) => l.snapshot!.id), dialect, legacy }
 	})

@@ -5,13 +5,16 @@ in TypeScript too, three entry points add that, all opt-in:
 
 | Entry                              | Runs where         | What it does                                                                  |
 | ---------------------------------- | ------------------ | ----------------------------------------------------------------------------- |
-| `@maple-dev/effect-orm/schema`     | anywhere, pure     | `defineTable` / `materializedView`, DDL rendering, snapshots, the diff        |
+| `@maple-dev/effect-orm/schema`     | anywhere, pure     | `defineTable` / `materializedView` / `pg.table`, DDL rendering, snapshots, the diff |
 | `@maple-dev/effect-orm/kit`        | Node or Bun        | `generate` and `check` over a migrations folder; the `effect-orm` command     |
 | `@maple-dev/effect-orm/migrate`    | anywhere Effect runs | applies migrations through a driver you provide, `status`, `verify`        |
 
-ClickHouse only, for now. The model follows drizzle-kit (a committed snapshot per migration,
-an offline `generate`, data-loss confirmations by prompt or by hints), and the runtime is
-built for a database without transactions.
+Both ClickHouse and Postgres. The model follows drizzle-kit (a committed snapshot per migration,
+an offline `generate`, data-loss confirmations by prompt or by hints). Snapshots, the branch
+check and folder loading are shared; table definitions, the diff, the DDL, the runtime and
+drift detection are per database, because the two differ where it matters: ClickHouse DDL is
+not transactional and cannot change most things in place, and Postgres DDL is and can. The
+sections below describe ClickHouse first; [Postgres](#postgres) covers what differs.
 
 ## Defining tables
 
@@ -176,3 +179,96 @@ or comments yet. `effect-orm verify` exits 3 when it finds drift.
 _(Effect's own `ClickhouseMigrator` creates its ledger with a statement ClickHouse 26.8
 rejects, and inserts ledger rows before running each migration. That is why this package has
 its own runner.)_
+
+## Postgres
+
+Set `dialect: "postgres"` in the config and define tables with `S.pg.table`. `generate`, `check`,
+`migrate`, `status` and `verify` then work as above, with the differences below.
+
+```ts title="migrations-postgres.ts"
+import * as CH from "@maple-dev/effect-orm"
+import * as PG from "@maple-dev/effect-orm/postgres"
+import * as S from "@maple-dev/effect-orm/schema"
+
+export const Dashboards = S.pg.table("dashboards", {
+	columns: {
+		org_id: PG.text,
+		id: PG.text,
+		status: S.pg.column(PG.text, { default: "open" }),
+		created_at: S.pg.column(PG.timestamptz, { defaultExpr: "now()" }),
+		archived_at: PG.nullable(PG.timestamptz),
+	},
+	primaryKey: ["org_id", "id"],
+	indexes: [S.pg.index("dashboards_open_idx", ["org_id"], { where: ($) => $.archived_at.isNull() })],
+	tenantColumn: "org_id",
+})
+
+export const Shares = S.pg.table("dashboard_shares", {
+	columns: { org_id: PG.text, id: PG.text, dashboard_id: PG.text, widget_id: PG.nullable(PG.text), revoked_at: PG.nullable(PG.timestamptz) },
+	primaryKey: ["org_id", "id"],
+	indexes: [
+		// At most one live share per dashboard and widget: a partial unique index on an expression.
+		S.pg.uniqueIndex("dashboard_shares_live_unq", ($) => [$.org_id, $.dashboard_id, CH.coalesce($.widget_id, CH.lit(""))], {
+			where: "revoked_at is null",
+		}),
+	],
+	foreignKeys: [
+		S.pg.foreignKey({ columns: ["org_id", "dashboard_id"], references: Dashboards, foreignColumns: ["org_id", "id"], onDelete: "cascade" }),
+	],
+})
+
+export const ddl = S.renderPgSchema(S.pgEntitiesOf([Dashboards, Shares]))
+```
+
+**Definitions.** A column is `NOT NULL` unless its type is `PG.nullable(...)`. `S.pg.column(type,
+options)` adds a `default` (a value of the column's type), a `defaultExpr` (SQL or a DSL
+expression) or an `identity` (`"always"` or `"by default"`); any of them makes the column
+optional on insert. `primaryKey` takes column names, or `{ columns, name }`; the default name is
+`<table>_pkey`. Indexes are `S.pg.index` / `S.pg.uniqueIndex` over column names or expressions,
+with `where` for a partial index and `using` for the access method. A foreign key without a
+`name` gets drizzle-kit's, `<table>_<columns>_<foreign table>_<foreign columns>_fk`. Types are
+stored as Postgres names them (`int4` is `integer`), so snapshots compare with the catalog and
+with drizzle-kit. Check and unique constraints, enums, views, sequences and other schemas are
+not modeled yet; write them in a `--custom` migration.
+
+**Generating.** Postgres changes a column's type, nullability, default or identity in place
+(`ALTER COLUMN`), and a primary key, an index or a foreign key by dropping and re-creating it,
+so `generate` reports nothing as unsupported. A type change is labeled `rewrite`: Postgres
+rewrites the table under an exclusive lock. Drops still need confirmation, and renames still
+read as a drop and an add. Generated files carry `"dialect": "postgres"`.
+
+**Applying.** Each migration runs in one transaction with its ledger row, under a
+transaction-scoped advisory lock, so concurrent deploys wait for each other rather than
+racing. A failed statement rolls the whole migration back and the next run starts it from the
+top: there is no step journal, no lease, no `partial` or `uncertain` state, and nothing for
+`resolve` to do. The driver needs a transaction, which `Migrate.fromSqlClient` provides from
+`SqlClient.withTransaction`. A statement Postgres refuses inside a transaction (`CREATE INDEX
+CONCURRENTLY`, `ALTER TYPE ... ADD VALUE` before Postgres 12) cannot be in a migration yet.
+
+**Drift.** `verify` builds the expected schema in a scratch schema, inside a transaction it
+always rolls back, and reads both catalogs with the same queries, so Postgres deparses both
+sides and `'open'` matches the stored `'open'::text`. It checks tables, columns (type, `NOT NULL`,
+default, identity), primary keys, indexes (uniqueness, method, keys, predicate) and foreign keys
+in the current schema. `Migrate.verify(migrations, { ignoreTables })` skips tables another tool
+owns.
+
+### Adopting a drizzle-kit folder
+
+A drizzle-kit (v1) folder already has the layout `migrate` reads: `<timestamp>_<name>/migration.sql`
+split on `--> statement-breakpoint`. Its `snapshot.json` files are recognized as drizzle-kit's
+and set aside, so the folder runs as it is. Adoption is two steps:
+
+1. `effect-orm generate --baseline --from-drizzle` writes a migration that runs nothing, whose
+   snapshot is drizzle-kit's last one converted to entities. Anything the conversion cannot model
+   is listed and nothing is written. Without `--from-drizzle` the snapshot comes from your
+   `S.pg.table` definitions instead. Migrations before the baseline are legacy: they run, but
+   nothing diffs against them, and a plain `generate` refuses to run until a baseline exists.
+2. On a database drizzle-kit (or anything else) already migrated, `effect-orm baseline <name>`
+   (`Migrate.baseline`) records the baseline and every migration before it as applied, without
+   running them. A fresh database, such as a test's, simply runs everything.
+
+The first `generate` after the baseline diffs your `S.pg.table` definitions against what
+drizzle-kit recorded, so every place they disagree (a constraint name, a default) shows up as an
+op to accept or fix. `verify` against the baseline also finds objects the database has and
+drizzle-kit's snapshot does not, such as a table a hand-written migration created and nothing
+dropped.

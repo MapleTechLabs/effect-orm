@@ -1,8 +1,12 @@
 // @maple-dev/effect-orm/schema
 //
 // Tables and materialized views that carry their DDL, snapshots of them, and
-// the offline diff that turns two snapshots into migration ops. Pure: nothing
-// here reads files or opens a connection. See docs/migrations.md.
+// the offline diff that turns two snapshots into migration ops. ClickHouse
+// definitions are the top-level exports; Postgres ones live under `pg`
+// (`S.pg.table`). Pure: nothing here reads files or opens a connection. See
+// docs/migrations.md.
+
+export * as pg from "./schema/pg-define"
 
 export {
 	column,
@@ -28,8 +32,12 @@ export {
 	type TableDefinition,
 } from "./schema/define"
 export {
+	ClickHouseSnapshot,
 	ColumnDefault,
 	ColumnEntity,
+	PgSnapshot,
+	type AnySchemaEntity,
+	type SchemaDialect,
 	EngineSpec,
 	IndexEntity,
 	MaterializedViewEntity,
@@ -55,6 +63,35 @@ export {
 	renderSchema,
 	type RenderOptions,
 } from "./schema/render"
-export { MigrationFile, MigrationOp, labelOf, renderOp, type OpLabel } from "./schema/ops"
-export { entitiesOf, isSchemaObject, makeSnapshot, serializeSnapshot, type SchemaObject } from "./schema/snapshot"
+export { ClickHouseMigrationFile, MigrationFile, MigrationOp, labelOf, renderOp, type OpLabel } from "./schema/ops"
+export {
+	dialectOfObject,
+	entitiesOf,
+	isSchemaObject,
+	makeSnapshot,
+	pgEntitiesOf,
+	serializeSnapshot,
+	type SchemaObject,
+} from "./schema/snapshot"
+export {
+	PgColumnEntity,
+	PgForeignKeyEntity,
+	PgIdentity,
+	PgIndexEntity,
+	PgReferentialAction,
+	PgSchemaEntity,
+	PgTableEntity,
+	canonicalPgType,
+} from "./schema/pg-entities"
+export {
+	PgMigrationFile,
+	PgMigrationOp,
+	labelOfPg,
+	pgIdent,
+	renderPgOp,
+	renderPgSchema,
+	type PgOpLabel,
+} from "./schema/pg-ops"
+export { diffPgSchemas } from "./schema/pg-diff"
+export { fromDrizzleSnapshot, type DrizzleImport } from "./schema/drizzle"
 export { Hint, Hints, diffSchemas, type DiffResult, type UnsupportedChange } from "./schema/diff"
