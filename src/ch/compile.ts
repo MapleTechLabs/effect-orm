@@ -61,7 +61,15 @@ const lockClause = (lock: import("./query").LockClause | undefined): string | un
 	if (lock.skipLocked === true && lock.noWait === true) {
 		throw new QueryBuilderDefect({ message: "CHQuery: a lock takes skipLocked or noWait, not both" })
 	}
-	const of = lock.of !== undefined && lock.of.length > 0 ? ` OF ${lock.of.map(quoteIdentPath).join(", ")}` : ""
+	// Postgres takes only unqualified names here, so `public.jobs` is refused, not quoted.
+	for (const name of lock.of ?? []) {
+		if (name.includes(".")) {
+			throw new QueryBuilderDefect({
+				message: `CHQuery: FOR ${lock.strength} OF ${JSON.stringify(name)}: name the table by its alias or unqualified name`,
+			})
+		}
+	}
+	const of = lock.of !== undefined && lock.of.length > 0 ? ` OF ${lock.of.map(quoteIdent).join(", ")}` : ""
 	const wait = lock.skipLocked === true ? " SKIP LOCKED" : lock.noWait === true ? " NOWAIT" : ""
 	return `FOR ${lock.strength}${of}${wait}`
 }
@@ -848,14 +856,27 @@ function compileInner<
 		const sqlQuery: SqlQuery = {
 			distinct: state.distinct !== undefined,
 			distinctOn: Array.isArray(state.distinct)
-				? state.distinct.map((key) => {
+				? (state.distinct.length === 0
+						? (() => {
+								throw new QueryBuilderDefect({ message: "CHQuery: distinctOn() needs at least one key" })
+							})()
+						: state.distinct
+					).map((key: string) => {
 						if (!(options?.selectKeys ?? keys).includes(key)) {
 							throw new QueryBuilderDefect({ message: `CHQuery: distinctOn(${JSON.stringify(key)}) is not a selected alias` })
 						}
 						return raw(quoteIdent(key))
 					})
 				: undefined,
-			lock: lockClause(state.lock),
+			lock: (() => {
+				// Postgres refuses a lock on rows that are no longer table rows; say so here.
+				if (state.lock !== undefined && (state.distinct !== undefined || state.groupByKeys.length > 0 || state.havingFn !== undefined)) {
+					throw new QueryBuilderDefect({
+						message: `CHQuery: FOR ${state.lock.strength} cannot lock rows of a query with DISTINCT, GROUP BY or HAVING`,
+					})
+				}
+				return lockClause(state.lock)
+			})(),
 			select: selectFragments,
 			from: fromFragment,
 			joins,
@@ -1166,6 +1187,9 @@ function compileUnionInner<Output extends Record<string, any>, Params extends Re
 	const first = state.queries[0]
 	if (first === undefined) throw new QueryBuilderDefect({ message: "unionAll requires at least one query" })
 	const selectKeys = Object.keys(selectExprsOf(first) ?? {})
+	if (state.queries.some((q) => q._state.lock !== undefined)) {
+		throw new QueryBuilderDefect({ message: "unionAll: a branch cannot take a row lock; lock in a query over the union instead" })
+	}
 	const subQueries = state.queries.map((q) =>
 		compileInner(q, params, { skipFormat: true, deferParams, nested: true, selectKeys, enclosingCtes }),
 	)

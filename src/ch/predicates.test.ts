@@ -81,6 +81,16 @@ describe("distinct", () => {
 	})
 })
 
+describe("distinctOn without keys", () => {
+	it.effect("is a defect rather than a whole-row DISTINCT", () =>
+		Effect.gen(function* () {
+			const keys: ReadonlyArray<"org"> = []
+			const q = CH.from(Jobs).select("org").distinctOn(...(keys as unknown as ["org"]))
+			expect(failure(yield* Effect.exit(PG.compile(q)))).toBeInstanceOf(QueryBuilderDefect)
+		}),
+	)
+})
+
 describe("row locking", () => {
 	it("FOR UPDATE / NO KEY UPDATE / SHARE / KEY SHARE with OF, SKIP LOCKED and NOWAIT, after LIMIT", () => {
 		const base = CH.from(Jobs).select("id").where(($) => [$.state.eq("queued")]).limit(1)
@@ -93,13 +103,19 @@ describe("row locking", () => {
 		expect(tail(base.forShare().forUpdate())).toBe("FOR UPDATE")
 	})
 
-	it.effect("is a defect on ClickHouse and with skipLocked and noWait together", () =>
+	it.effect("is a defect on ClickHouse, with skipLocked and noWait together, and where Postgres refuses a lock", () =>
 		Effect.gen(function* () {
 			const base = CH.from(Jobs).select("id")
-			expect(failure(yield* Effect.exit(CH.compile(base.forUpdate(), {})))).toBeInstanceOf(QueryBuilderDefect)
-			expect(failure(yield* Effect.exit(PG.compile(base.forUpdate({ skipLocked: true, noWait: true }), {})))).toBeInstanceOf(
-				QueryBuilderDefect,
-			)
+			const defect = function* (q: Effect.Effect<unknown, unknown>) {
+				expect(failure(yield* Effect.exit(q))).toBeInstanceOf(QueryBuilderDefect)
+			}
+			yield* defect(CH.compile(base.forUpdate(), {}))
+			yield* defect(PG.compile(base.forUpdate({ skipLocked: true, noWait: true }), {}))
+			yield* defect(PG.compile(base.forUpdate({ of: ["public.jobs"] }), {}))
+			yield* defect(PG.compile(base.distinct().forUpdate(), {}))
+			yield* defect(PG.compile(CH.from(Jobs).select("org").groupBy("org").forShare(), {}))
+			yield* defect(PG.compileUnion(CH.unionAll(base.forUpdate(), base), {}))
+			expect(PG.compileUnsafe(base.forUpdate({ of: ["jobs"] })).sql).toMatch(/FOR UPDATE OF "jobs"$/)
 		}),
 	)
 })

@@ -156,9 +156,11 @@ CH.from(Jobs)
 // … LIMIT 1 FOR UPDATE SKIP LOCKED
 ```
 
-A lock lasts until the transaction ends, so run the query inside `Database.transaction`.
-`skipLocked` and `noWait` together, and any lock on ClickHouse (which has no row locks), are a
-`QueryBuilderDefect`.
+A lock lasts until the transaction ends, so run the query inside `Database.transaction`. These
+are a `QueryBuilderDefect`, refused before anything is sent: `skipLocked` and `noWait` together;
+a qualified name in `of` (use the alias or `jobs`, not `public.jobs`); a lock on a query with
+DISTINCT, GROUP BY or HAVING, or on a `unionAll` branch, which Postgres refuses; and any lock on
+ClickHouse, which has no row locks.
 
 ## `withCTE`
 
