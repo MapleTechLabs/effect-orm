@@ -1464,6 +1464,35 @@ const valueCells = (table: Table<string, ColumnDefs>, params: Record<string, unk
 	return { values, cell }
 }
 
+/**
+ * The subquery compiler a write's expressions render under, recording what
+ * each subquery reads: a write that reads another tenant's rows through a
+ * subquery is cross-tenant, as a query that does is. A string subquery could
+ * read anything.
+ */
+const recordingSubqueries = (values: Record<string, unknown>, reads: Array<TenantSource>) =>
+	(subquery: Parameters<Parameters<typeof withSubqueryCompiler>[0]>[0]): string => {
+		if (typeof subquery === "string") {
+			reads.push({ scope: "cross-tenant" })
+			return subquery
+		}
+		const compiled = compileInner(subquery, values, { skipFormat: true, nested: true })
+		reads.push({ scope: compiled.tenantScope, bound: tenantBoundOf(compiled) })
+		return compiled.sql
+	}
+
+/** A write's own scope combined with what its subqueries read. */
+const withReads = (
+	own: { readonly scope: TenantScope; readonly bound: string | undefined },
+	reads: ReadonlyArray<TenantSource>,
+): { readonly scope: TenantScope; readonly bound: string | undefined } => {
+	if (reads.length === 0) return own
+	const derived = deriveTenantScope([{ scope: own.scope, bound: own.bound }, ...reads], [], (value) =>
+		compileSqlFragment(value),
+	)
+	return { scope: derived.scope, bound: derived.scope === "single-tenant" ? derived.bound : undefined }
+}
+
 /** `column = value, ...` for a SET record, which may come from data, so a bad key is a failure. */
 const setAssignments = (
 	table: Table<string, ColumnDefs>,
@@ -1574,9 +1603,10 @@ function compileInsert(insert: CHInsert<any, any, any, any>, params: Record<stri
 		else bounds.add(inlineParams(sql, values))
 	}
 
+	const reads: Array<TenantSource> = []
+	let readBound: string | undefined
 	const [columns, source, conflictSql, readScope] = withSubqueryCompiler(
-		(subquery) =>
-			typeof subquery === "string" ? subquery : compileInner(subquery, values, { skipFormat: true, nested: true }).sql,
+		recordingSubqueries(values, reads),
 		() => {
 			let columns: ReadonlyArray<string>
 			let source: string
@@ -1602,6 +1632,7 @@ function compileInsert(insert: CHInsert<any, any, any, any>, params: Record<stri
 				source = selected.sql
 				readScope = selected.inner.tenantScope
 				const bound = tenantBoundOf(selected.inner)
+				readBound = bound
 				if (tenant !== undefined) {
 					// The written tenant is pinned when the read is, and the row takes its
 					// tenant from a tenant column of the source or from that same value.
@@ -1635,9 +1666,14 @@ function compileInsert(insert: CHInsert<any, any, any, any>, params: Record<stri
 			: pinned && bounds.size === 1
 				? "single-tenant"
 				: "cross-tenant"
-	const tenantBound =
-		tenantScope !== "single-tenant" ? undefined : tenant === undefined ? undefined : [...bounds][0]
-	return writeCompiledQuery(rendered, "insert", tenantScope, tenantBound, returning)
+	const own = withReads(
+		{
+			scope: tenantScope,
+			bound: tenantScope !== "single-tenant" ? undefined : tenant === undefined ? readBound : [...bounds][0],
+		},
+		reads,
+	)
+	return writeCompiledQuery(rendered, "insert", own.scope, own.bound, returning)
 }
 
 /** The VALUES rows' columns, in table order, after checking every key. */
@@ -1704,19 +1740,13 @@ function compileUpdateOrDelete(
 		throw new QueryBuilderDefect({ message: `${where}: no where(); call allRows() to write every row` })
 	}
 	const conditions = (state.whereFn?.($) ?? []).filter((c): c is NonNullable<typeof c> => c != null)
-	if (state.whereFn !== undefined && conditions.length === 0 && state.allRows !== true) {
-		throw new QueryBuilderError({
-			code: "InvalidArguments",
-			message: `${where}: every where() condition was undefined, which would write every row; call allRows() if that is meant`,
-		})
-	}
 
 	const tenant = table.tenantColumn
 	const setWrites: Array<{ readonly value: unknown; readonly sql: string }> = []
 
+	const reads: Array<TenantSource> = []
 	const [assignments, whereSql] = withSubqueryCompiler(
-		(subquery) =>
-			typeof subquery === "string" ? subquery : compileInner(subquery, values, { skipFormat: true, nested: true }).sql,
+		recordingSubqueries(values, reads),
 		() => {
 			let assignments: ReadonlyArray<string> = []
 			if (write._tag === "CHUpdate") {
@@ -1727,7 +1757,14 @@ function compileUpdateOrDelete(
 					if (column === tenant) setWrites.push({ value, sql })
 				}, where, "update")
 			}
-			const rendered = conditions.map((c) => compileSqlFragment(c.toFragment()))
+			// An empty rendering (a `rawCond("")`) filters nothing, so it does not count.
+			const rendered = conditions.map((c) => compileSqlFragment(c.toFragment())).filter((sql) => sql.trim() !== "")
+			if (state.whereFn !== undefined && rendered.length === 0 && state.allRows !== true) {
+				throw new QueryBuilderError({
+					code: "InvalidArguments",
+					message: `${where}: where() gave no conditions (each was undefined or empty), which would write every row; call allRows() if that is meant`,
+				})
+			}
 			const whereSql =
 				rendered.length > 0
 					? `\nWHERE ${rendered.join("\n  AND ")}`
@@ -1769,5 +1806,6 @@ function compileUpdateOrDelete(
 				? `ALTER TABLE ${target} UPDATE ${assignments.join(", ")}`
 				: `UPDATE ${target} SET ${assignments.join(", ")}`
 	const rendered = renderParams(`${head}${whereSql}${returning?.sql ?? ""}${settings}`, values, dialect)
-	return writeCompiledQuery(rendered, kind, tenantScope, tenantScope === "single-tenant" ? tenantBound : undefined, returning)
+	const scope = withReads({ scope: tenantScope, bound: tenantScope === "single-tenant" ? tenantBound : undefined }, reads)
+	return writeCompiledQuery(rendered, kind, scope.scope, scope.bound, returning)
 }

@@ -41,9 +41,9 @@ names the record type.
 so optional filters compose. A write with no `where` would change every row, so:
 
 - compiling an UPDATE or DELETE with no `where()` is a `QueryBuilderDefect`;
-- a `where()` whose conditions all came out `undefined` is a `QueryBuilderError`, because that
-  happens with data (every optional filter absent) and would otherwise widen a filtered write to
-  the whole table;
+- a `where()` whose conditions all came out `undefined` (or render to nothing) is a
+  `QueryBuilderError`, because that happens with data (every optional filter absent) and would
+  otherwise widen a filtered write to the whole table;
 - `allRows()` says a write over every row is meant.
 
 ## RETURNING
@@ -77,7 +77,10 @@ cannot update a column of the sorting key. `returning` is refused on ClickHouse
 An UPDATE or DELETE has the scope a query over the table with the same WHERE would have:
 `"single-tenant"` when the WHERE pins the tenant column, `"cross-tenant"` otherwise (including
 `allRows()`). An UPDATE that sets the tenant column to another value moves rows out of the
-tenant, so it is `"cross-tenant"` too.
+tenant, so it is `"cross-tenant"` too. A subquery in the SET or WHERE counts as it would in a
+query: one that reads another tenant (or every tenant) makes the write `"cross-tenant"`, and a
+write into a table without a tenant column takes the scope of what its subqueries read. The
+same holds for a subquery in an insert's values or `onConflictDoUpdate`.
 
 _(Backed by `src/ch/update.test.ts`, `src/database/database.test.ts` and
 `tests/database.clickhouse.test.ts`.)_

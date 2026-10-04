@@ -80,6 +80,49 @@ describe("update", () => {
 	)
 })
 
+describe("subqueries in a write count toward its tenant scope", () => {
+	const Other = CH.table("other", { org: PG.text, key: PG.text }, { tenantColumn: "org" })
+	const Plain = CH.table("plain", { id: PG.text })
+
+	it("a WHERE subquery over every tenant makes a pinned update cross-tenant", () => {
+		const update = (inner: CH.CHQuery<any, any, any, any>) =>
+			PG.compileUnsafe(
+				CH.update(Counters)
+					.set({ count: 1 })
+					.where(($) => [$.org.eq(CH.param.string("org")), CH.inSubquery($.key, inner)]),
+				{ org: "o", other: "p" },
+			).tenantScope
+		expect(update(CH.from(Other).select(($) => ({ k: $.key })))).toBe("cross-tenant")
+		expect(update(CH.from(Other).select(($) => ({ k: $.key })).where(($) => [$.org.eq(CH.param.string("org"))]))).toBe(
+			"single-tenant",
+		)
+		expect(update(CH.from(Other).select(($) => ({ k: $.key })).where(($) => [$.org.eq(CH.param.string("other"))]))).toBe(
+			"cross-tenant",
+		)
+	})
+
+	it("an untenanted target takes the scope of what its subqueries read", () => {
+		const scope = (inner: CH.CHQuery<any, any, any, any>) =>
+			PG.compileUnsafe(CH.deleteFrom(Plain).where(($) => [CH.inSubquery($.id, inner)]), { org: "o" }).tenantScope
+		expect(scope(CH.from(Other).select(($) => ({ k: $.key })))).toBe("cross-tenant")
+		expect(scope(CH.from(Other).select(($) => ({ k: $.key })).where(($) => [$.org.eq(CH.param.string("org"))]))).toBe(
+			"single-tenant",
+		)
+		expect(PG.compileUnsafe(CH.deleteFrom(Plain).where(($) => [$.id.eq("x")])).tenantScope).toBe("untenanted")
+	})
+
+	it("a subquery in an insert's VALUES or ON CONFLICT SET counts too", () => {
+		const anyKey = CH.subqueryExpr(CH.from(Other).select(($) => ({ k: $.key })).limit(1), PG.text)
+		const pinned = { org: "o", key: "k", count: 1, meta: {} }
+		expect(PG.compileUnsafe(CH.insertInto(Counters).values({ ...pinned, key: anyKey })).tenantScope).toBe("cross-tenant")
+		expect(
+			PG.compileUnsafe(CH.insertInto(Counters).values(pinned).onConflictDoUpdate({ target: ["key"], set: { key: anyKey } }))
+				.tenantScope,
+		).toBe("cross-tenant")
+		expect(PG.compileUnsafe(CH.insertInto(Counters).values(pinned)).tenantScope).toBe("single-tenant")
+	})
+})
+
 describe("deleteFrom", () => {
 	it("writes DELETE ... WHERE ... RETURNING on Postgres and a lightweight DELETE on ClickHouse", () => {
 		const pg = PG.compileUnsafe(
@@ -97,9 +140,16 @@ describe("deleteFrom", () => {
 		expect(CH.compileUnsafe(CH.deleteFrom(Spans).allRows()).tenantScope).toBe("cross-tenant")
 	})
 
-	it.effect("refuses a delete with no where()", () =>
+	it.effect("refuses a delete with no where(), or whose conditions filter nothing", () =>
 		Effect.gen(function* () {
 			expect(failure(yield* Effect.exit(CH.compile(CH.deleteFrom(Spans))))).toBeInstanceOf(QueryBuilderDefect)
+			for (const conditions of [[], [CH.rawCond("")], [undefined, CH.rawCond("  ")]]) {
+				const error = yield* Effect.flip(PG.compile(CH.deleteFrom(Counters).where(() => conditions)))
+				expect(error.message).toContain("would write every row")
+			}
+			expect(PG.compileUnsafe(CH.deleteFrom(Counters).where(($) => [CH.rawCond(""), $.key.eq("k")])).sql).toBe(
+				'DELETE FROM "counters"\nWHERE "key" = \'k\'',
+			)
 		}),
 	)
 })
