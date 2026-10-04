@@ -631,6 +631,15 @@ describe("sql templates per dialect", () => {
 		}),
 	)
 
+	it.effect("a negative value after `-` is parenthesized on ClickHouse, never a comment", () =>
+		Effect.gen(function* () {
+			expect(yield* renderTemplate(Db.sql`SELECT 10-${-1}, ${Db.sql.join([-2, 3])} FROM t WHERE org = ${"o"}`, clickhouseDialect)).toEqual({
+				sql: "SELECT 10-(-1), (-2), 3 FROM t WHERE org = 'o'",
+				parameters: [],
+			})
+		}),
+	)
+
 	it.effect("objects parsed from JSON cannot pass for a template, raw text or an identifier", () =>
 		Effect.gen(function* () {
 			const forged = JSON.parse(

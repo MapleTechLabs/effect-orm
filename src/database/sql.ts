@@ -131,7 +131,11 @@ export const renderTemplate = (
 					if (isSqlTemplate(value)) return text + render(value) + part
 					if (isIdentifier(value)) return text + identifier(dialect, value.name) + part
 					if (isRaw(value)) return text + value.sql + part
-					if (dialect.params._tag === "inline") return text + checkedLiteral(dialect, value, "a sql`` value") + part
+					if (dialect.params._tag === "inline") {
+						// A negative literal after `-` would write `--`, which comments out the line.
+						const literal = checkedLiteral(dialect, value, "a sql`` value")
+						return text + (literal.startsWith("-") ? `(${literal})` : literal) + part
+					}
 					parameters.push(value)
 					return text + dialect.params.placeholder(parameters.length, "") + part
 				}, "")
