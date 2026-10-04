@@ -12,6 +12,13 @@ import { DatabaseError } from "./errors"
 
 const SqlTemplateTag = "@maple-dev/effect-orm/SqlTemplate"
 const IdentifierTag = "@maple-dev/effect-orm/SqlIdentifier"
+const RawTag = "@maple-dev/effect-orm/SqlTemplateRaw"
+
+/** SQL text spliced as-is. From `sql.raw`. */
+export interface SqlRawText {
+	readonly _tag: typeof RawTag
+	readonly sql: string
+}
 
 /** A name written as an identifier, quoted by the dialect. From `sql.identifier`. */
 export interface SqlIdentifier {
@@ -38,14 +45,35 @@ export const sql: {
 	(strings: TemplateStringsArray, ...values: ReadonlyArray<unknown>): SqlTemplate
 	/** A table or column name, quoted by the dialect: `sql\`SELECT * FROM ${sql.identifier(table)}\``. */
 	readonly identifier: (name: string) => SqlIdentifier
+	/**
+	 * Values joined by `separator` (default `sql\`, \``): a plain value is bound, a
+	 * `sql\`...\`` spliced. `sql\`id IN (${sql.join(ids)})\`` binds one value per id.
+	 */
+	readonly join: (values: ReadonlyArray<unknown>, separator?: SqlTemplate) => SqlTemplate
+	/** SQL text spliced as-is. Only for text under your control, never for input. */
+	readonly raw: (text: string) => SqlRawText
+	/** A template that writes nothing, for an optional part: `${cond ? sql\`AND x\` : sql.empty}`. */
+	readonly empty: SqlTemplate
 } = Object.assign(
 	(strings: TemplateStringsArray, ...values: ReadonlyArray<unknown>): SqlTemplate => ({
 		_tag: SqlTemplateTag,
 		strings: [...strings],
 		values,
 	}),
-	{ identifier: (name: string): SqlIdentifier => ({ _tag: IdentifierTag, name }) },
+	{
+		identifier: (name: string): SqlIdentifier => ({ _tag: IdentifierTag, name }),
+		join: (values: ReadonlyArray<unknown>, separator?: SqlTemplate): SqlTemplate => {
+			const sep: SqlTemplate = separator ?? { _tag: SqlTemplateTag, strings: [", "], values: [] }
+			const interleaved = values.flatMap((value, index) => (index === 0 ? [value] : [sep, value]))
+			return { _tag: SqlTemplateTag, strings: Array.from({ length: interleaved.length + 1 }, () => ""), values: interleaved }
+		},
+		raw: (text: string): SqlRawText => ({ _tag: RawTag, sql: text }),
+		empty: { _tag: SqlTemplateTag, strings: [""], values: [] } satisfies SqlTemplate,
+	},
 )
+
+const isRaw = (value: unknown): value is SqlRawText =>
+	typeof value === "object" && value !== null && "_tag" in value && value._tag === RawTag
 
 const isIdentifier = (value: unknown): value is SqlIdentifier =>
 	typeof value === "object" && value !== null && "_tag" in value && value._tag === IdentifierTag
@@ -84,6 +112,7 @@ export const renderTemplate = (
 					const value = current.values[index - 1]
 					if (isSqlTemplate(value)) return text + render(value) + part
 					if (isIdentifier(value)) return text + identifier(dialect, value.name) + part
+					if (isRaw(value)) return text + value.sql + part
 					if (dialect.params._tag === "inline") return text + checkedLiteral(dialect, value, "a sql`` value") + part
 					parameters.push(value)
 					return text + dialect.params.placeholder(parameters.length, "") + part

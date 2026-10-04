@@ -37,5 +37,5 @@ export {
 	TransactionUnsupported,
 	type TransactionError,
 } from "./database/errors"
-export { sql, type SqlIdentifier, type SqlTemplate } from "./database/sql"
+export { sql, type SqlIdentifier, type SqlRawText, type SqlTemplate } from "./database/sql"
 export type { DialectTransactions, IsolationLevel, TransactionSettings } from "./ch/dialect"

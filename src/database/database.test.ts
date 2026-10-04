@@ -570,6 +570,23 @@ layer(Live, { excludeTestServices: true })("Database on PGlite", (it) => {
 		}),
 	)
 
+	it.effect("CH.sql filters jsonb with @> and a bound param, and reads a typed cast", () =>
+		Effect.gen(function* () {
+			yield* Db.execute(Db.sql`CREATE TABLE docs2 (id int4 PRIMARY KEY, meta jsonb NOT NULL)`)
+			const Docs = CH.table("docs2", { id: PG.int4, meta: PG.jsonb() })
+			yield* Db.run(CH.insertInto(Docs).values([{ id: 1, meta: { tier: "gold", n: 1 } }, { id: 2, meta: { tier: "free" } }]))
+			const rows = yield* Db.run(
+				CH.from(Docs)
+					.select(($) => ({ id: $.id, tier: CH.sql(PG.text)`${$.meta}->>'tier'`, xid: CH.sql(PG.text)`pg_current_xact_id()::xid::text` }))
+					.where(($) => [CH.sql.cond`${$.meta} @> ${CH.param.string("filter")}::jsonb`]),
+				{ filter: JSON.stringify({ tier: "gold" }) },
+			)
+			expect(rows).toHaveLength(1)
+			expect(rows[0]).toMatchObject({ id: 1, tier: "gold" })
+			expect(typeof rows[0]!.xid).toBe("string")
+		}),
+	)
+
 	it.effect("an insert inside a failed transaction rolls back", () =>
 		Effect.gen(function* () {
 			const table = yield* freshTable
@@ -596,6 +613,20 @@ describe("sql templates per dialect", () => {
 				sql: `SELECT * FROM "app"."events" WHERE name = $1 AND n IN ($2, $3)`,
 				parameters: ["it's", 1, 2],
 			})
+		}),
+	)
+
+	it.effect("join binds each value, raw splices, empty writes nothing", () =>
+		Effect.gen(function* () {
+			const ids = [1, 2, 3]
+			const statement = Db.sql`SELECT * FROM t WHERE id IN (${Db.sql.join(ids)})${false ? Db.sql` AND x` : Db.sql.empty} ORDER BY ${Db.sql.raw("id DESC")}`
+			expect(yield* renderTemplate(statement, postgresDialect)).toEqual({
+				sql: "SELECT * FROM t WHERE id IN ($1, $2, $3) ORDER BY id DESC",
+				parameters: [1, 2, 3],
+			})
+			const or = Db.sql.join([Db.sql`a = ${1}`, Db.sql`b = ${"x"}`], Db.sql` OR `)
+			expect(yield* renderTemplate(Db.sql`WHERE ${or}`, clickhouseDialect)).toEqual({ sql: "WHERE a = 1 OR b = 'x'", parameters: [] })
+			expect(yield* renderTemplate(Db.sql.join([]), postgresDialect)).toEqual({ sql: "", parameters: [] })
 		}),
 	)
 

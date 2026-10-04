@@ -122,6 +122,17 @@ const claimed = yield* Db.query(
 )  // ReadonlyArray<{ org_id: string; family: string }>
 ```
 
+`sql.join(values, separator?)` binds one value per item (or splices a `sql` item), joined by
+`sql\`, \`` unless you pass another separator; `sql.raw(text)` splices text you control; and
+`sql.empty` writes nothing, for an optional part:
+
+```ts
+Db.sql`SELECT * FROM t WHERE id IN (${Db.sql.join(ids)})${archived ? Db.sql` AND archived` : Db.sql.empty}`
+```
+
+For SQL inside a builder query rather than a whole statement, use
+[`CH.sql`](./extending.md#chsql--sql-templates-inside-a-query).
+
 `query` and `execute` also take a plain `{ sql, parameters }` for SQL you have as text.
 
 `FromSqlClientOptions`:

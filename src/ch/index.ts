@@ -76,6 +76,9 @@ export {
 	dynamicColumn,
 } from "./expr"
 
+// SQL templates inside expressions and conditions.
+export { sql, type SqlIdent, type SqlRaw, type SqlTag, type SqlTemplateValue } from "./sql-template"
+
 // Subquery conditions. These accept a `CHQuery` as well as raw SQL, so they
 // supersede the string-only `exists`/`inSubquery` still exported from `./expr`
 // for direct subpath importers.

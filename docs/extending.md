@@ -152,9 +152,47 @@ literal for all three.
 
 _(Backed by `src/ch/literal.test.ts > param.of`.)_
 
+## `CH.sql` — SQL templates inside a query
+
+For SQL the builder has no syntax for — a cast, an operator, a Postgres function — write a
+template. It is an expression (or, with `.cond`, a condition), so it goes anywhere the builder
+takes one: a select, a `where`, a join's ON, an UPDATE's SET.
+
+```ts
+CH.from(Keys)
+	.select(($) => ({
+		txid: CH.sql(PG.text)`pg_current_xact_id()::xid::text`,
+		next: CH.sql(PG.int8)`${$.uses} + ${1}`,
+	}))
+	.where(($) => [CH.sql.cond`${$.meta} @> ${CH.param.string("filter")}::jsonb`])
+// SELECT pg_current_xact_id()::xid::text AS "txid", "keys"."uses" + 1 AS "next" …
+// WHERE "keys"."meta" @> $1::jsonb
+```
+
+Each `${value}` renders as the rest of the builder renders it:
+
+| Value | Renders as |
+| --- | --- |
+| a column, expression, or another template | its SQL |
+| a `param.*` | a placeholder: bound on Postgres, a literal on ClickHouse |
+| a builder query | `(subquery)`, compiled with the outer query, its tenant scope counted |
+| a string, number, boolean, `Date`, `DateTime.Utc`, `null` | the dialect's escaped literal |
+| `CH.sql.ident(name)` | the name quoted by the dialect; plain names only, dotted for `schema.table` |
+| `CH.sql.raw(text)` | the text as-is — never from input |
+| `CH.sql.join(values, separator?)` | each value rendered, joined by `", "` or `separator` |
+
+An array or object has no literal the template could write without its SQL type, so it fails the
+compile with a `QueryBuilderError`; pass it as `param.of(type, name)` instead. `CH.sql(type)`
+declares the result type, which decodes the value when it is selected; a bare ``CH.sql`…` ``
+has none and costs the query its row schema, as `untypedExpr` does. A template condition is not
+evidence of tenant scope.
+
+_(Backed by `src/ch/sql-template.test.ts` and `src/database/database.test.ts`.)_
+
 ## Raw escape hatches
 
-`rawExpr` and `rawCond` take a SQL string as-is. `rawExpr` still requires the column type its
+`rawExpr` and `rawCond` take a SQL string as-is; prefer `CH.sql`, which renders values and
+params instead of taking text. `rawExpr` still requires the column type its
 SQL produces, so the row it lands in can still be decoded:
 
 ```ts
