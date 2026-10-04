@@ -25,8 +25,9 @@ import type { CHType, ColumnDefs, InferTS } from "./types"
  *
  * A value is the decoded type (a branded id stays branded), plus the extra
  * forms a comparison accepts (`Date` or a string for a `DateTime`). A param or
- * expression may be of the widened primitive, as in a comparison, so a branded
- * column takes `param.string`.
+ * expression may be of the widened type, as in a comparison: a literal-union
+ * column takes `param.string`, a branded one only a param of its own type
+ * (`param.of(type, name)`).
  */
 export type InsertValue<Col extends CHType<string, any, any>> =
 	| Comparable<InferTS<Col>>
@@ -72,9 +73,9 @@ type SelectedRow<Q> = Q extends { readonly _phantom?: { readonly output: infer O
 
 /** Selected columns the table cannot take: not an insertable column, or of another type. */
 export type InsertSelectMisfits<Output, Cols extends ColumnDefs, Computed extends string = never> = {
-	// The rule `values` and comparisons use: a column takes its widened
-	// primitive, so a branded column takes a plain string. That also lets a plain
-	// string into a literal-union column; the server checks those values.
+	// The rule `values` and comparisons use: a column takes its widened type. A
+	// literal-union column takes a plain string (the server checks the value); a
+	// branded column takes only its brand.
 	[K in keyof Output]: K extends Exclude<keyof Cols & string, Known<Computed>>
 		? [Output[K]] extends [InferTS<Cols[K]> | Widen<InferTS<Cols[K]>>]
 			? never

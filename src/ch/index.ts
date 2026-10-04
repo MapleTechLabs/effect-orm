@@ -43,10 +43,11 @@ export {
 	array,
 	nullable,
 	custom,
+	brand,
 } from "./types"
 
 // Table
-export { type Table, type TableOptions, table } from "./table"
+export { type SelectRowOf, type Table, type TableOptions, table } from "./table"
 
 // Core expression primitives
 export {

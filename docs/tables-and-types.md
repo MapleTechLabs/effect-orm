@@ -150,6 +150,61 @@ their JSON representation. Match your existing database schema rather than redes
 physical table to fit this library's constructors. For a `LowCardinality(String)` column, for
 example, `T.custom("LowCardinality(String)", Schema.String)` decodes the ordinary string it emits.
 
+## Branded columns
+
+`T.brand(type, schema)` narrows a column type with an Effect schema: a branded id, a literal
+union, a refined number. It keeps the base type's SQL type and wire codec, so `brand(PG.int8,
+Cents)` still reads the string node-postgres sends, and wraps like any type:
+`nullable(brand(...))`, `array(brand(...))`.
+
+```ts title="branded-columns.ts"
+import { Schema } from "effect"
+import * as CH from "@maple-dev/effect-orm"
+import * as PG from "@maple-dev/effect-orm/postgres"
+
+const OrgId = Schema.String.check(Schema.isMinLength(1)).pipe(Schema.brand("OrgId"))
+const UserId = Schema.String.pipe(Schema.brand("UserId"))
+
+// Declare the column type once; tables and params both use it.
+const orgId = PG.brand(PG.text, OrgId)
+
+const Dashboards = CH.table("dashboards", {
+	org_id: orgId,
+	id: PG.text,
+	owner: PG.nullable(PG.brand(PG.text, UserId)),
+})
+
+export type Dashboard = CH.SelectRowOf<typeof Dashboards>
+// { readonly org_id: OrgId; readonly id: string; readonly owner: UserId | null }
+
+export const byOrg = CH.from(Dashboards)
+	.select("id", "owner")
+	.where(($) => [$.org_id.eq(CH.param.of(orgId, "orgId"))])
+
+export const compiled = PG.compileUnsafe(byOrg, { orgId: OrgId.make("org_1") })
+
+declare const userId: typeof UserId.Type
+// @ts-expect-error a UserId is not an OrgId
+CH.from(Dashboards).select("id").where(($) => [$.org_id.eq(userId)])
+```
+
+A brand is strict everywhere it is written or compared:
+
+- **Rows** decode to the brand, and `SelectRowOf<typeof table>` names the whole row.
+- **Comparisons** (`eq`, `in_`, `between`, joins) take a value of the brand, a column of the same
+  brand, or a param declared with the type: `CH.param.of(orgId, "orgId")`, whose value
+  `compile` then requires to be an `OrgId`. A plain string, another brand, `param.string`, or an
+  unbranded column is a type error.
+- **Inserts and updates** take the brand, a param of it, or an expression of it.
+- **Checks run both ways.** A row that fails the schema's checks is a decode error; a literal or
+  param value that fails them is a `QueryBuilderError` from `compile`.
+
+A literal union (`brand(PG.text, Schema.Literals(["open", "closed"]))`) is not a brand: it
+compares against any string, and the database checks the value.
+
+`T.custom("String", OrgId)` brands the same way, but replaces the wire codec with `OrgId` itself;
+prefer `brand` over a built-in type whose codec does work (numbers, timestamps).
+
 `T.untyped(sqlType)` accepts an unknown field without validating it. Unlike `CH.untypedExpr`, it
 supplies a `Schema.Unknown` codec, so other selected fields can still be validated. The unknown
 field itself has no guarantee. Prefer a real custom codec where you know the wire representation.

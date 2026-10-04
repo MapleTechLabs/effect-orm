@@ -37,6 +37,7 @@ export {
 	 * because a `custom()` type of your own almost always wants it.
 	 */
 	CHNumber,
+	brand,
 	custom,
 	dateTime,
 	dateTime64,

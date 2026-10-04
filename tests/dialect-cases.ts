@@ -1,6 +1,6 @@
 // Fixtures use only public entry points, resolved through the package's built dist.
 // Raw SQL supplies deterministic input rows; the operation under test uses the DSL.
-import { DateTime } from "effect"
+import { DateTime, Schema } from "effect"
 import * as CH from "@maple-dev/effect-orm"
 import * as F from "@maple-dev/effect-orm/expr"
 import * as T from "@maple-dev/effect-orm/types"
@@ -730,6 +730,8 @@ const typeFixtures = [
 	["array", T.array(T.nullable(T.int64)), "[toNullable(toInt64(42)), NULL]", [42, null]],
 	["map", T.map(T.string, T.array(T.uint64)), "map('key', [toUInt64(42)])", { key: [42] }],
 	["nullable", T.nullable(T.string), "CAST(NULL AS Nullable(String))", null],
+	// A brand over UInt64 keeps the base codec, so a quoted 64-bit value still decodes.
+	["brand", T.brand(T.uint64, Schema.Number.pipe(Schema.brand("Count"))), "toUInt64(42)", 42],
 ] as const
 
 export const typeCases: readonly DialectCase[] = typeFixtures.map(([name, type, sql, expected]) => ({

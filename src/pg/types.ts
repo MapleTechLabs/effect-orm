@@ -8,7 +8,7 @@
 // form a common driver sends, the way `CHNumber` accepts a quoted 64-bit integer.
 
 import { DateTime, Schema, SchemaGetter } from "effect"
-import { chDateTimeToIso, custom, type CHType, type InferEncoded, type InferTS } from "../ch/types"
+import { brand, chDateTimeToIso, custom, type CHType, type InferEncoded, type InferTS } from "../ch/types"
 
 /** A Postgres column type. The ClickHouse descriptor under a dialect-neutral name. */
 export type PgType<Tag extends string, A, I = A> = CHType<Tag, A, I>
@@ -154,4 +154,4 @@ export const nullable = <T extends PgType<string, any, any>>(t: T): PgNullable<T
 	element: t,
 }) as PgNullable<T>
 
-export { custom }
+export { brand, custom }

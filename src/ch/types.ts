@@ -352,6 +352,31 @@ export const custom = <const Sql extends string, A, I>(
 ): CHType<Sql, A, I> => chType(sql, sql, schema, literalSchema)
 
 /**
+ * A column type narrowed by a schema: a branded id, a literal union, a refined
+ * number. `brand(PG.text, OrgId)` keeps the base's SQL type and wire codec and
+ * decodes on through `schema`, so rows hold an `OrgId`, inserts and comparisons
+ * take one, and `param.of(type, name)` is a param of it.
+ *
+ * `schema` encodes to the base's value (`OrgId` encodes to `string`). Its
+ * checks run both ways: a row that fails them is a decode error, and a literal
+ * or param value that fails them is a `QueryBuilderError` at compile.
+ *
+ * Wrap a nullable or array column from the inside: `nullable(brand(text, OrgId))`,
+ * `array(brand(text, OrgId))`.
+ */
+export const brand = <const Tag extends string, A, I, B>(
+	base: CHType<Tag, A, I>,
+	schema: Schema.Codec<B, A>,
+): CHType<Tag, B, I> =>
+	chType(
+		base._tag,
+		base.sql,
+		base.schema.pipe(Schema.decodeTo(schema)) as Schema.Codec<B, I>,
+		base.literalSchema.pipe(Schema.decodeTo(schema as Schema.Codec<B, unknown>)) as Schema.Codec<unknown, unknown>,
+		base.element,
+	)
+
+/**
  * An `AggregateFunction(fn, args…)` state column.
  *
  * The value is ClickHouse's opaque binary state, only ever consumed by a

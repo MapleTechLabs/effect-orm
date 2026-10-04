@@ -50,8 +50,8 @@ type SelectRecord = Record<string, Expr<any>>
  * Read each selected expression's output type off its `_phantom` property
  * rather than `S[K] extends Expr<infer T>`. Structural inference prefers the
  * contravariant candidates in the comparison methods, and those are widened
- * (`Widen<TSType>`) so branded columns accept plain params — inferring through
- * them resolved a branded column's output to the bare primitive. The indexed
+ * (`Widen<TSType>`) so literal-union columns accept plain params — inferring
+ * through them resolved such a column's output to the bare primitive. The indexed
  * read is exact; `Exclude` only strips the `undefined` that `_phantom`'s
  * optionality adds, so a `Nullable(...)` column's `| null` survives.
  */
