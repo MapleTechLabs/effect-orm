@@ -5,7 +5,19 @@
 
 import type { ColumnDefs } from "./types"
 
-export interface Table<Name extends string, Columns extends ColumnDefs> {
+/**
+ * `Defaulted` and `Computed` describe inserts: the columns an insert may leave
+ * out because the database fills them, and the ones it may not write at all
+ * (ClickHouse `MATERIALIZED` and `ALIAS`). Both default to `string`, read as
+ * "unknown", so a `Table` with more of either still satisfies a `Table<N, C>`
+ * written without them; the insert row type treats a bare `string` as none.
+ */
+export interface Table<
+	Name extends string,
+	Columns extends ColumnDefs,
+	Defaulted extends string = string,
+	Computed extends string = string,
+> {
 	readonly _tag: "Table"
 	readonly name: Name
 	readonly columns: Columns
@@ -21,21 +33,33 @@ export interface Table<Name extends string, Columns extends ColumnDefs> {
 	 * satisfy a `Table` type declared with fewer.
 	 */
 	readonly tenantColumn?: string
+	/** Columns with a database default, which an insert may leave out. */
+	readonly defaults?: ReadonlyArray<Defaulted>
+	/** Columns the database computes, which an insert may not write. */
+	readonly computed?: ReadonlyArray<Computed>
 }
 
-export interface TableOptions<Columns extends ColumnDefs> {
+export interface TableOptions<Columns extends ColumnDefs, Defaulted extends keyof Columns & string = never> {
 	readonly tenantColumn?: keyof Columns & string
+	/**
+	 * Columns the database fills when an insert leaves them out: a Postgres
+	 * `serial` or `DEFAULT now()`, a ClickHouse `DEFAULT`. Nullable columns are
+	 * optional in an insert without being listed. `defineTable` works this out
+	 * from its column options.
+	 */
+	readonly defaults?: ReadonlyArray<Defaulted>
 }
 
-export function table<const Name extends string, const Columns extends ColumnDefs>(
-	name: Name,
-	columns: Columns,
-	options?: TableOptions<Columns>,
-): Table<Name, Columns> {
+export function table<
+	const Name extends string,
+	const Columns extends ColumnDefs,
+	const Defaulted extends keyof Columns & string = never,
+>(name: Name, columns: Columns, options?: TableOptions<Columns, Defaulted>): Table<Name, Columns, Defaulted, never> {
 	return {
 		_tag: "Table",
 		name,
 		columns,
 		...(options?.tenantColumn !== undefined ? { tenantColumn: options.tenantColumn } : undefined),
+		...(options?.defaults !== undefined && options.defaults.length > 0 ? { defaults: [...options.defaults] } : undefined),
 	}
 }

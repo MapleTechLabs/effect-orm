@@ -94,8 +94,17 @@ export const postgresDialect: Dialect = {
 		_tag: "bind",
 		placeholder: (index, kind) => (Object.hasOwn(placeholderCasts, kind) ? `$${index}::${placeholderCasts[kind]}` : `$${index}`),
 		reuse: true,
+		// The wire protocol counts parameters in an Int16.
+		maxParameters: 65535,
 	},
-	clauses: { format: false, derivedTableAlias: true, groupByAlias: false, parenthesizeUnionBranches: true },
+	clauses: {
+		format: false,
+		derivedTableAlias: true,
+		groupByAlias: false,
+		parenthesizeUnionBranches: true,
+		returning: true,
+		onConflict: true,
+	},
 	paramCodecs: {
 		bool: Schema.Boolean,
 		dateTime: PgTimestampLiteral,

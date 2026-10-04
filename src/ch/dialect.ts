@@ -38,6 +38,12 @@ export type ParamStyle =
 			 * a param used twice is bound twice.
 			 */
 			readonly reuse: boolean
+			/**
+			 * The most values one statement may bind, when the server has a limit
+			 * (Postgres: 65535). A statement over it fails to compile, rather than
+			 * at the server or by being split into several statements.
+			 */
+			readonly maxParameters?: number
 	  }
 
 /** Clauses that exist in some dialects and not others. */
@@ -53,6 +59,15 @@ export interface DialectClauses {
 	/** Whether each `UNION ALL` branch is wrapped in parentheses. Postgres needs
 	 *  it for a branch with its own WITH, ORDER BY or LIMIT. */
 	readonly parenthesizeUnionBranches: boolean
+	/** `RETURNING` after an INSERT. Absent means no: an insert with
+	 *  `.returning()` fails to compile for the dialect. */
+	readonly returning?: boolean
+	/** `ON CONFLICT ... DO NOTHING / DO UPDATE` after an INSERT. Absent means
+	 *  no: an insert with `onConflict*` fails to compile for the dialect. */
+	readonly onConflict?: boolean
+	/** `SETTINGS` on an INSERT (ClickHouse). Absent means no: an insert with
+	 *  `.settings()` fails to compile for the dialect. */
+	readonly insertSettings?: boolean
 }
 
 /** A transaction isolation level. `read uncommitted` is left out: Postgres runs it as `read committed`. */
@@ -132,7 +147,15 @@ export const clickhouseDialect: Dialect = {
 	literal: sqlLiteral,
 	dateTimeLiteral: (value) => quoteClickHouseString(chDateTimeLiteral(value)),
 	params: { _tag: "inline" },
-	clauses: { format: true, derivedTableAlias: false, groupByAlias: true, parenthesizeUnionBranches: false },
+	clauses: {
+		format: true,
+		derivedTableAlias: false,
+		groupByAlias: true,
+		parenthesizeUnionBranches: false,
+		returning: false,
+		onConflict: false,
+		insertSettings: true,
+	},
 	transactions: noTransactions,
 }
 

@@ -143,7 +143,7 @@ export interface Condition {
 // Core helpers (exported for define-fn.ts and consumer extensibility)
 
 /** An already-built expression or condition, rather than a value to encode. */
-const isExprLike = (value: unknown): value is Expr<unknown> =>
+export const isExprLike = (value: unknown): value is Expr<unknown> =>
 	value != null &&
 	typeof value === "object" &&
 	"_brand" in value &&

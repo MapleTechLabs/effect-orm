@@ -5,7 +5,7 @@
 
 import { PgliteClient } from "@effect/sql-pglite"
 import { assert, describe, expect, it, layer } from "@effect/vitest"
-import { Cause, Deferred, Effect, Exit, Fiber, Layer, Ref, Schedule, Schema } from "effect"
+import { Cause, DateTime, Deferred, Effect, Exit, Fiber, Layer, Ref, Schedule, Schema } from "effect"
 import * as SqlClient from "effect/sql/SqlClient"
 import * as CH from "../index"
 import * as PG from "../postgres"
@@ -364,6 +364,129 @@ layer(Live, { excludeTestServices: true })("Database on PGlite", (it) => {
 			expect(yield* op(1)).toBe(1)
 			yield* Effect.flip(op(2))
 			expect(yield* ids(table)).toEqual([1])
+		}),
+	)
+
+	it.effect("run inserts rows built with insertInto, bound and decoded back through the column codecs", () =>
+		Effect.gen(function* () {
+			yield* Db.execute(
+				Db.sql`CREATE TABLE keys (
+					id uuid PRIMARY KEY,
+					org_id text NOT NULL,
+					uses int8 NOT NULL DEFAULT 0,
+					created_at timestamptz NOT NULL DEFAULT now(),
+					revoked boolean NOT NULL DEFAULT false,
+					meta jsonb,
+					tags text[] NOT NULL,
+					note text
+				)`,
+			)
+			const Keys = CH.table(
+				"keys",
+				{
+					id: PG.uuid,
+					org_id: PG.text,
+					uses: PG.int8,
+					created_at: PG.timestamptz,
+					revoked: PG.bool,
+					meta: PG.nullable(PG.jsonb()),
+					tags: PG.array(PG.text),
+					note: PG.nullable(PG.text),
+				},
+				{ tenantColumn: "org_id", defaults: ["uses", "created_at", "revoked"] },
+			)
+			const at = DateTime.makeUnsafe("2026-01-02T03:04:05.678Z")
+			const id = (n: number) => `00000000-0000-0000-0000-00000000000${n}`
+			const inserted = yield* Db.run(
+				CH.insertInto(Keys).values([
+					{ id: id(1), org_id: CH.param.string("org"), tags: ["a", "it's"], meta: { k: [1, 2] }, created_at: at },
+					{ id: id(2), org_id: CH.param.string("org"), tags: [], uses: 7, revoked: true, note: "n" },
+				]),
+				{ org: "o1" },
+			)
+			expect(inserted).toEqual([])
+			const returned = yield* Db.run(
+				CH.insertInto(Keys)
+					.values({ id: id(3), org_id: "o1", tags: ["z"] })
+					.returning(($) => ({ id: $.id, uses: $.uses, createdAt: $.created_at, revoked: $.revoked, tags: $.tags })),
+			)
+			expect(returned).toHaveLength(1)
+			expect(returned[0]).toMatchObject({ id: id(3), uses: 0, revoked: false, tags: ["z"] })
+			expect(DateTime.isDateTime(returned[0]!.createdAt)).toBe(true)
+			const rows = yield* Db.run(CH.from(Keys).where(($) => [$.id.neq(id(3))]).select("id", "uses", "created_at", "revoked", "meta", "tags", "note").orderBy(["id", "asc"]))
+			expect(rows[0]).toEqual({ id: id(1), uses: 0, created_at: at, revoked: false, meta: { k: [1, 2] }, tags: ["a", "it's"], note: null })
+			expect(rows[1]).toMatchObject({ id: id(2), uses: 7, revoked: true, meta: null, tags: [], note: "n" })
+		}),
+	)
+
+	it.effect("upserts with onConflictDoUpdate and skips with onConflictDoNothing", () =>
+		Effect.gen(function* () {
+			yield* Db.execute(
+				Db.sql`CREATE TABLE counters (key text PRIMARY KEY, count int8 NOT NULL, locked boolean NOT NULL DEFAULT false)`,
+			)
+			const Counters = CH.table("counters", { key: PG.text, count: PG.int8, locked: PG.bool }, { defaults: ["locked"] })
+			const bump = (key: string, by: number) =>
+				Db.run(
+					CH.insertInto(Counters)
+						.values({ key, count: by })
+						.onConflictDoUpdate({
+							target: ["key"],
+							set: ($, excluded) => ({ count: $.count.add(excluded.count) }),
+							where: ($) => $.locked.eq(false),
+						})
+						.returning("key", "count"),
+				)
+			expect(yield* bump("a", 1)).toEqual([{ key: "a", count: 1 }])
+			expect(yield* bump("a", 2)).toEqual([{ key: "a", count: 3 }])
+			yield* Db.execute(Db.sql`UPDATE counters SET locked = true WHERE key = 'a'`)
+			// The WHERE skips a locked row: nothing is updated, so nothing returns.
+			expect(yield* bump("a", 5)).toEqual([])
+			const skipped = yield* Db.run(
+				CH.insertInto(Counters)
+					.values([{ key: "a", count: 100 }, { key: "b", count: 1 }])
+					.onConflictDoNothing({ target: ["key"] })
+					.returning("key"),
+			)
+			expect(skipped).toEqual([{ key: "b" }])
+			expect(yield* Db.run(CH.from(Counters).select("key", "count").orderBy(["key", "asc"]))).toEqual([
+				{ key: "a", count: 3 },
+				{ key: "b", count: 1 },
+			])
+		}),
+	)
+
+	it.effect("insert ... select copies rows, with ON CONFLICT and RETURNING", () =>
+		Effect.gen(function* () {
+			yield* Db.execute(Db.sql`CREATE TABLE src (org text NOT NULL, n int4 NOT NULL)`)
+			yield* Db.execute(Db.sql`CREATE TABLE dst (org text PRIMARY KEY, total int8 NOT NULL)`)
+			yield* Db.execute(Db.sql`INSERT INTO src VALUES ('a', 1), ('a', 2), ('b', 5)`)
+			const Src = CH.table("src", { org: PG.text, n: PG.int4 })
+			const Dst = CH.table("dst", { org: PG.text, total: PG.int8 })
+			const rollup = CH.insertInto(Dst)
+				.select(CH.from(Src).select(($) => ({ org: $.org, total: CH.coalesce(PG.sum($.n), CH.lit(0)) })).groupBy("org"))
+				.onConflictDoUpdate({ target: ["org"], set: ($, excluded) => ({ total: $.total.add(excluded.total) }) })
+				.returning("org", "total")
+			expect(yield* Db.run(rollup)).toHaveLength(2)
+			const again = yield* Db.run(rollup)
+			expect([...again].sort((x, y) => x.org.localeCompare(y.org))).toEqual([
+				{ org: "a", total: 6 },
+				{ org: "b", total: 10 },
+			])
+		}),
+	)
+
+	it.effect("an insert inside a failed transaction rolls back", () =>
+		Effect.gen(function* () {
+			const table = yield* freshTable
+			const T = CH.table(table, { id: PG.int4, note: PG.nullable(PG.text) })
+			const exit = yield* Effect.exit(
+				Db.transaction(
+					Effect.andThen(Db.run(CH.insertInto(T).values({ id: 1 })), Effect.fail(new Domain())),
+				),
+			)
+			expect(Exit.isFailure(exit)).toBe(true)
+			yield* Db.run(CH.insertInto(T).values([{ id: 2 }, { id: 3, note: "x" }]))
+			expect(yield* ids(table)).toEqual([2, 3])
 		}),
 	)
 })

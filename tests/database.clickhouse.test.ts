@@ -2,7 +2,7 @@
 // refused before anything is sent. Creates one table in a throwaway database.
 
 import { ClickhouseClient } from "@effect/sql-clickhouse"
-import { Effect, Exit } from "effect"
+import { DateTime, Effect, Exit } from "effect"
 import { describe, expect, it } from "vitest"
 import * as CH from "@maple-dev/effect-orm"
 import * as Db from "@maple-dev/effect-orm/database"
@@ -48,6 +48,90 @@ describe("database", () => {
 				{ Id: 1, Name: "a" },
 				{ Id: 2, Name: "it's" },
 			])
+		})
+
+		it("runs an insert built with insertInto through the command path", async () => {
+			const { rows, sent } = await Effect.runPromise(
+				withDatabase((db, sent) =>
+					Effect.gen(function* () {
+						yield* db.execute(
+							Db.sql`CREATE TABLE events (
+								OrgId String,
+								Id UInt64 DEFAULT 42,
+								At DateTime64(3),
+								Attrs Map(String, String),
+								Note Nullable(String),
+								Tags Array(String),
+								Day String MATERIALIZED toString(toDate(At))
+							) ENGINE = MergeTree ORDER BY (OrgId, Id)`,
+						)
+						const Events = CH.table(
+							"events",
+							{
+								OrgId: CH.string,
+								Id: CH.uint64,
+								At: CH.dateTime64,
+								Attrs: CH.map(CH.string, CH.string),
+								Note: CH.nullable(CH.string),
+								Tags: CH.array(CH.string),
+							},
+							{ tenantColumn: "OrgId", defaults: ["Id"] },
+						)
+						const inserted = yield* db.run(
+							CH.insertInto(Events).values([
+								{ OrgId: CH.param.string("org"), At: new Date("2026-01-02T03:04:05.678Z"), Attrs: { a: "it's; x" }, Tags: ["t"], Note: null },
+								{ OrgId: CH.param.string("org"), Id: 7, At: "2026-01-02 00:00:00", Attrs: {}, Tags: [], Note: "n" },
+							]),
+							{ org: "o1" },
+						)
+						expect(inserted).toEqual([])
+						const rows = yield* db.run(
+							CH.from(Events).select("OrgId", "Id", "At", "Attrs", "Note", "Tags").orderBy(["Id", "asc"]),
+						)
+						return { rows, sent: [...sent] }
+					}),
+				),
+			)
+			expect(rows.map((row) => ({ ...row, At: DateTime.formatIso(row.At) }))).toEqual([
+				{ OrgId: "o1", Id: 7, At: "2026-01-02T00:00:00.000Z", Attrs: {}, Note: "n", Tags: [] },
+				{ OrgId: "o1", Id: 42, At: "2026-01-02T03:04:05.678Z", Attrs: { a: "it's; x" }, Note: null, Tags: ["t"] },
+			])
+			expect(sent[1]).toMatch(/^INSERT INTO events \(OrgId, Id, At, Attrs, Note, Tags\)\nVALUES \('o1', DEFAULT, /)
+		})
+
+		it("runs insert ... select with settings", async () => {
+			const rows = await Effect.runPromise(
+				withDatabase((db) =>
+					Effect.gen(function* () {
+						yield* db.execute(Db.sql`CREATE TABLE spans (OrgId String, Name String, Ms UInt64) ENGINE = MergeTree ORDER BY OrgId`)
+						yield* db.execute(Db.sql`CREATE TABLE daily (OrgId String, Name String, Total UInt64) ENGINE = MergeTree ORDER BY OrgId`)
+						const Spans = CH.table("spans", { OrgId: CH.string, Name: CH.string, Ms: CH.uint64 }, { tenantColumn: "OrgId" })
+						const Daily = CH.table("daily", { OrgId: CH.string, Name: CH.string, Total: CH.uint64 }, { tenantColumn: "OrgId" })
+						yield* db.run(
+							CH.insertInto(Spans)
+								.values([
+									{ OrgId: "o", Name: "a", Ms: 1 },
+									{ OrgId: "o", Name: "a", Ms: 2 },
+									{ OrgId: "p", Name: "b", Ms: 9 },
+								])
+								.settings({ async_insert: 0 }),
+						)
+						yield* db.run(
+							CH.insertInto(Daily)
+								.select(
+									CH.from(Spans)
+										.select(($) => ({ Total: CH.sum($.Ms), OrgId: $.OrgId, Name: $.Name }))
+										.where(($) => [$.OrgId.eq(CH.param.string("org"))])
+										.groupBy("OrgId", "Name"),
+								)
+								.settings({ max_threads: 1 }),
+							{ org: "o" },
+						)
+						return yield* db.run(CH.from(Daily).select("OrgId", "Name", "Total"))
+					}),
+				),
+			)
+			expect(rows).toEqual([{ OrgId: "o", Name: "a", Total: 3 }])
 		})
 
 		it("refuses a transaction before sending anything", async () => {

@@ -22,6 +22,10 @@ A table is a plain value — `{ _tag: "Table", name, columns }`. It is never che
 live server, so a column that does not exist in ClickHouse will typecheck happily and fail at
 query time. Treat the declaration as a contract you keep in sync with your migrations.
 
+The third argument takes options. `tenantColumn` names the column that carries tenancy (see
+[Tenant scoping](./tenant-scoping.md)); `defaults` lists the columns the database fills in when
+an insert leaves them out (see [Inserting rows](./inserts.md#which-columns-have-defaults)).
+
 ## Column types
 
 A column type is an Effect `Schema` plus the ClickHouse type name it stands for. That schema is

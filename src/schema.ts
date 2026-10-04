@@ -16,6 +16,8 @@ export {
 	type ColumnOptions,
 	type ColumnSpec,
 	type ColumnsOf,
+	type ComputedColumnsOf,
+	type DefaultedColumnsOf,
 	type DdlExpr,
 	type DdlKey,
 	type IndexSpec,

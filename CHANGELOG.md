@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+- Add `insertInto(table).values(rows)` (see `docs/inserts.md`): INSERT ... VALUES from the same
+  table definitions, for ClickHouse and Postgres. The row type requires every column that is not
+  nullable and has no default; values are encoded through the column codecs, written as literals
+  on ClickHouse and bound on Postgres; a key some rows leave out is `DEFAULT`; tenant scope is
+  derived as for queries. `compile` and `Database.run` accept an insert; `run` sends it through
+  `command` and returns no rows.
+- Add `TableOptions.defaults` for the columns an insert may leave out. `defineTable` works them
+  out from its column options and records `MATERIALIZED` / `ALIAS` columns as not insertable.
+- Add `returning` to an insert (Postgres): column names or a callback, as in `select`. `run`
+  returns the inserted rows decoded through the derived row schema; `CompiledQuery.returning`
+  lists the aliases. Add `DialectClauses.returning`, optional, absent meaning no.
+- Add `onConflictDoNothing` and `onConflictDoUpdate` to an insert (Postgres), with Drizzle's
+  options: `target` (columns or `{ constraint }`), `targetWhere`, `set` (a record, or a callback
+  over the existing row and `excluded`) and `where`. Add `DialectClauses.onConflict`, optional.
+- Add `select(query)` to an insert: `INSERT ... SELECT` from a query or union, its row checked
+  against the table at the type level. Tenant scope follows the read and where the written
+  tenant comes from.
+- Add `settings(record)` to an insert (ClickHouse): `INSERT ... SETTINGS name = value`. Add
+  `DialectClauses.insertSettings`, optional.
+- Add `CompiledQuery.kind` (`"select"` or `"insert"`); `rawCompiledQuery` takes it as an option.
+- Add `ParamStyle.maxParameters`; Postgres sets 65535, and a statement over it fails to compile.
 - Add `@maple-dev/effect-orm/database`, opt-in (see `docs/database.md`): a `Database` over the
   Effect `SqlClient` you already use. `run(query, params?)` compiles a query for the database's
   dialect, runs it and decodes its rows; `sql\`...\`` writes the other statements with every

@@ -99,12 +99,12 @@ Calling `withdraw(1, 30)` outside `transfer` does not compile: `requireTransacti
 
 ### Queries and statements
 
-`run` takes the query you built, a `unionAll`, or a query compiled elsewhere. It compiles with
+`run` takes the query you built, a `unionAll`, an `insertInto`, or a query compiled elsewhere. It compiles with
 the database's dialect, so you never pick a `compile`; `params` fills the query's `param.*`
 markers, and a missing one fails with `QueryBuilderError`. A query compiled elsewhere must
 have been compiled for the same dialect, or `run` dies: the root `compile` is ClickHouse's.
 
-`sql` writes the statements the builder does not have yet (INSERT, UPDATE, DDL, advisory
+`sql` writes the statements the builder does not have yet (UPDATE, DELETE, DDL, advisory
 locks). Each `${value}` is bound, as `$1, $2, ...` on Postgres and as an escaped literal on
 ClickHouse, so nothing in a value becomes SQL. A `sql` inside another is spliced, so
 statements compose. Names go through `sql.identifier`, which accepts only plain identifiers
@@ -247,5 +247,7 @@ fails at BEGIN today: through the query path with a syntax error, and through `a
 
 ## Writes
 
-The builder compiles SELECTs only, so far. Write INSERT, UPDATE and DELETE with `sql`, as
-above, and read `RETURNING` with `query` and a schema.
+The builder compiles SELECTs and [INSERTs](./inserts.md). `run` runs an insert and returns its
+`returning` rows, decoded, or none without `returning`; an insert without it goes through
+`command`, as `execute` does. Write UPDATE and DELETE with `sql`, as above, and read `RETURNING`
+with `query` and a schema.
