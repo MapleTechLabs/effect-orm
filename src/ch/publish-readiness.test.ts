@@ -156,7 +156,7 @@ describe("publishing regressions", () => {
 		expect(compiled.sql).toMatch(/'c' AS first,\s*'d' AS last/)
 		expect(() =>
 			CH.compileUnionUnsafe(
-				CH.unionAll(a, CH.from(One).select(() => ({ first: CH.lit("c") })) as never),
+				CH.unionAll(a, CH.from(One).select(() => ({ first: CH.lit("c") })) as unknown as typeof a),
 				{},
 			),
 		).toThrow("same column aliases")
@@ -244,6 +244,7 @@ describe("publishing regressions", () => {
 		const B = T.custom("String", Schema.Literal("b"))
 		const query = CH.from(One).select(() => ({ a: CH.param.of(A, "a"), b: CH.param.of(B, "b") }))
 		expect(CH.compileUnsafe(query, { a: "a", b: "b" }).sql).toContain("'b' AS b")
+		// @ts-expect-error -- a mistyped param is a type error too
 		expect(() => CH.compileUnsafe(query, { a: "b", b: "a" })).toThrow("not a valid value")
 	})
 

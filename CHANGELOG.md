@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+- **Breaking:** invalid queries are refused before any SQL is sent: as type errors where the
+  type can see them, otherwise as a `QueryBuilderError` / `QueryBuilderDefect` from `compile`.
+  - Params are in the query's type. `compile`, `compileUnion` and `Database.run` require every
+    `param.*` the query uses, with a value of its type (`CHQuery`, `CHUnionQuery`, `CHInsert`,
+    `CHUpdate` and `CHDelete` gain a `Params` type parameter; `Expr` and `Condition` gain `P`).
+  - A second `where()` / `having()` ANDs with the first instead of replacing it, on queries and
+    on writes.
+  - Comparisons refuse `null` (use `isNull()`); an empty `in_()` / `notIn()` is `1 = 0` / `1 = 1`.
+    `like` / `ilike` accept a nullable string.
+  - `limit` / `offset` refuse negative, fractional or non-finite values instead of rounding them.
+  - A query with no `select()` cannot be compiled, run, joined, used in `FROM`, a CTE, `EXISTS`
+    or `INSERT ... SELECT`. `unionAll` branches must agree on aliases and column types.
+    `inSubquery` / `notInSubquery` need exactly one column of a comparable type.
+  - Join aliases must be unique and must not shadow a FROM column or the FROM alias; CTE names
+    must be unique.
+  - `update().set({})` and a SET or insert row naming a column the table cannot write are type
+    errors; an UPDATE or DELETE without `where()` or `allRows()` cannot be compiled or run.
+  - An aggregate in WHERE or a join's ON, a column that is neither grouped nor aggregated, and
+    grouping by an aggregate fail to compile. SQL the builder did not write (`rawExpr`,
+    `CH.sql`, windows, `makeExpr`) is not looked inside.
+  - Built-in functions belong to a dialect: a ClickHouse function (such as `count()`) in a
+    Postgres compile fails, and the reverse. `coalesce`, `nullIf` and `lower` are portable.
+    `Dialect.functions` names a dialect's function set.
+  - `makeExpr`, `makeUntypedExpr` and `makeCond` take the expressions they interpolate as
+    `uses`, whose params the result carries; a param in the SQL that no `uses` entry carries
+    fails to compile. Their value type comes from the schema: explicit type arguments
+    (`makeExpr<T>`, `subqueryExpr<T>`, `compileTypedFnCall<R>`) are errors, so they cannot
+    silently drop params. `untypedSubqueryExpr` returns `Expr<unknown>`.
+  - `inSubquery` / `notInSubquery` check at compile time that the subquery selects one column.
 - Add `CH.sql`: SQL templates inside expressions and conditions. `CH.sql(type)\`…\`` is a typed
   `Expr`, ``CH.sql`…` `` an untyped one, `CH.sql.cond` a `Condition`; with `sql.ident`, `sql.raw`
   and `sql.join`. Interpolated columns and params render as SQL and placeholders, a builder

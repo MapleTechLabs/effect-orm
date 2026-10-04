@@ -143,6 +143,13 @@ export interface Dialect extends SqlSyntax {
 	readonly paramCodecs?: Readonly<Record<string, Schema.Codec<any, any>>>
 	/** Transaction support. Absent means none. */
 	readonly transactions?: DialectTransactions
+	/**
+	 * Which built-in function set renders correctly here: `clickhouse` (the
+	 * root entry's functions) or `postgres` (`@maple-dev/effect-orm/postgres`).
+	 * A built-in function from another set fails to compile. Absent means
+	 * unchecked: a custom dialect says which set it renders, if either.
+	 */
+	readonly functions?: string
 }
 
 /** ClickHouse, with params written into the SQL as literals. The default. */
@@ -164,6 +171,7 @@ export const clickhouseDialect: Dialect = {
 		alterTableUpdate: true,
 	},
 	transactions: noTransactions,
+	functions: "clickhouse",
 }
 
 // The dialect of the enclosing compile, beside the syntax installed for the
@@ -172,6 +180,9 @@ let current: Dialect | undefined
 
 /** The dialect of the enclosing compile, or ClickHouse outside one. */
 export const currentDialect = (): Dialect => current ?? clickhouseDialect
+
+/** The dialect of the enclosing compile, or `undefined` outside one. */
+export const activeDialect = (): Dialect | undefined => current
 
 /** Run `body` with `dialect`'s syntax installed, literals checked as above. */
 export function withDialect<A>(dialect: Dialect, body: () => A): A {

@@ -376,7 +376,7 @@ export const coreCases: readonly CoreCase[] = [
 			ctx.compile(
 				orgOrders(ctx)
 					.select(($) => ({ id: $.Id, flagged: CH.param.bool("flag") }))
-					.where(($) => [$.OrgId.eq(CH.param.string("orgId")), $.Id.eq(1)]),
+					.where(($) => [$.Id.eq(1)]),
 				{ ...org, flag: true },
 			),
 		expected: [{ id: 1, flagged: true }],
@@ -406,7 +406,7 @@ export const coreCases: readonly CoreCase[] = [
 				orgOrders(ctx)
 					.leftJoin(ctx.customers, "c", (o, c) => o.Customer.eq(c.Name).and(o.OrgId.eq(c.OrgId)))
 					.select(($) => ({ id: $.Id, tier: $.c.Tier }))
-					.where(($) => [$.OrgId.eq(CH.param.string("orgId")), $.Id.gte(3)])
+					.where(($) => [$.Id.gte(3)])
 					.orderBy(["id", "asc"]),
 				org,
 			),
@@ -492,7 +492,7 @@ export const coreCases: readonly CoreCase[] = [
 				orgOrders(ctx)
 					.crossJoinQuery(customers, "k")
 					.select(($) => ({ id: $.Id, customers: $.k.customers }))
-					.where(($) => [$.OrgId.eq(CH.param.string("orgId")), $.Id.lte(2)])
+					.where(($) => [$.Id.lte(2)])
 					.orderBy(["id", "asc"]),
 				org,
 			)
@@ -591,7 +591,7 @@ export const coreCases: readonly CoreCase[] = [
 			ctx.compile(
 				orgOrders(ctx)
 					.select(($) => ({ id: $.Id }))
-					.where(($) => [$.OrgId.eq(CH.param.string("orgId")), $.Id.eq(1)])
+					.where(($) => [$.Id.eq(1)])
 					.format("JSON"),
 				org,
 			),
@@ -606,7 +606,7 @@ export const coreCases: readonly CoreCase[] = [
 			const one = (id: number) =>
 				orgOrders(ctx)
 					.select(($) => ({ id: $.Id }))
-					.where(($) => [$.OrgId.eq(CH.param.string("orgId")), $.Id.eq(id)])
+					.where(($) => [$.Id.eq(id)])
 			return ctx.compileUnion(CH.unionAll(one(1), one(2)).orderBy(["id", "asc"]).format("JSON"), org)
 		},
 		expected: [{ id: 1 }, { id: 2 }],
@@ -620,7 +620,6 @@ export const coreCases: readonly CoreCase[] = [
 				orgOrders(ctx)
 					.select(($) => ({ id: $.Id }))
 					.where(($) => [
-						$.OrgId.eq(CH.param.string("orgId")),
 						$.Note.isNull(),
 						$.Amount.between(5, CH.param.int("hi")),
 						$.Id.notBetween(3, 3),
@@ -634,7 +633,7 @@ export const coreCases: readonly CoreCase[] = [
 		id: "is-not-null",
 		covers: e("isNotNull"),
 		build: (ctx) =>
-			ctx.compile(orgOrders(ctx).select(($) => ({ id: $.Id })).where(($) => [$.OrgId.eq(CH.param.string("orgId")), $.Note.isNotNull()]).orderBy(["id", "asc"]), org),
+			ctx.compile(orgOrders(ctx).select(($) => ({ id: $.Id })).where(($) => [$.Note.isNotNull()]).orderBy(["id", "asc"]), org),
 		expected: [{ id: 1 }, { id: 4 }],
 	},
 	{
@@ -645,7 +644,6 @@ export const coreCases: readonly CoreCase[] = [
 				orgOrders(ctx)
 					.select(($) => ({ id: $.Id }))
 					.where(($) => [
-						$.OrgId.eq(CH.param.string("orgId")),
 						CH.or(CH.and($.Status.eq("paid"), $.Amount.gt(15)), undefined, $.Customer.eq("globex")),
 					])
 					.orderBy(["id", "asc"]),
@@ -683,7 +681,7 @@ export const coreCases: readonly CoreCase[] = [
 		rejects: { clickhouse: /no row locks/ },
 		build: (ctx) => {
 			// Each strength compiles; the one sent is FOR UPDATE SKIP LOCKED.
-			const base = orgOrders(ctx).select(($) => ({ id: $.Id })).where(($) => [$.OrgId.eq(CH.param.string("orgId")), $.Id.eq(1)])
+			const base = orgOrders(ctx).select(($) => ({ id: $.Id })).where(($) => [$.Id.eq(1)])
 			for (const locked of [base.forNoKeyUpdate({ noWait: true }), base.forShare(), base.forKeyShare()]) ctx.compile(locked, org)
 			return ctx.compile(base.forUpdate({ skipLocked: true }), org)
 		},

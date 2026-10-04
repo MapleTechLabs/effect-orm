@@ -8,16 +8,17 @@
 // 4. Assembling into SqlQuery and calling the existing compileQuery()
 
 import { custom, dateTime, dateTime64, type CHType, type ColumnDefs } from "./types"
-import type { CHQuery, CHQueryState } from "./query"
+import type { CHQuery, CHQueryState, NeedsSelect } from "./query"
 import type { CHUnionQuery } from "./union"
 import { isInsert, type CHInsert } from "./insert"
 import { isDelete, isUpdate, type CHDelete, type CHUpdate } from "./update"
 import type { Table } from "./table"
 import { createColumnAccessor, createQualifiedColumnAccessor, createJoinedColumnAccessor, sourceAlias } from "./query"
-import { aliased, columnTypeOf, isExprLike, type Expr } from "./expr"
-import { raw, identPath, quoteIdent, quoteIdentPath, compile as compileSqlFragment } from "../sql/sql-fragment"
+import { aliased, columnTypeOf, isExprLike, type Condition, type Expr, type ParamsSatisfied } from "./expr"
+import { raw, identPath, quoteIdent, quoteIdentPath, compile as compileSqlFragment, type SqlFragment } from "../sql/sql-fragment"
 import { splitTerminalClauses } from "../sql/terminal-clauses"
 import { compileQuery, type SqlQuery } from "../sql/sql-query"
+import { track, untracked, type RenderTrack } from "../sql/render-tracker"
 import { PARAM_MARKER_PREFIX, PARAM_PLACEHOLDER_PATTERN, param, paramSchema, type ParamKind } from "./param"
 import { mergeResultSchemas } from "./define-fn"
 import { encodeValue } from "./literal"
@@ -95,6 +96,22 @@ const orderByClause = (specs: ReadonlyArray<[string, "asc" | "desc"]>): Array<st
 		}
 		return `${quoteIdent(column)} ${direction.toUpperCase()}`
 	})
+
+/**
+ * A `limit` / `offset` value. It often comes from a request (a page size), so a
+ * bad one is a failure, not a defect: `LIMIT -1` or `LIMIT NaN` is not SQL, and
+ * rounding `1.5` would quietly change the page.
+ */
+const rowCount = (clause: "limit" | "offset", value: number | undefined) => {
+	if (value == null) return undefined
+	if (!Number.isSafeInteger(value) || value < 0) {
+		throw new QueryBuilderError({
+			code: "InvalidArguments",
+			message: `${clause}(${value}): expected a non-negative integer`,
+		})
+	}
+	return raw(String(value))
+}
 
 /**
  * A `groupBy` key: the select alias where the dialect resolves aliases there,
@@ -556,12 +573,13 @@ export function compileCH<
 	Output extends Record<string, any>,
 	Joins extends Record<string, ColumnDefs>,
 	Route extends string | undefined,
-	Params extends Record<string, any> = {},
+	Params = never,
+	const Given extends Record<string, unknown> = {},
 	Decoded extends Output = Output,
 >(
-	query: CHQuery<Cols, Output, Joins, Route>,
-	/** Values for the query's `param.*` markers. Optional when it has none. */
-	params?: Params,
+	query: CHQuery<Cols, Output, Joins, Route, Params> & NeedsSelect<Output> & ParamsSatisfied<Params, Given>,
+	/** Values for the query's `param.*` markers: required, and typed, when it has any. */
+	params?: Given,
 	options?: {
 		skipFormat?: boolean
 		rowSchema?: CompiledQueryRowSchema<Decoded>
@@ -570,9 +588,9 @@ export function compileCH<
 	},
 ): Effect.Effect<CompiledQuery<Decoded, Route>, QueryBuilderError>
 /** An INSERT, UPDATE or DELETE. `params` fills the `param.*` markers among its values. */
-export function compileCH<Output>(
-	insert: CHWrite<Output>,
-	params?: Record<string, unknown>,
+export function compileCH<Output, Params = never, const Given extends Record<string, unknown> = {}>(
+	insert: CHWrite<Output, Params> & ParamsSatisfied<Params, Given>,
+	params?: Given,
 	options?: InsertCompileOptions,
 ): Effect.Effect<CompiledQuery<Output, undefined>, QueryBuilderError>
 export function compileCH(
@@ -584,7 +602,10 @@ export function compileCH(
 }
 
 /** A write statement: what `compile` takes besides a query. */
-export type CHWrite<Output> = CHInsert<any, any, any, Output> | CHUpdate<any, any, Output> | CHDelete<any, Output>
+export type CHWrite<Output, Params = never> =
+	| CHInsert<any, any, any, Output, Params>
+	| CHUpdate<any, any, Output, "ready", Params>
+	| CHDelete<any, Output, "ready", Params>
 
 /** What compiling a write takes: only the dialect. */
 export interface InsertCompileOptions {
@@ -592,24 +613,29 @@ export interface InsertCompileOptions {
 }
 
 /** {@link compileCH} for a `UNION ALL`. */
-export const compileUnion = <Output extends Record<string, any>, Params extends Record<string, any>>(
-	union: CHUnionQuery<Output>,
-	params: Params,
+export const compileUnion = <
+	Output extends Record<string, any>,
+	Params = never,
+	const Given extends Record<string, unknown> = {},
+>(
+	union: CHUnionQuery<Output, Params> & ParamsSatisfied<Params, Given>,
+	params?: Given,
 	options?: { rowSchema?: CompiledQueryRowSchema<Output>; deferParams?: boolean; dialect?: Dialect },
 ): Effect.Effect<CompiledQuery<Output, undefined>, QueryBuilderError> =>
-	asEffect(() => compileUnionUnsafe(union, params, options))
+	asEffect(() => compileUnionUnsafe(union as CHUnionQuery<Output>, params ?? {}, options))
 
 export function compileCHUnsafe<
 	Cols extends ColumnDefs,
 	Output extends Record<string, any>,
 	Joins extends Record<string, ColumnDefs>,
 	Route extends string | undefined,
-	Params extends Record<string, any> = {},
+	Params = never,
+	const Given extends Record<string, unknown> = {},
 	Decoded extends Output = Output,
 >(
-	query: CHQuery<Cols, Output, Joins, Route>,
-	/** Values for the query's `param.*` markers. Optional when it has none. */
-	params?: Params,
+	query: CHQuery<Cols, Output, Joins, Route, Params> & NeedsSelect<Output> & ParamsSatisfied<Params, Given>,
+	/** Values for the query's `param.*` markers: required, and typed, when it has any. */
+	params?: Given,
 	options?: {
 		skipFormat?: boolean
 		rowSchema?: CompiledQueryRowSchema<Decoded>
@@ -622,9 +648,9 @@ export function compileCHUnsafe<
 	},
 ): CompiledQuery<Decoded, Route>
 /** An INSERT, UPDATE or DELETE. `params` fills the `param.*` markers among its values. */
-export function compileCHUnsafe<Output>(
-	insert: CHWrite<Output>,
-	params?: Record<string, unknown>,
+export function compileCHUnsafe<Output, Params = never, const Given extends Record<string, unknown> = {}>(
+	insert: CHWrite<Output, Params> & ParamsSatisfied<Params, Given>,
+	params?: Given,
 	options?: InsertCompileOptions,
 ): CompiledQuery<Output, undefined>
 export function compileCHUnsafe(
@@ -689,254 +715,366 @@ function compileInner<
 		enclosingCtes?: ReadonlyArray<ResolvedCte>
 	},
 ): CompiledQuery<Decoded, Route> {
-	const state = query._state
-	const deferParams = options?.deferParams === true
+	// A nested query's columns are its own: nothing it renders reaches an
+	// enclosing query's render track.
+	return untracked(() => {
+		const state = query._state
+		const deferParams = options?.deferParams === true
 
-	// The one accessor factory — shared with `selectExprsOf`, which reads a
-	// query's output schemas without compiling it. Building a second one here is
-	// what silently dropped every joined and subquery column's type: this path
-	// passed `state.columns` (empty for a `fromQuery`/`fromUnion`) and no join
-	// columns at all, so `$.p.ServiceName` and `$.bucket` compiled to correct SQL
-	// with no schema, and the query derived nothing.
-	const $ = makeAccessor(state)
+		// The one accessor factory — shared with `selectExprsOf`, which reads a
+		// query's output schemas without compiling it. Building a second one here is
+		// what silently dropped every joined and subquery column's type: this path
+		// passed `state.columns` (empty for a `fromQuery`/`fromUnion`) and no join
+		// columns at all, so `$.p.ServiceName` and `$.bucket` compiled to correct SQL
+		// with no schema, and the query derived nothing.
+		assertDistinctNames(state)
+		const $ = makeAccessor(state)
 
-	// SELECT
-	const selectExprs = state.selectFn ? state.selectFn($) : {}
-	const keys = Object.keys(selectExprs)
-	if (
-		options?.selectKeys &&
-		(keys.length !== options.selectKeys.length ||
-			options.selectKeys.some((key) => !Object.hasOwn(selectExprs, key)))
-	) {
-		throw new QueryBuilderDefect({
-			message: "unionAll: every branch must select the same column aliases",
-		})
-	}
-	const selectFragments = (options?.selectKeys ?? keys).map((alias) => aliased(selectExprs[alias], alias))
-
-	if (selectFragments.length === 0) {
-		throw new QueryBuilderDefect({ message: "CHQuery: select() is required" })
-	}
-
-	// WHERE — resolve params by injecting values into the accessor
-	const whereConditions = state.whereFn ? state.whereFn($) : []
-	const whereFragments = whereConditions
-		.filter((c): c is NonNullable<typeof c> => c != null)
-		.map((c) => c.toFragment())
-
-	// CTEs — resolved before the FROM below, which reads their scope. A CTE given
-	// as a query is compiled here and its scope derived; one given as a string
-	// carries whatever scope the caller declared.
-	// Sequential, not `map`: each CTE is compiled with the ones before it in
-	// scope, which is the only way `WITH a AS (…), b AS (SELECT … FROM a)` can
-	// see that `b` reads a tenant-confined source.
-	const resolvedCtes: Array<ResolvedCte> = []
-	for (const c of state.ctes) {
-		if (c.query) {
-			const compiled = compileInner(c.query, params, {
-				skipFormat: true,
-				deferParams,
-				nested: true,
-				enclosingCtes: [...(options?.enclosingCtes ?? []), ...resolvedCtes],
+		// SELECT
+		const selectExprs = state.selectFn ? state.selectFn($) : {}
+		const keys = Object.keys(selectExprs)
+		if (
+			options?.selectKeys &&
+			(keys.length !== options.selectKeys.length ||
+				options.selectKeys.some((key) => !Object.hasOwn(selectExprs, key)))
+		) {
+			throw new QueryBuilderDefect({
+				message: "unionAll: every branch must select the same column aliases",
 			})
-			resolvedCtes.push({
-				name: c.name,
-				sql: compiled.sql,
-				tenantScope: compiled.tenantScope,
-				tenantBound: tenantBoundOf(compiled),
-			})
-		} else {
-			resolvedCtes.push({ name: c.name, sql: c.sql ?? "", tenantScope: c.tenantScope })
 		}
-	}
+		const selectKeys = options?.selectKeys ?? keys
 
-	const visibleCtes = [...resolvedCtes, ...(options?.enclosingCtes ?? [])]
-	const sourceForTable = (name: string, column?: string): TenantSource => {
-		const cte = visibleCtes.find((c) => c.name === name)
-		return {
-			// A projected CTE column need not be the original tenant key.
-			column: cte ? undefined : column,
-			scope: cte ? (cte.tenantScope ?? "cross-tenant") : column ? "cross-tenant" : "untenanted",
-			bound: cte?.tenantBound,
+		if (selectKeys.length === 0) {
+			throw new QueryBuilderDefect({ message: "CHQuery: select() is required" })
 		}
-	}
-	const sourceOf = (compiled: CompiledQuery<any>): TenantSource => ({
-		scope: compiled.tenantScope,
-		bound: tenantBoundOf(compiled),
-	})
-	const mainAlias = sourceAlias(state)
-	const mainColumn =
-		state.tenantColumn === undefined
-			? undefined
-			: `${mainAlias}.${state.tenantColumn}`
-	let fromFragment
-	let fromSource: TenantSource
-	if (state.fromQuery) {
-		const inner = compileInner(state.fromQuery, params, {
-			skipFormat: true,
-			deferParams,
-			nested: true,
-			enclosingCtes: visibleCtes,
-		})
-		fromSource = sourceOf(inner)
-		fromFragment = raw(`(${inner.sql}) AS ${quoteIdent(state.fromQueryAlias ?? "")}`)
-	} else if (state.fromUnion) {
-		const inner = compileUnionInner(state.fromUnion, params, { deferParams, nested: true, enclosingCtes: visibleCtes })
-		fromSource = sourceOf(inner)
-		const body = currentDialect().clauses.format ? splitTerminalClauses(inner.sql).body : inner.sql
-		fromFragment = raw(`(\n${body}\n) AS ${quoteIdent(state.fromQueryAlias ?? "")}`)
-	} else {
-		fromSource = sourceForTable(state.tableName, mainColumn)
-		fromFragment = mainAlias !== state.tableName
-			? raw(`${quoteIdentPath(state.tableName)} AS ${quoteIdentPath(mainAlias)}`)
-			: identPath(state.tableName)
-	}
 
-	const sources: TenantSource[] = [fromSource]
-	const wherePredicates = whereConditions.flatMap((c) => (c ? tenantPredicatesOf(c) : []))
-	const joinPredicates: Array<{ predicates: ReadonlyArray<TenantPredicate>; target?: string }> = []
-	let sql = withSubqueryCompiler((subquery) => {
-		if (typeof subquery === "string") {
-			sources.push({ scope: "cross-tenant" })
-			return subquery
-		}
-		const compiled = compileInner(subquery, params, {
-			skipFormat: true,
-			deferParams,
-			nested: true,
-			enclosingCtes: visibleCtes,
-		})
-		sources.push(sourceOf(compiled))
-		return compiled.sql
-	}, () => {
-		const joins = state.typedJoins.map((j) => {
-			let tableSql: string
-			let source: TenantSource
-			if (j.innerQuery) {
-				const compiled = compileInner(j.innerQuery, params, {
+		// WHERE — resolve params by injecting values into the accessor
+		const whereConditions = state.whereFn ? state.whereFn($) : []
+		const presentWhere = whereConditions.filter((c): c is NonNullable<typeof c> => c != null)
+
+		// CTEs — resolved before the FROM below, which reads their scope. A CTE given
+		// as a query is compiled here and its scope derived; one given as a string
+		// carries whatever scope the caller declared.
+		// Sequential, not `map`: each CTE is compiled with the ones before it in
+		// scope, which is the only way `WITH a AS (…), b AS (SELECT … FROM a)` can
+		// see that `b` reads a tenant-confined source.
+		const resolvedCtes: Array<ResolvedCte> = []
+		for (const c of state.ctes) {
+			if (c.query) {
+				const compiled = compileInner(c.query, params, {
 					skipFormat: true,
 					deferParams,
 					nested: true,
-					enclosingCtes: visibleCtes,
+					enclosingCtes: [...(options?.enclosingCtes ?? []), ...resolvedCtes],
 				})
-				tableSql = `(${compiled.sql})`
-				source = sourceOf(compiled)
-			} else if (j.tableName) {
-				tableSql = quoteIdentPath(j.tableName)
-				source = sourceForTable(
-					j.tableName,
-					j.tenantColumn === undefined ? undefined : `${j.alias}.${j.tenantColumn}`,
-				)
+				resolvedCtes.push({
+					name: c.name,
+					sql: compiled.sql,
+					tenantScope: compiled.tenantScope,
+					tenantBound: tenantBoundOf(compiled),
+				})
 			} else {
-				throw new QueryBuilderDefect({ message: "TypedJoin: missing table or query" })
+				resolvedCtes.push({ name: c.name, sql: c.sql ?? "", tenantScope: c.tenantScope })
 			}
-			sources.push(source)
-			const on = j.on?.(
-				createQualifiedColumnAccessor(mainAlias, state.tenantColumn, columnsOf(state)),
-				createQualifiedColumnAccessor(j.alias, j.tenantColumn, joinColumnsOf(j)),
-			)
-			if (on) {
-				// A LEFT JOIN's ON clause can constrain only its right side. It
-				// cannot remove unmatched rows from the preserved left side.
-				if (j.type !== "LEFT" || source.column !== undefined) {
-					joinPredicates.push({
-						predicates: tenantPredicatesOf(on),
-						target: j.type === "LEFT" ? source.column : undefined,
-					})
-				}
-			}
-			return {
-				type: j.type,
-				table: tableSql,
-				alias: quoteIdent(j.alias),
-				on: on ? compileSqlFragment(on.toFragment()) : undefined,
-			}
-		})
-
-		const sqlQuery: SqlQuery = {
-			distinct: state.distinct !== undefined,
-			distinctOn: Array.isArray(state.distinct)
-				? (state.distinct.length === 0
-						? (() => {
-								throw new QueryBuilderDefect({ message: "CHQuery: distinctOn() needs at least one key" })
-							})()
-						: state.distinct
-					).map((key: string) => {
-						if (!(options?.selectKeys ?? keys).includes(key)) {
-							throw new QueryBuilderDefect({ message: `CHQuery: distinctOn(${JSON.stringify(key)}) is not a selected alias` })
-						}
-						return raw(quoteIdent(key))
-					})
-				: undefined,
-			lock: (() => {
-				// Postgres refuses a lock on rows that are no longer table rows; say so here.
-				if (state.lock !== undefined && (state.distinct !== undefined || state.groupByKeys.length > 0 || state.havingFn !== undefined)) {
-					throw new QueryBuilderDefect({
-						message: `CHQuery: FOR ${state.lock.strength} cannot lock rows of a query with DISTINCT, GROUP BY or HAVING`,
-					})
-				}
-				return lockClause(state.lock)
-			})(),
-			select: selectFragments,
-			from: fromFragment,
-			joins,
-			where: whereFragments,
-			groupBy: state.groupByKeys.map((k) => raw(groupByKey(k, options?.selectKeys ?? keys))),
-			// Deliberately excluded from tenant evidence: by HAVING time the
-			// rows are already aggregated, so the scan that produced them crossed
-			// tenants no matter what this filters out.
-			having: (state.havingFn ? state.havingFn($) : [])
-				.filter((c): c is NonNullable<typeof c> => c != null)
-				.map((c) => c.toFragment()),
-			orderBy: orderByClause(state.orderBySpecs).map(raw),
-			limit: state.limitValue != null ? raw(String(Math.round(state.limitValue))) : undefined,
-			offset: state.offsetValue != null ? raw(String(Math.round(state.offsetValue))) : undefined,
-			format: options?.skipFormat ? undefined : formatClause(state.formatValue),
 		}
 
-		return compileQuery(sqlQuery)
-	})
-
-	// Prepend CTE definitions
-	if (resolvedCtes.length > 0) {
-		const cteDefs = resolvedCtes.map((c) => `${quoteIdent(c.name)} AS (\n${c.sql}\n)`).join(",\n")
-		sql = `WITH ${cteDefs}\n${sql}`
-	}
-
-	// Once, at the top: a nested query's SQL is spliced into this one, and a
-	// dialect that binds numbers its placeholders across the whole statement.
-	let parameters: ReadonlyArray<unknown> = []
-	if (!deferParams && options?.nested !== true) {
-		const rendered = renderParams(sql, params, currentDialect())
-		sql = rendered.sql
-		parameters = rendered.parameters
-	}
-
-	const scope = deriveTenantScope(sources, [{ predicates: wherePredicates }, ...joinPredicates], (value) =>
-		deferParams ? compileSqlFragment(value) : inlineParams(compileSqlFragment(value), params),
-	)
-	const tenantScope = state.crossTenant === true ? "cross-tenant" : scope.scope
-
-	const derived = deriveRowSchema(selectExprs)
-	const derivedSchema = "schema" in derived ? derived.schema : undefined
-
-	return withTenantBound(
-		makeCompiledQuery<Decoded, Route>(
-			sql,
-			parameters,
-			tenantScope,
-			options?.rowSchema !== undefined ? "declared" : derivedSchema ? "derived" : "none",
-			() => options?.rowSchema ?? (derivedSchema as CompiledQueryRowSchema<Decoded> | undefined),
-			state.routeValue as Route,
-			"untyped" in derived ? derived.untyped : [],
-			undefined,
-			options?.rowSchema === undefined
+		const visibleCtes = [...resolvedCtes, ...(options?.enclosingCtes ?? [])]
+		const sourceForTable = (name: string, column?: string): TenantSource => {
+			const cte = visibleCtes.find((c) => c.name === name)
+			return {
+				// A projected CTE column need not be the original tenant key.
+				column: cte ? undefined : column,
+				scope: cte ? (cte.tenantScope ?? "cross-tenant") : column ? "cross-tenant" : "untenanted",
+				bound: cte?.tenantBound,
+			}
+		}
+		const sourceOf = (compiled: CompiledQuery<any>): TenantSource => ({
+			scope: compiled.tenantScope,
+			bound: tenantBoundOf(compiled),
+		})
+		const mainAlias = sourceAlias(state)
+		const mainColumn =
+			state.tenantColumn === undefined
 				? undefined
-				: compareRowSchemas(options.rowSchema, derivedSchema),
-			currentDialect().name,
-		),
-		tenantScope === "single-tenant" ? scope.bound : undefined,
-	)
+				: `${mainAlias}.${state.tenantColumn}`
+		let fromFragment
+		let fromSource: TenantSource
+		if (state.fromQuery) {
+			const inner = compileInner(state.fromQuery, params, {
+				skipFormat: true,
+				deferParams,
+				nested: true,
+				enclosingCtes: visibleCtes,
+			})
+			fromSource = sourceOf(inner)
+			fromFragment = raw(`(${inner.sql}) AS ${quoteIdent(state.fromQueryAlias ?? "")}`)
+		} else if (state.fromUnion) {
+			const inner = compileUnionInner(state.fromUnion, params, { deferParams, nested: true, enclosingCtes: visibleCtes })
+			fromSource = sourceOf(inner)
+			const body = currentDialect().clauses.format ? splitTerminalClauses(inner.sql).body : inner.sql
+			fromFragment = raw(`(\n${body}\n) AS ${quoteIdent(state.fromQueryAlias ?? "")}`)
+		} else {
+			fromSource = sourceForTable(state.tableName, mainColumn)
+			fromFragment = mainAlias !== state.tableName
+				? raw(`${quoteIdentPath(state.tableName)} AS ${quoteIdentPath(mainAlias)}`)
+				: identPath(state.tableName)
+		}
+
+		const sources: TenantSource[] = [fromSource]
+		const wherePredicates = whereConditions.flatMap((c) => (c ? tenantPredicatesOf(c) : []))
+		const joinPredicates: Array<{ predicates: ReadonlyArray<TenantPredicate>; target?: string }> = []
+		let sql = withSubqueryCompiler((subquery) => {
+			if (typeof subquery === "string") {
+				sources.push({ scope: "cross-tenant" })
+				return subquery
+			}
+			const compiled = compileInner(subquery, params, {
+				skipFormat: true,
+				deferParams,
+				nested: true,
+				enclosingCtes: visibleCtes,
+			})
+			sources.push(sourceOf(compiled))
+			return compiled.sql
+		}, () => {
+			const joins = state.typedJoins.map((j) => {
+				let tableSql: string
+				let source: TenantSource
+				if (j.innerQuery) {
+					const compiled = compileInner(j.innerQuery, params, {
+						skipFormat: true,
+						deferParams,
+						nested: true,
+						enclosingCtes: visibleCtes,
+					})
+					tableSql = `(${compiled.sql})`
+					source = sourceOf(compiled)
+				} else if (j.tableName) {
+					tableSql = quoteIdentPath(j.tableName)
+					source = sourceForTable(
+						j.tableName,
+						j.tenantColumn === undefined ? undefined : `${j.alias}.${j.tenantColumn}`,
+					)
+				} else {
+					throw new QueryBuilderDefect({ message: "TypedJoin: missing table or query" })
+				}
+				sources.push(source)
+				const on = j.on?.(
+					createQualifiedColumnAccessor(mainAlias, state.tenantColumn, columnsOf(state)),
+					createQualifiedColumnAccessor(j.alias, j.tenantColumn, joinColumnsOf(j)),
+				)
+				if (on) {
+					// A LEFT JOIN's ON clause can constrain only its right side. It
+					// cannot remove unmatched rows from the preserved left side.
+					if (j.type !== "LEFT" || source.column !== undefined) {
+						joinPredicates.push({
+							predicates: tenantPredicatesOf(on),
+							target: j.type === "LEFT" ? source.column : undefined,
+						})
+					}
+				}
+				return {
+					type: j.type,
+					table: tableSql,
+					alias: quoteIdent(j.alias),
+					on: on ? rowFilter(`the ON clause of join ${JSON.stringify(j.alias)}`, on) : undefined,
+				}
+			})
+
+			// Rendered one clause at a time, each under its own track, so the
+			// GROUP BY rules below know what each part reads and aggregates.
+			const selected = selectKeys.map((alias) => {
+				const expr = selectExprs[alias]
+				const fragment = expr.toFragment()
+				const [sql, found] = track(() => compileSqlFragment(fragment))
+				return { alias, sql, found, column: plainColumn(fragment) }
+			})
+			const where = presentWhere.map((c) => raw(rowFilter("WHERE", c)))
+			const having = (state.havingFn ? state.havingFn($) : [])
+				.filter((c): c is NonNullable<typeof c> => c != null)
+				.map((c) => {
+					const [sql, found] = track(() => compileSqlFragment(c.toFragment()))
+					return { sql, found }
+				})
+			assertGrouping(selected, state.groupByKeys, having)
+
+			const sqlQuery: SqlQuery = {
+				distinct: state.distinct !== undefined,
+				distinctOn: Array.isArray(state.distinct)
+					? (state.distinct.length === 0
+							? (() => {
+									throw new QueryBuilderDefect({ message: "CHQuery: distinctOn() needs at least one key" })
+								})()
+							: state.distinct
+						).map((key: string) => {
+							if (!(options?.selectKeys ?? keys).includes(key)) {
+								throw new QueryBuilderDefect({ message: `CHQuery: distinctOn(${JSON.stringify(key)}) is not a selected alias` })
+							}
+							return raw(quoteIdent(key))
+						})
+					: undefined,
+				lock: (() => {
+					// Postgres refuses a lock on rows that are no longer table rows; say so here.
+					if (state.lock !== undefined && (state.distinct !== undefined || state.groupByKeys.length > 0 || state.havingFn !== undefined)) {
+						throw new QueryBuilderDefect({
+							message: `CHQuery: FOR ${state.lock.strength} cannot lock rows of a query with DISTINCT, GROUP BY or HAVING`,
+						})
+					}
+					return lockClause(state.lock)
+				})(),
+				select: selected.map(({ alias, sql }) => raw(`${sql} AS ${quoteIdent(alias)}`)),
+				from: fromFragment,
+				joins,
+				where,
+				groupBy: state.groupByKeys.map((k) => raw(groupByKey(k, options?.selectKeys ?? keys))),
+				// Deliberately excluded from tenant evidence: by HAVING time the
+				// rows are already aggregated, so the scan that produced them crossed
+				// tenants no matter what this filters out.
+				having: having.map(({ sql }) => raw(sql)),
+				orderBy: orderByClause(state.orderBySpecs).map(raw),
+				limit: rowCount("limit", state.limitValue),
+				offset: rowCount("offset", state.offsetValue),
+				format: options?.skipFormat ? undefined : formatClause(state.formatValue),
+			}
+
+			return compileQuery(sqlQuery)
+		})
+
+		// Prepend CTE definitions
+		if (resolvedCtes.length > 0) {
+			const cteDefs = resolvedCtes.map((c) => `${quoteIdent(c.name)} AS (\n${c.sql}\n)`).join(",\n")
+			sql = `WITH ${cteDefs}\n${sql}`
+		}
+
+		// Once, at the top: a nested query's SQL is spliced into this one, and a
+		// dialect that binds numbers its placeholders across the whole statement.
+		let parameters: ReadonlyArray<unknown> = []
+		if (!deferParams && options?.nested !== true) {
+			const rendered = renderParams(sql, params, currentDialect())
+			sql = rendered.sql
+			parameters = rendered.parameters
+		}
+
+		const scope = deriveTenantScope(sources, [{ predicates: wherePredicates }, ...joinPredicates], (value) =>
+			deferParams ? compileSqlFragment(value) : inlineParams(compileSqlFragment(value), params),
+		)
+		const tenantScope = state.crossTenant === true ? "cross-tenant" : scope.scope
+
+		const derived = deriveRowSchema(selectExprs)
+		const derivedSchema = "schema" in derived ? derived.schema : undefined
+
+		return withTenantBound(
+			makeCompiledQuery<Decoded, Route>(
+				sql,
+				parameters,
+				tenantScope,
+				options?.rowSchema !== undefined ? "declared" : derivedSchema ? "derived" : "none",
+				() => options?.rowSchema ?? (derivedSchema as CompiledQueryRowSchema<Decoded> | undefined),
+				state.routeValue as Route,
+				"untyped" in derived ? derived.untyped : [],
+				undefined,
+				options?.rowSchema === undefined
+					? undefined
+					: compareRowSchemas(options.rowSchema, derivedSchema),
+				currentDialect().name,
+			),
+			tenantScope === "single-tenant" ? scope.bound : undefined,
+		)
+	})
+}
+
+/** `qualifier.name` when a fragment is a bare column, as the render tracker names it. */
+const plainColumn = (fragment: SqlFragment): string | undefined =>
+	fragment._tag === "Ident" ? (fragment.qualifier === undefined ? fragment.name : `${fragment.qualifier}.${fragment.name}`) : undefined
+
+/**
+ * A condition that filters rows before they are grouped (WHERE, a join's ON).
+ * An aggregate has no value there yet: both databases refuse it.
+ */
+const rowFilter = (clause: string, condition: Condition): string => {
+	const [sql, found] = track(() => compileSqlFragment(condition.toFragment()))
+	if (found.aggregate) {
+		throw new QueryBuilderDefect({
+			message: `CHQuery: ${clause} has an aggregate, which has no value before rows are grouped; filter on it in having()`,
+		})
+	}
+	return sql
+}
+
+/**
+ * The GROUP BY rule both databases enforce: once a query groups or aggregates,
+ * every column it reads outside an aggregate must be a grouping key. A
+ * selected alias may also repeat a grouped expression exactly. Only what the
+ * builder rendered itself is checked (see `render-tracker.ts`), so SQL it did
+ * not write can hide an error from this, never cause one.
+ */
+function assertGrouping(
+	selected: ReadonlyArray<{ readonly alias: string; readonly sql: string; readonly found: RenderTrack; readonly column?: string }>,
+	groupByKeys: ReadonlyArray<string>,
+	having: ReadonlyArray<{ readonly found: RenderTrack }>,
+): void {
+	const grouped = new Set(groupByKeys)
+	const aggregates = selected.some((s) => s.found.aggregate) || having.some((h) => h.found.aggregate)
+	if (grouped.size === 0 && !aggregates) return
+	for (const key of grouped) {
+		if (selected.find((s) => s.alias === key)?.found.aggregate === true) {
+			throw new QueryBuilderDefect({ message: `CHQuery: groupBy(${JSON.stringify(key)}) names an aggregate, which cannot be a grouping key` })
+		}
+	}
+	const keys = selected.filter((s) => grouped.has(s.alias))
+	const keyColumns = new Set(keys.flatMap((s) => (s.column === undefined ? [] : [s.column])))
+	const keySql = new Set(keys.map((s) => s.sql))
+	const ungrouped = (columns: ReadonlySet<string>) => [...columns].find((column) => !keyColumns.has(column))
+	for (const s of selected) {
+		if (grouped.has(s.alias) || keySql.has(s.sql)) continue
+		const column = ungrouped(s.found.columns)
+		if (column !== undefined) {
+			throw new QueryBuilderDefect({
+				message: `CHQuery: select alias ${JSON.stringify(s.alias)} reads ${column}, which is neither a groupBy() key nor inside an aggregate`,
+			})
+		}
+	}
+	for (const h of having) {
+		const column = ungrouped(h.found.columns)
+		if (column !== undefined) {
+			throw new QueryBuilderDefect({
+				message: `CHQuery: having() reads ${column}, which is neither a groupBy() key nor inside an aggregate`,
+			})
+		}
+	}
+}
+
+/**
+ * Every source in a query needs its own name. Two joins under one alias, or a
+ * join named like the FROM source, make every qualified column ambiguous; a
+ * join named like a FROM column hides that column from `$`; two CTEs under one
+ * name are refused by both databases. The join cases are type errors too
+ * (`FreshAlias`); this catches the ones the type cannot see.
+ */
+function assertDistinctNames(state: CHQueryState): void {
+	const fromAlias = sourceAlias(state)
+	const columns = new Set(Object.keys(columnsOf(state)))
+	const seen = new Set<string>([fromAlias])
+	for (const join of state.typedJoins) {
+		if (seen.has(join.alias)) {
+			throw new QueryBuilderDefect({
+				message: `CHQuery: join alias ${JSON.stringify(join.alias)} is already the name of another source in this query`,
+			})
+		}
+		if (columns.has(join.alias)) {
+			throw new QueryBuilderDefect({
+				message: `CHQuery: join alias ${JSON.stringify(join.alias)} is also a column of the FROM source; pick another alias`,
+			})
+		}
+		seen.add(join.alias)
+	}
+	const ctes = new Set<string>()
+	for (const cte of state.ctes) {
+		if (ctes.has(cte.name)) {
+			throw new QueryBuilderDefect({ message: `CHQuery: withCTE(${JSON.stringify(cte.name)}) is defined twice` })
+		}
+		ctes.add(cte.name)
+	}
 }
 
 interface TenantSource {
@@ -1083,6 +1221,12 @@ function derivedLiteralSchema(schema: Schema.Codec<any, any>): Schema.Codec<any,
 	return schema
 }
 
+/** The aliases a query selects, read without compiling it; `undefined` before `select()`. */
+export function selectedAliasesOf(query: CHQuery<any, any, any>): ReadonlyArray<string> | undefined {
+	const exprs = selectExprsOf(query)
+	return exprs === undefined ? undefined : Object.keys(exprs)
+}
+
 /** Evaluate a query's SELECT callback without compiling it. */
 function selectExprsOf(query: CHQuery<any, any, any>): Record<string, unknown> | undefined {
 	const state = query._state
@@ -1152,16 +1296,20 @@ const unionExprsOf = (
 
 // UNION ALL compilation
 
-export function compileUnionUnsafe<Output extends Record<string, any>, Params extends Record<string, any>>(
-	union: CHUnionQuery<Output>,
-	params: Params,
+export function compileUnionUnsafe<
+	Output extends Record<string, any>,
+	Params = never,
+	const Given extends Record<string, unknown> = {},
+>(
+	union: CHUnionQuery<Output, Params> & ParamsSatisfied<Params, Given>,
+	params?: Given,
 	options?: {
 		rowSchema?: CompiledQueryRowSchema<Output>
 		deferParams?: boolean
 		dialect?: Dialect
 	},
 ): CompiledQuery<Output, undefined> {
-	return withDialect(options?.dialect ?? currentDialect(), () => compileUnionInner(union, params, options))
+	return withDialect(options?.dialect ?? currentDialect(), () => compileUnionInner(union as CHUnionQuery<Output>, params ?? {}, options))
 }
 
 /** The recursion behind {@link compileUnionUnsafe}; see {@link compileInner}. */
@@ -1226,10 +1374,10 @@ function compileUnionInner<Output extends Record<string, any>, Params extends Re
 			sql += `\nORDER BY ${orderByClause(state.outerOrderBySpecs).join(", ")}`
 		}
 		if (state.outerLimitValue != null) {
-			sql += `\nLIMIT ${Math.round(state.outerLimitValue)}`
+			sql += `\nLIMIT ${compileSqlFragment(rowCount("limit", state.outerLimitValue)!)}`
 		}
 		if (state.outerOffsetValue != null) {
-			sql += `\nOFFSET ${Math.round(state.outerOffsetValue)}`
+			sql += `\nOFFSET ${compileSqlFragment(rowCount("offset", state.outerOffsetValue)!)}`
 		}
 	}
 

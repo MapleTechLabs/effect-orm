@@ -1,5 +1,6 @@
 import { Data } from "effect"
 import { activeSqlSyntax } from "./sql-syntax"
+import { hidden, noteColumn } from "./render-tracker"
 
 // ClickHouse string escaping
 
@@ -74,8 +75,12 @@ export type SqlFragment = Data.TaggedEnum<{
 	 * outer `compile` runs in, so a bad value reaches production as a synchronous
 	 * throw rather than a typed failure. Deferring the work to compile time puts
 	 * it back inside.
+	 *
+	 * `known` marks SQL the builder itself writes (an operator, a built-in
+	 * function), whose parts the render tracker may count. Anything else is
+	 * opaque to it: see `render-tracker.ts`.
 	 */
-	Lazy: { readonly render: () => string }
+	Lazy: { readonly render: () => string; readonly known?: boolean }
 }>
 
 const Frag = Data.taggedEnum<SqlFragment>()
@@ -98,6 +103,8 @@ export const as_ = (expr: SqlFragment, alias: string): SqlFragment => Frag.As({ 
 export const when = (condition: boolean, fragment: SqlFragment): SqlFragment =>
 	Frag.When({ condition, fragment })
 export const lazy = (render: () => string): SqlFragment => Frag.Lazy({ render })
+/** {@link lazy} for SQL the builder writes itself, which the render tracker may look inside. */
+export const known = (render: () => string): SqlFragment => Frag.Lazy({ render, known: true })
 
 // Compiler
 
@@ -105,10 +112,12 @@ export const compile: (fragment: SqlFragment) => string = Frag.$match({
 	Raw: ({ sql }) => sql,
 	Str: ({ value }) => quoteString(value),
 	Int: ({ value }) => String(Math.round(value)),
-	Ident: ({ name, qualifier }) =>
-		qualifier === undefined ? quoteIdent(name) : `${quoteIdentPath(qualifier)}.${quoteIdent(name)}`,
+	Ident: ({ name, qualifier }) => {
+		noteColumn(qualifier === undefined ? name : `${qualifier}.${name}`)
+		return qualifier === undefined ? quoteIdent(name) : `${quoteIdentPath(qualifier)}.${quoteIdent(name)}`
+	},
 	Join: ({ separator, fragments }) => fragments.map(compile).filter(Boolean).join(separator),
 	As: ({ expr, alias }) => `${compile(expr)} AS ${quoteIdent(alias)}`,
 	When: ({ condition, fragment }) => (condition ? compile(fragment) : ""),
-	Lazy: ({ render }) => render(),
+	Lazy: ({ render, known }) => (known === true ? render() : hidden(render)),
 })

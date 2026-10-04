@@ -7,7 +7,7 @@
 import { type DateTime, Schema } from "effect"
 import type { SqlFragment } from "../sql/sql-fragment"
 import { raw } from "../sql/sql-fragment"
-import type { Expr } from "./expr"
+import type { Comparable, Expr, ParamEntry } from "./expr"
 import { QueryBuilderDefect } from "./errors"
 import * as T from "./types"
 import type { CHType } from "./types"
@@ -63,7 +63,13 @@ function assertValidParamName(name: string): void {
 
 // Param marker — used during query definition (before compilation)
 
-export interface ParamMarker<N extends string, T> extends Expr<T> {
+/**
+ * What a param named in a query is filled with: a value of its type, and for a
+ * DateTime param a `Date` or a `'YYYY-MM-DD hh:mm:ss'` string as well.
+ */
+export type ParamValue<T> = Comparable<T>
+
+export interface ParamMarker<N extends string, T, V = ParamValue<T>> extends Expr<T, ParamEntry<N, V>> {
 	readonly _paramName: N
 	readonly _paramType?: T
 }
@@ -150,10 +156,10 @@ const paramTypes = new Map<ParamKind, Schema.Codec<any, any>>([
 export const paramSchema = (kind: ParamKind): Schema.Codec<any, any> | undefined => paramTypes.get(kind)
 
 const makeParam =
-	<T>(kind: ParamKind, schema: Schema.Codec<T, any>) =>
-	<N extends string>(name: N): ParamMarker<N, T> => {
+	<T, V = ParamValue<T>>(kind: ParamKind, schema: Schema.Codec<T, any>) =>
+	<N extends string>(name: N): ParamMarker<N, T, V> => {
 		assertValidParamName(name)
-		return makeParamMarker<N, T>(name, raw(paramPlaceholder(kind, name)), schema)
+		return makeParamMarker<N, T>(name, raw(paramPlaceholder(kind, name)), schema) as ParamMarker<N, T, V>
 	}
 
 const customKinds = new WeakMap<Schema.Codec<any, any>, ParamKind>()
@@ -198,7 +204,7 @@ export const param = {
 	 * Identical at runtime — the flavours differ only in what the row decodes to,
 	 * and a param has to agree with the column it bounds.
 	 */
-	dateTimeString: makeParam<string>("dateTime", T.dateTimeString.schema),
+	dateTimeString: makeParam<string, ParamValue<DateTime.Utc>>("dateTime", T.dateTimeString.schema),
 
 	/**
 	 * The same bound, floored to whole seconds.
@@ -214,7 +220,7 @@ export const param = {
 	 * Widening is safe where these appear: they bound a partition/index key for
 	 * pruning, and the exact `DateTime64` predicate still decides the result.
 	 */
-	dateTimeSeconds: makeParam<string>("dateTimeSeconds", T.dateTimeString.schema),
+	dateTimeSeconds: makeParam<string, ParamValue<DateTime.Utc>>("dateTimeSeconds", T.dateTimeString.schema),
 
 	/**
 	 * A param of any column type, resolved through that type's own codec.

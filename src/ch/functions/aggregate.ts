@@ -1,12 +1,15 @@
-import { defineFn, compileTypedFnCall, numericResultSchema, overflowResultSchema } from "../define-fn"
+import { numericResultSchema, overflowResultSchema } from "../define-fn"
 import { QueryBuilderError } from "../errors"
 import { makeExpr } from "../expr"
-import { compile, lazy } from "../../sql/sql-fragment"
-import type { Expr, Condition } from "../expr"
+import { compile } from "../../sql/sql-fragment"
+import type { Expr, Condition, ParamsIn } from "../expr"
 import { type DateTime, Schema } from "effect"
 import * as T from "../types"
 
-import { arrayOfArg, sameAs, schemaOf } from "../define-fn"
+import { schemaOf } from "../define-fn"
+import { builtins } from "./builtin"
+
+const { compileTypedFnCall, defineFn, lazy } = builtins("clickhouse", "aggregate")
 
 /** `groupUniqArrayIf(x, cond)` collects `x`s, so it decodes as an array of `x`. */
 const arraySchemaOf = <T>(expr: unknown) => {
@@ -20,25 +23,25 @@ export const count = defineFn<[], number>("count", T.uint64)
 export const avg = defineFn<[Expr<number | null>], number | null>("avg", T.nullable(T.float64))
 // A finite Float64 input can overflow during accumulation; the resulting
 // infinity decodes as NaN (see `overflowResultSchema`).
-export const sum = <N extends number | null>(expr: Expr<N>): Expr<number | Extract<N, null>> =>
+export const sum = <N extends number | null, Q = never>(expr: Expr<N, Q>): Expr<number | Extract<N, null>, Q> =>
 	compileTypedFnCall("sum", overflowResultSchema(expr), expr)
 
 // Condition-taking aggregates
 
 export const countIf = defineFn<[Condition], number>("countIf", T.uint64)
-export const sumIf = <N extends number | null>(
-	expr: Expr<N>,
-	condition: Condition,
-): Expr<number | Extract<N, null>> => compileTypedFnCall("sumIf", overflowResultSchema(expr), expr, condition)
+export const sumIf = <N extends number | null, Q1 = never, Q2 = never>(
+	expr: Expr<N, Q1>,
+	condition: Condition<Q2>,
+): Expr<number | Extract<N, null>, Q1 | Q2> => compileTypedFnCall("sumIf", overflowResultSchema(expr), expr, condition)
 export const avgIf = defineFn<[Expr<number | null>, Condition], number | null>("avgIf", T.nullable(T.float64))
-export const maxIf = <N extends number | null>(
-	expr: Expr<N>,
-	condition: Condition,
-): Expr<number | Extract<N, null>> => compileTypedFnCall("maxIf", numericResultSchema(expr), expr, condition)
-export const minIf = <N extends number | null>(
-	expr: Expr<N>,
-	condition: Condition,
-): Expr<number | Extract<N, null>> => compileTypedFnCall("minIf", numericResultSchema(expr), expr, condition)
+export const maxIf = <N extends number | null, Q1 = never, Q2 = never>(
+	expr: Expr<N, Q1>,
+	condition: Condition<Q2>,
+): Expr<number | Extract<N, null>, Q1 | Q2> => compileTypedFnCall("maxIf", numericResultSchema(expr), expr, condition)
+export const minIf = <N extends number | null, Q1 = never, Q2 = never>(
+	expr: Expr<N, Q1>,
+	condition: Condition<Q2>,
+): Expr<number | Extract<N, null>, Q1 | Q2> => compileTypedFnCall("minIf", numericResultSchema(expr), expr, condition)
 
 // Generic aggregates (compileFnCall for type preservation)
 
@@ -50,16 +53,16 @@ export const minIf = <N extends number | null>(
 // here (as an earlier version did with `NonNullable<T>`) lied to every caller
 // while `sameAs(0)` kept the nullable runtime codec.
 
-export const min_ = <T>(expr: Expr<T>): Expr<T> => defineFn<[Expr<T>], T>("min", sameAs(0))(expr)
+export const min_ = <T, Q = never>(expr: Expr<T, Q>): Expr<T, Q> => compileTypedFnCall("min", schemaOf<T>(expr), expr)
 
-export const max_ = <T>(expr: Expr<T>): Expr<T> => defineFn<[Expr<T>], T>("max", sameAs(0))(expr)
+export const max_ = <T, Q = never>(expr: Expr<T, Q>): Expr<T, Q> => compileTypedFnCall("max", schemaOf<T>(expr), expr)
 
-export const any_ = <T>(expr: Expr<T>): Expr<T> => defineFn<[Expr<T>], T>("any", sameAs(0))(expr)
+export const any_ = <T, Q = never>(expr: Expr<T, Q>): Expr<T, Q> => compileTypedFnCall("any", schemaOf<T>(expr), expr)
 
-export const anyIf = <T>(expr: Expr<T>, cond: Condition): Expr<T> =>
-	defineFn<[Expr<T>, Condition], T>("anyIf", sameAs(0))(expr, cond)
+export const anyIf = <T, Q1 = never, Q2 = never>(expr: Expr<T, Q1>, cond: Condition<Q2>): Expr<T, Q1 | Q2> =>
+	compileTypedFnCall("anyIf", schemaOf<T>(expr), expr, cond)
 
-export const uniq = <T>(expr: Expr<T>): Expr<number> => defineFn<[Expr<T>], number>("uniq", T.uint64)(expr)
+export const uniq = <T, Q = never>(expr: Expr<T, Q>): Expr<number, Q> => compileTypedFnCall("uniq", T.uint64.schema, expr)
 
 /**
  * `uniqIf(value, condition)` — distinct `value`s among the rows matching
@@ -69,8 +72,8 @@ export const uniq = <T>(expr: Expr<T>): Expr<number> => defineFn<[Expr<T>], numb
  * `countIf` on a `ReplacingMergeTree`: un-merged duplicate rows for the same
  * key would inflate a `countIf` but not a `uniqIf` on that key.
  */
-export const uniqIf = <T>(expr: Expr<T>, cond: Condition): Expr<number> =>
-	defineFn<[Expr<T>, Condition], number>("uniqIf", T.uint64)(expr, cond)
+export const uniqIf = <T, Q1 = never, Q2 = never>(expr: Expr<T, Q1>, cond: Condition<Q2>): Expr<number, Q1 | Q2> =>
+	compileTypedFnCall("uniqIf", T.uint64.schema, expr, cond)
 
 /**
  * `uniqExact(value)` — the exact distinct count, where {@link uniq} estimates.
@@ -79,11 +82,11 @@ export const uniqIf = <T>(expr: Expr<T>, cond: Condition): Expr<number> =>
  * number sits next to the rows it counts: a facet count that disagrees with the
  * visible list reads as a bug, not as an approximation.
  */
-export const uniqExact = <T>(expr: Expr<T>): Expr<number> =>
-	defineFn<[Expr<T>], number>("uniqExact", T.uint64)(expr)
+export const uniqExact = <T, Q = never>(expr: Expr<T, Q>): Expr<number, Q> =>
+	compileTypedFnCall("uniqExact", T.uint64.schema, expr)
 
-export const groupUniqArray = <T>(expr: Expr<T>): Expr<ReadonlyArray<T>> =>
-	defineFn<[Expr<T>], ReadonlyArray<T>>("groupUniqArray", arrayOfArg(0))(expr)
+export const groupUniqArray = <T, Q = never>(expr: Expr<T, Q>): Expr<ReadonlyArray<T>, Q> =>
+	compileTypedFnCall("groupUniqArray", arraySchemaOf<T>(expr), expr)
 
 /**
  * `groupUniqArrayArray(arrayColumn)` — flatten arrays across rows into one
@@ -94,24 +97,24 @@ export const groupUniqArray = <T>(expr: Expr<T>): Expr<ReadonlyArray<T>> =>
  * `SimpleAggregateFunction(groupUniqArrayArray, Array(T))` column is declared
  * with, so reading such a column back uses the same name.
  */
-export const groupUniqArrayArray = <T>(expr: Expr<ReadonlyArray<T>>): Expr<ReadonlyArray<T>> =>
-	defineFn<[Expr<ReadonlyArray<T>>], ReadonlyArray<T>>("groupUniqArrayArray", sameAs(0))(expr)
+export const groupUniqArrayArray = <T, Q = never>(expr: Expr<ReadonlyArray<T>, Q>): Expr<ReadonlyArray<T>, Q> =>
+	compileTypedFnCall("groupUniqArrayArray", schemaOf<ReadonlyArray<T>>(expr), expr)
 
 /** `argMin(value, orderBy)` — the `value` from the row with the smallest `orderBy`. */
-export const argMin = <T>(value: Expr<T>, orderBy: Expr<any>): Expr<T> =>
-	defineFn<[Expr<T>, Expr<any>], T>("argMin", sameAs(0))(value, orderBy)
+export const argMin = <T, Q1 = never, Q2 = never>(value: Expr<T, Q1>, orderBy: Expr<any, Q2>): Expr<T, Q1 | Q2> =>
+	compileTypedFnCall("argMin", schemaOf<T>(value), value, orderBy)
 
 /** `argMax(value, orderBy)` — the `value` from the row with the largest `orderBy`. */
-export const argMax = <T>(value: Expr<T>, orderBy: Expr<any>): Expr<T> =>
-	defineFn<[Expr<T>, Expr<any>], T>("argMax", sameAs(0))(value, orderBy)
+export const argMax = <T, Q1 = never, Q2 = never>(value: Expr<T, Q1>, orderBy: Expr<any, Q2>): Expr<T, Q1 | Q2> =>
+	compileTypedFnCall("argMax", schemaOf<T>(value), value, orderBy)
 
-export const argMaxMerge = <T>(expr: Expr<T>): Expr<T> =>
-	defineFn<[Expr<T>], T>("argMaxMerge", sameAs(0))(expr)
+export const argMaxMerge = <T, Q = never>(expr: Expr<T, Q>): Expr<T, Q> =>
+	compileTypedFnCall("argMaxMerge", schemaOf<T>(expr), expr)
 
 // Curried / parametric aggregates (handwritten — custom SQL syntax)
 
 export function quantile(q: number) {
-	return (expr: Expr<number | null>): Expr<number | null> =>
+	return <Q = never>(expr: Expr<number | null, Q>): Expr<number | null, Q> =>
 		makeExpr(lazy(() => `quantile(${q})(${compile(expr.toFragment())})`), T.nullable(T.float64).schema)
 }
 
@@ -123,7 +126,7 @@ export function quantile(q: number) {
  * curried shape: `groupUniqArrayIf(3)(x, cond)` → `groupUniqArrayIf(3)(x, cond)`.
  */
 export function groupUniqArrayIf(maxSize: number) {
-	return <T>(expr: Expr<T>, cond: Condition): Expr<ReadonlyArray<T>> =>
+	return <T, Q1 = never, Q2 = never>(expr: Expr<T, Q1>, cond: Condition<Q2>): Expr<ReadonlyArray<T>, Q1 | Q2> =>
 		makeExpr(
 			lazy(() =>
 				`groupUniqArrayIf(${Math.round(maxSize)})(` +
@@ -157,7 +160,10 @@ export type WindowFunnelMode = "strict_order" | "strict_deduplication" | "strict
  */
 export function windowFunnel(window: number, mode?: WindowFunnelMode) {
 	const params = mode === undefined ? `${Math.round(window)}` : `${Math.round(window)}, '${mode}'`
-	return (timestamp: Expr<number | string | DateTime.Utc>, ...conditions: ReadonlyArray<Condition>): Expr<number> => {
+	return <Q = never, C extends ReadonlyArray<Condition> = ReadonlyArray<Condition>>(
+		timestamp: Expr<number | string | DateTime.Utc, Q>,
+		...conditions: C
+	): Expr<number, Q | ParamsIn<C[number]>> => {
 		// Reported, not thrown: the number of conditions is the number of steps a
 		// funnel has, and that count comes from data as often as from source.
 		if (conditions.length === 0) {
@@ -183,7 +189,10 @@ export function windowFunnel(window: number, mode?: WindowFunnelMode) {
  * user input, so only quote-free literals are accepted.
  */
 export function sequenceMatch(pattern: string) {
-	return (timestamp: Expr<number | string | DateTime.Utc>, ...conditions: ReadonlyArray<Condition>): Expr<number> => {
+	return <Q = never, C extends ReadonlyArray<Condition> = ReadonlyArray<Condition>>(
+		timestamp: Expr<number | string | DateTime.Utc, Q>,
+		...conditions: C
+	): Expr<number, Q | ParamsIn<C[number]>> => {
 		// An injection guard, so it reports rather than crashes: the pattern is
 		// embedded verbatim, and "not user input" is a claim about the caller that
 		// the caller is exactly who might get wrong.

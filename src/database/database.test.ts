@@ -67,6 +67,7 @@ layer(Live, { excludeTestServices: true })("Database on PGlite", (it) => {
 				.select("id")
 				.where(($) => [$.note.eq(CH.param.string("note"))])
 			expect(yield* Db.run(byNote, { note: "b" })).toEqual([{ id: 2 }])
+			// @ts-expect-error -- a missing param is a type error too
 			const error = yield* Effect.flip(Db.run(byNote))
 			expect(error).toBeInstanceOf(CH.QueryBuilderError)
 		}),

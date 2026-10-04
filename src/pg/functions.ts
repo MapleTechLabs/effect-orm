@@ -10,10 +10,14 @@ import { Schema, type DateTime } from "effect"
 import { QueryBuilderDefect } from "../ch/errors"
 import { makeExpr, type Condition, type Expr } from "../ch/expr"
 import { schemaOf, withoutNull } from "../ch/define-fn"
-import { compile, lazy, raw, str } from "../sql/sql-fragment"
+import { compile, str } from "../sql/sql-fragment"
+import { builtins } from "../ch/functions/builtin"
 import * as T from "./types"
 
 const sql = (expr: Expr<unknown> | Condition): string => compile(expr.toFragment())
+
+const aggregate = builtins("postgres", "aggregate")
+const scalar = builtins("postgres", "scalar")
 
 const nullableNumber = Schema.NullOr(T.PgNumber) as Schema.Codec<number | null, unknown>
 const int8 = T.int8.schema as Schema.Codec<number, unknown>
@@ -21,28 +25,31 @@ const int8 = T.int8.schema as Schema.Codec<number, unknown>
 // Aggregates
 
 /** `count(*)`. */
-export const count = (): Expr<number> => makeExpr(raw("count(*)"), int8)
+export const count = (): Expr<number> => makeExpr(aggregate.lazy(() => "count(*)", "count"), int8)
 
 /** `count(DISTINCT expr)`. */
-export const countDistinct = (expr: Expr<unknown>): Expr<number> =>
-	makeExpr(lazy(() => `count(DISTINCT ${sql(expr)})`), int8)
+export const countDistinct = <Q = never>(expr: Expr<unknown, Q>): Expr<number, Q> =>
+	makeExpr(aggregate.lazy(() => `count(DISTINCT ${sql(expr)})`), int8)
 
 /** `count(*) FILTER (WHERE condition)`: ClickHouse's `countIf`. */
-export const countIf = (condition: Condition): Expr<number> =>
-	makeExpr(lazy(() => `count(*) FILTER (WHERE ${sql(condition)})`), int8)
+export const countIf = <Q = never>(condition: Condition<Q>): Expr<number, Q> =>
+	makeExpr(aggregate.lazy(() => `count(*) FILTER (WHERE ${sql(condition)})`), int8)
 
 /** `sum(expr)`. NULL over no rows, and a string for int8/numeric inputs on the
  *  wire, which the result codec reads as a number. */
-export const sum = (expr: Expr<number | null>): Expr<number | null> =>
-	makeExpr(lazy(() => `sum(${sql(expr)})`), nullableNumber)
+export const sum = <Q = never>(expr: Expr<number | null, Q>): Expr<number | null, Q> =>
+	makeExpr(aggregate.lazy(() => `sum(${sql(expr)})`), nullableNumber)
 
 /** `sum(expr) FILTER (WHERE condition)`: ClickHouse's `sumIf`. */
-export const sumIf = (expr: Expr<number | null>, condition: Condition): Expr<number | null> =>
-	makeExpr(lazy(() => `sum(${sql(expr)}) FILTER (WHERE ${sql(condition)})`), nullableNumber)
+export const sumIf = <Q1 = never, Q2 = never>(
+	expr: Expr<number | null, Q1>,
+	condition: Condition<Q2>,
+): Expr<number | null, Q1 | Q2> =>
+	makeExpr(aggregate.lazy(() => `sum(${sql(expr)}) FILTER (WHERE ${sql(condition)})`), nullableNumber)
 
 /** `avg(expr)`. NULL over no rows. */
-export const avg = (expr: Expr<number | null>): Expr<number | null> =>
-	makeExpr(lazy(() => `avg(${sql(expr)})`), nullableNumber)
+export const avg = <Q = never>(expr: Expr<number | null, Q>): Expr<number | null, Q> =>
+	makeExpr(aggregate.lazy(() => `avg(${sql(expr)})`), nullableNumber)
 
 const nullableOf = <A>(expr: Expr<A>): Schema.Codec<A | null, unknown> | undefined => {
 	const schema = schemaOf<A>(expr)
@@ -50,25 +57,25 @@ const nullableOf = <A>(expr: Expr<A>): Schema.Codec<A | null, unknown> | undefin
 }
 
 /** `min(expr)`, decoding as `expr` does. NULL over no rows. */
-export const min = <A>(expr: Expr<A>): Expr<A | null> => makeExpr(lazy(() => `min(${sql(expr)})`), nullableOf(expr))
+export const min = <A, Q = never>(expr: Expr<A, Q>): Expr<A | null, Q> => makeExpr(aggregate.lazy(() => `min(${sql(expr)})`), nullableOf(expr))
 
 /** `max(expr)`, decoding as `expr` does. NULL over no rows. */
-export const max = <A>(expr: Expr<A>): Expr<A | null> => makeExpr(lazy(() => `max(${sql(expr)})`), nullableOf(expr))
+export const max = <A, Q = never>(expr: Expr<A, Q>): Expr<A | null, Q> => makeExpr(aggregate.lazy(() => `max(${sql(expr)})`), nullableOf(expr))
 
 /** `percentile_cont(fraction) WITHIN GROUP (ORDER BY expr)`: an interpolated
  *  quantile, ClickHouse's `quantileExact` family. */
-export const percentileCont = (fraction: number, expr: Expr<number | null>): Expr<number | null> => {
+export const percentileCont = <Q = never>(fraction: number, expr: Expr<number | null, Q>): Expr<number | null, Q> => {
 	if (!(fraction >= 0 && fraction <= 1)) {
 		throw new QueryBuilderDefect({ message: `percentileCont: fraction must be within [0, 1], got ${fraction}` })
 	}
-	return makeExpr(lazy(() => `percentile_cont(${fraction}) WITHIN GROUP (ORDER BY ${sql(expr)})`), nullableNumber)
+	return makeExpr(aggregate.lazy(() => `percentile_cont(${fraction}) WITHIN GROUP (ORDER BY ${sql(expr)})`), nullableNumber)
 }
 
 /** `array_agg(expr)`. NULL over no rows. */
-export const arrayAgg = <A>(expr: Expr<A>): Expr<ReadonlyArray<A> | null> => {
+export const arrayAgg = <A, Q = never>(expr: Expr<A, Q>): Expr<ReadonlyArray<A> | null, Q> => {
 	const element = schemaOf<A>(expr)
 	return makeExpr(
-		lazy(() => `array_agg(${sql(expr)})`),
+		aggregate.lazy(() => `array_agg(${sql(expr)})`),
 		element === undefined ? undefined : (Schema.NullOr(Schema.Array(element)) as Schema.Codec<ReadonlyArray<A> | null, unknown>),
 	)
 }
@@ -81,40 +88,40 @@ export type DateTruncUnit = "second" | "minute" | "hour" | "day" | "week" | "mon
 
 /** `date_trunc(unit, ts, 'UTC')`: buckets in UTC whatever the session time
  *  zone, as ClickHouse's `toStartOf*` functions do. Postgres 12+. */
-export const dateTrunc = (unit: DateTruncUnit, ts: Expr<DateTime.Utc>): Expr<DateTime.Utc> =>
-	makeExpr(lazy(() => `date_trunc(${compile(str(unit))}, ${sql(ts)}, 'UTC')`), timestamptz)
+export const dateTrunc = <Q = never>(unit: DateTruncUnit, ts: Expr<DateTime.Utc, Q>): Expr<DateTime.Utc, Q> =>
+	makeExpr(scalar.lazy(() => `date_trunc(${compile(str(unit))}, ${sql(ts)}, 'UTC')`), timestamptz)
 
 /** `date_bin(seconds, ts, epoch)`: fixed-width buckets aligned to the Unix
  *  epoch, ClickHouse's `toStartOfInterval`. Postgres 14+. */
-export const dateBin = (seconds: number, ts: Expr<DateTime.Utc>): Expr<DateTime.Utc> => {
+export const dateBin = <Q = never>(seconds: number, ts: Expr<DateTime.Utc, Q>): Expr<DateTime.Utc, Q> => {
 	if (!(Number.isSafeInteger(seconds) && seconds > 0)) {
 		throw new QueryBuilderDefect({ message: `dateBin: bucket width must be a positive whole number of seconds, got ${seconds}` })
 	}
 	return makeExpr(
-		lazy(() => `date_bin(make_interval(secs => ${seconds}), ${sql(ts)}, TIMESTAMPTZ '1970-01-01 00:00:00+00')`),
+		scalar.lazy(() => `date_bin(make_interval(secs => ${seconds}), ${sql(ts)}, TIMESTAMPTZ '1970-01-01 00:00:00+00')`),
 		timestamptz,
 	)
 }
 
 /** `now()`: the transaction's start time. */
-export const now = (): Expr<DateTime.Utc> => makeExpr(raw("now()"), timestamptz)
+export const now = (): Expr<DateTime.Utc> => makeExpr(scalar.lazy(() => "now()", "now"), timestamptz)
 
 // Strings and values
 
 const text = T.text.schema as Schema.Codec<string, unknown>
 
-export const lower = (expr: Expr<string>): Expr<string> => makeExpr(lazy(() => `lower(${sql(expr)})`), text)
-export const upper = (expr: Expr<string>): Expr<string> => makeExpr(lazy(() => `upper(${sql(expr)})`), text)
-export const length = (expr: Expr<string>): Expr<number> =>
-	makeExpr(lazy(() => `length(${sql(expr)})`), T.int4.schema as Schema.Codec<number, unknown>)
+export const lower = <Q = never>(expr: Expr<string, Q>): Expr<string, Q> => makeExpr(scalar.lazy(() => `lower(${sql(expr)})`), text)
+export const upper = <Q = never>(expr: Expr<string, Q>): Expr<string, Q> => makeExpr(scalar.lazy(() => `upper(${sql(expr)})`), text)
+export const length = <Q = never>(expr: Expr<string, Q>): Expr<number, Q> =>
+	makeExpr(scalar.lazy(() => `length(${sql(expr)})`), T.int4.schema as Schema.Codec<number, unknown>)
 
 /** `coalesce(expr, fallback)`, no longer nullable. */
-export const coalesce = <A>(expr: Expr<A | null>, fallback: Expr<A>): Expr<A> =>
+export const coalesce = <A, Q1 = never, Q2 = never>(expr: Expr<A | null, Q1>, fallback: Expr<A, Q2>): Expr<A, Q1 | Q2> =>
 	makeExpr(
-		lazy(() => `coalesce(${sql(expr)}, ${sql(fallback)})`),
+		scalar.lazy(() => `coalesce(${sql(expr)}, ${sql(fallback)})`),
 		schemaOf<A>(fallback) ?? withoutNull(schemaOf<A | null>(expr)),
 	)
 
 /** `expr ->> key`: a jsonb field as text, NULL when it is absent. */
-export const jsonText = (expr: Expr<unknown>, key: string): Expr<string | null> =>
-	makeExpr(lazy(() => `(${sql(expr)} ->> ${compile(str(key))})`), Schema.NullOr(Schema.String) as Schema.Codec<string | null, unknown>)
+export const jsonText = <Q = never>(expr: Expr<unknown, Q>, key: string): Expr<string | null, Q> =>
+	makeExpr(scalar.lazy(() => `(${sql(expr)} ->> ${compile(str(key))})`), Schema.NullOr(Schema.String) as Schema.Codec<string | null, unknown>)

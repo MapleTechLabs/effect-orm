@@ -40,7 +40,9 @@ names the record type.
 `where` works as in a query: a list of conditions, AND-joined, with an `undefined` one skipped,
 so optional filters compose. A write with no `where` would change every row, so:
 
-- compiling an UPDATE or DELETE with no `where()` is a `QueryBuilderDefect`;
+- an UPDATE or DELETE with no `where()` or `allRows()` is a type error, and compiling one
+  that slipped past the types is a `QueryBuilderDefect`;
+- calling `where` again ANDs the new conditions with the earlier ones;
 - a `where()` whose conditions all came out `undefined` (or render to nothing) is a
   `QueryBuilderError`, because that happens with data (every optional filter absent) and would
   otherwise widen a filtered write to the whole table;

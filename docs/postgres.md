@@ -109,7 +109,11 @@ which no session time zone can reinterpret; a zoneless string is read as UTC.
 
 The shared operators (`eq`, `in_`, `like`, `ilike`, `and`, `or`, `not`, arithmetic, `lit`) work
 unchanged. The ClickHouse function catalog on the root entry (`quantile`, `toStartOfInterval`,
-map subscripts, …) writes ClickHouse SQL and will not run on Postgres.
+`count()`, …) writes ClickHouse SQL, so compiling a query that uses one for Postgres is a
+`QueryBuilderDefect` naming the function; the Postgres functions above fail the same way on
+ClickHouse. `coalesce`, `nullIf` and `lower` from the root entry render the same on both and
+are allowed on either. A custom `Dialect` opts in with `functions: "clickhouse"` or
+`"postgres"`; without it, nothing is checked.
 
 ## Known differences
 

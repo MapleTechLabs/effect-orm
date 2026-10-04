@@ -86,6 +86,7 @@ const placeholderCasts: Readonly<Record<string, string>> = {
  */
 export const postgresDialect: Dialect = {
 	name: "postgres",
+	functions: "postgres",
 	quoteIdent,
 	quoteString,
 	literal,

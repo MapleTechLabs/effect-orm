@@ -29,6 +29,31 @@ Param names must be alphanumeric, optionally separated by single underscores —
 through the placeholder that `compile` later matches, and `__` would make its boundary
 ambiguous. A name that cannot round-trip is a `QueryBuilderDefect` at declaration.
 
+## Params are in the query's type
+
+A query remembers the params it uses, with their types, and `compile`, `compileUnion` and
+`Database.run` require them:
+
+```ts
+const byOrg = CH.from(Events)
+	.select("Name")
+	.where(($) => [$.OrgId.eq(CH.param.string("orgId")), $.Ms.gt(CH.param.int("minMs"))])
+
+CH.compile(byOrg, { orgId: "org_1", minMs: 100 }) // ok
+CH.compile(byOrg, { orgId: "org_1" }) // type error: paramsRequired { orgId: string; minMs: number }
+CH.compile(byOrg, { orgId: 1, minMs: 100 }) // type error: orgId is a string
+```
+
+Params are collected from `where`, `having`, `select`, join `on` callbacks, subqueries in
+`FROM`, joins, CTEs and `EXISTS`/`IN`, union branches, and insert rows, `SET` records and
+write `where`s. Extra keys are allowed, so one params object can serve several queries. A
+query without params takes none.
+
+A function the builder does not know passes its arguments' params on only if its signature
+says so: `defineFn`, `defineCondFn` and `compileTypedFnCall` from the extending API do, a
+hand-written `makeExpr` does not. A param the type does not see is still checked when
+compiling, as below.
+
 ## What each kind accepts
 
 The declared kind is checked when the value arrives, so a value of the wrong shape is a
@@ -280,6 +305,7 @@ const query = CH.from(Events)
 	.where(($) => [$.Name.eq(CH.param.string("name"))])
 
 export const outcome = await Effect.runPromise(
+	// @ts-expect-error -- a missing param is a type error too; this shows the runtime failure
 	CH.compile(query, {}).pipe(
 		Effect.map((compiled) => ({ ok: true as const, sql: compiled.sql })),
 		Effect.catchTag("@maple-dev/effect-orm/QueryBuilderError", (error) =>

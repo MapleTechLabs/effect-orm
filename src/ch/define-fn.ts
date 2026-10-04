@@ -8,7 +8,7 @@
 import { Result, Schema, type SchemaAST } from "effect"
 import { CHFloatResult, CHNumber, dateTime64 } from "./types"
 import { compile, lazy } from "../sql/sql-fragment"
-import type { Expr, Condition } from "./expr"
+import type { Expr, Condition, ParamsIn } from "./expr"
 import { makeExpr, makeUntypedExpr, makeCond, toFragment } from "./expr"
 import type { CHType } from "./types"
 
@@ -82,26 +82,29 @@ export const withoutNull = <T>(
 }
 
 // Re-export for consumer convenience
-export { makeExpr, makeUntypedExpr, makeCond }
+export { makeExpr, makeUntypedExpr, makeCond } from "./custom-expr"
 
 // compileFnCall — low-level helper for handwritten generic/special functions
 
-export function compileFnCall<R>(name: string, ...args: unknown[]): Expr<R> {
+export function compileFnCall<R, A extends unknown[] = unknown[]>(name: string, ...args: A): Expr<R, ParamsIn<A[number]>> {
 	const compiled = () => args.map((a) => compile(toFragment(a))).join(", ")
-	return makeUntypedExpr<R>(lazy(() => `${name}(${compiled()})`))
+	return makeUntypedExpr<R>(lazy(() => `${name}(${compiled()})`)) as Expr<R, any>
 }
 
 /** `compileFnCall` for a function whose result type is known. */
-export function compileTypedFnCall<R>(
+// `A` first, and inferred: `R` comes from `schema`, so an explicit
+// `compileTypedFnCall<number>(…)` is an error rather than a call that stops
+// reading its arguments' params.
+export function compileTypedFnCall<A extends unknown[], R>(
 	name: string,
 	schema: Schema.Codec<R, unknown> | undefined,
-	...args: unknown[]
-): Expr<R> {
+	...args: A
+): Expr<R, ParamsIn<A[number]>> {
 	const compiled = () => args.map((a) => compile(toFragment(a))).join(", ")
-	return makeExpr<R>(lazy(() => `${name}(${compiled()})`), schema)
+	return makeExpr<R>(lazy(() => `${name}(${compiled()})`), schema) as Expr<R, any>
 }
 
-export function compileFnCallCond(name: string, ...args: unknown[]): Condition {
+export function compileFnCallCond<A extends unknown[]>(name: string, ...args: A): Condition<ParamsIn<A[number]>> {
 	const compiled = () => args.map((a) => compile(toFragment(a))).join(", ")
 	return makeCond(lazy(() => `${name}(${compiled()})`))
 }
@@ -143,8 +146,8 @@ const resultSchema = <Args extends unknown[], R>(
 export function defineFn<Args extends unknown[], R>(
 	name: string,
 	result: FnResult<Args, R>,
-): (...args: Args) => Expr<R> {
-	return (...args: Args): Expr<R> => compileTypedFnCall<R>(name, resultSchema(result, args), ...args)
+): <A extends Args>(...args: A) => Expr<R, ParamsIn<A[number]>> {
+	return <A extends Args>(...args: A) => compileTypedFnCall<A, R>(name, resultSchema(result, args), ...args)
 }
 
 /**
@@ -155,8 +158,8 @@ export function defineFn<Args extends unknown[], R>(
  */
 export function defineUntypedFn<Args extends unknown[], R = unknown>(
 	name: string,
-): (...args: Args) => Expr<R> {
-	return (...args: Args): Expr<R> => compileFnCall<R>(name, ...args)
+): <A extends Args>(...args: A) => Expr<R, ParamsIn<A[number]>> {
+	return <A extends Args>(...args: A) => compileFnCall<R, A>(name, ...args)
 }
 
 // Result rules
@@ -221,8 +224,8 @@ export const arrayOfArg =
 // Usage:
 //   export const hasToken = defineCondFn<[Expr<string>]>("hasToken")
 
-export function defineCondFn<Args extends unknown[]>(name: string): (...args: Args) => Condition {
-	return (...args: Args): Condition => compileFnCallCond(name, ...args)
+export function defineCondFn<Args extends unknown[]>(name: string): <A extends Args>(...args: A) => Condition<ParamsIn<A[number]>> {
+	return <A extends Args>(...args: A) => compileFnCallCond(name, ...args)
 }
 
 /** Numeric functions preserve SQL NULL while promoting the numeric type. */
