@@ -11,6 +11,10 @@ interface SqlJoin {
 }
 
 export interface SqlQuery {
+	/** `SELECT DISTINCT`. */
+	readonly distinct?: boolean
+	/** `SELECT DISTINCT ON (...)`; implies `distinct`. */
+	readonly distinctOn?: ReadonlyArray<SqlFragment>
 	readonly select: ReadonlyArray<SqlFragment>
 	readonly from: SqlFragment
 	readonly joins?: ReadonlyArray<SqlJoin>
@@ -20,6 +24,8 @@ export interface SqlQuery {
 	readonly orderBy: ReadonlyArray<SqlFragment>
 	readonly limit?: SqlFragment
 	readonly offset?: SqlFragment
+	/** A locking clause written after OFFSET, e.g. `FOR UPDATE SKIP LOCKED`. */
+	readonly lock?: string
 	readonly format?: string
 }
 
@@ -30,7 +36,12 @@ export function compileQuery(q: SqlQuery): string {
 
 	// SELECT
 	const selectCols = q.select.map(compile).filter(Boolean)
-	parts.push(`SELECT\n          ${selectCols.join(",\n          ")}`)
+	const distinct = q.distinctOn?.length
+		? ` DISTINCT ON (${q.distinctOn.map(compile).join(", ")})`
+		: q.distinct
+			? " DISTINCT"
+			: ""
+	parts.push(`SELECT${distinct}\n          ${selectCols.join(",\n          ")}`)
 
 	// FROM
 	parts.push(`FROM ${compile(q.from)}`)
@@ -74,6 +85,11 @@ export function compileQuery(q: SqlQuery): string {
 	// OFFSET
 	if (q.offset) {
 		parts.push(`OFFSET ${compile(q.offset)}`)
+	}
+
+	// Locking
+	if (q.lock) {
+		parts.push(q.lock)
 	}
 
 	// FORMAT

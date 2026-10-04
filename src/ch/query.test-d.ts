@@ -305,3 +305,19 @@ expectTypeOf<Extracted>().toEqualTypeOf<{
 	readonly id: string
 	readonly age: number
 }>()
+
+// Predicates, and/or, distinct and locking
+{
+	const T = CH.table("t", { a: CH.string, n: CH.uint64, o: CH.nullable(CH.string) })
+	CH.from(T).select("a").where(($) => [$.o.isNull(), $.n.between(1, CH.param.int("hi")), $.a.notBetween("a", "m")])
+	// @ts-expect-error between takes the column's type
+	CH.from(T).select("a").where(($) => [$.n.between("1", 2)])
+	expectTypeOf(CH.and(CH.rawCond("1"), CH.rawCond("2"))).toEqualTypeOf<CH.Condition>()
+	expectTypeOf(CH.or(CH.rawCond("1"), undefined)).toEqualTypeOf<CH.Condition | undefined>()
+	CH.from(T).select("a", "n").distinctOn("a")
+	// @ts-expect-error distinctOn takes selected aliases
+	CH.from(T).select("a").distinctOn("n")
+	// @ts-expect-error distinctOn needs a key
+	CH.from(T).select("a").distinctOn()
+	CH.from(T).select("a").forUpdate({ skipLocked: true, of: ["t"] })
+}

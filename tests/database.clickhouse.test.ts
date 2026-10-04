@@ -165,6 +165,39 @@ describe("database", () => {
 			])
 		})
 
+		it("reads with DISTINCT, DISTINCT ON, IS NULL and BETWEEN", async () => {
+			const result = await Effect.runPromise(
+				withDatabase((db) =>
+					Effect.gen(function* () {
+						yield* db.execute(Db.sql`CREATE TABLE ev (OrgId String, Id UInt32, Note Nullable(String)) ENGINE = MergeTree ORDER BY (OrgId, Id)`)
+						const Ev = CH.table("ev", { OrgId: CH.string, Id: CH.uint32, Note: CH.nullable(CH.string) })
+						yield* db.run(
+							CH.insertInto(Ev).values([
+								{ OrgId: "o", Id: 1, Note: null },
+								{ OrgId: "o", Id: 2, Note: "n" },
+								{ OrgId: "p", Id: 3, Note: null },
+							]),
+						)
+						const orgs = yield* db.run(CH.from(Ev).select("OrgId").distinct().orderBy(["OrgId", "asc"]))
+						const last = yield* db.run(
+							CH.from(Ev).select(($) => ({ OrgId: $.OrgId, Id: $.Id })).distinctOn("OrgId").orderBy(["OrgId", "asc"], ["Id", "desc"]),
+						)
+						const nulls = yield* db.run(
+							CH.from(Ev).select("Id").where(($) => [$.Note.isNull(), $.Id.between(1, CH.param.int("hi"))]).orderBy(["Id", "asc"]),
+							{ hi: 3 },
+						)
+						return { orgs, last, nulls }
+					}),
+				),
+			)
+			expect(result.orgs).toEqual([{ OrgId: "o" }, { OrgId: "p" }])
+			expect(result.last).toEqual([
+				{ OrgId: "o", Id: 2 },
+				{ OrgId: "p", Id: 3 },
+			])
+			expect(result.nulls).toEqual([{ Id: 1 }, { Id: 3 }])
+		})
+
 		it("refuses a transaction before sending anything", async () => {
 			const result = await Effect.runPromise(
 				withDatabase((db, sent) =>

@@ -19,23 +19,17 @@ $.Timestamp.gte(new Date(...))            // Timestamp >= '2026-01-01 00:00:00'
 
 ### Testing for NULL
 
-`.eq(null)` emits `= NULL`; it does not test whether a value is missing. Use
-`isNull` (or `isNotNull` for present values), declared with `defineCondFn`:
+`.eq(null)` emits `= NULL`; it does not test whether a value is missing. Use `.isNull()` (or
+`.isNotNull()` for present values), which write `IS NULL` and work on every dialect:
 
 ```ts title="null-filter.ts"
 import * as CH from "@maple-dev/effect-orm"
 import * as T from "@maple-dev/effect-orm/types"
 
 const Notes = CH.table("notes", { Note: T.nullable(T.string) })
-const isNull = CH.defineCondFn<[CH.Expr<string | null>]>("isNull")
-export const compiled = CH.compileUnsafe(
-	CH.from(Notes).select("Note").where(($) => [isNull($.Note)]),
-	{},
-)
-console.log(compiled.sql) // SELECT Note AS Note FROM notes WHERE isNull(Note)
+export const compiled = CH.compileUnsafe(CH.from(Notes).select("Note").where(($) => [$.Note.isNull()]))
+console.log(compiled.sql) // SELECT Note AS Note FROM notes WHERE Note IS NULL
 ```
-
-See [ClickHouse NULL predicates](https://clickhouse.com/docs/reference/functions/regular-functions/functions-for-nulls#isNull).
 
 ### Invalid literals
 
@@ -62,6 +56,8 @@ Every `Expr<T>` carries:
 | `.gt(x)` / `.gte(x)`            | `> x` / `>= x`          |
 | `.lt(x)` / `.lte(x)`            | `< x` / `<= x`          |
 | `.in_(...xs)` / `.notIn(...xs)` | `IN (…)` / `NOT IN (…)` |
+| `.between(a, b)` / `.notBetween(a, b)` | `BETWEEN a AND b` / `NOT BETWEEN a AND b` |
+| `.isNull()` / `.isNotNull()`    | `IS NULL` / `IS NOT NULL` |
 
 Each accepts a raw value or another `Expr<T>`. String literals are escaped; booleans emit as
 `1` / `0`.
@@ -86,8 +82,20 @@ Each accepts a raw value or another `Expr<T>`. String literals are escaped; bool
 `.and()` / `.or()` parenthesise their result, so precedence is explicit. `CH.not(condition)` wraps
 in `NOT (…)` and is available from the root and `/expr` subpath.
 
+`CH.and(...)` and `CH.or(...)` take any number of conditions, skip `undefined` ones, and write
+one flat group. With none left they return `undefined`, which `where` skips, so optional
+filters combine without special cases:
+
+```ts
+.where(($) => [
+	$.OrgId.eq("org_123"),
+	CH.or(CH.when(name, (n) => $.Name.eq(n)), CH.when(minMs, (ms) => $.Ms.gte(ms))),
+])
+// both given -> … AND (Name = 'checkout' OR Ms >= 100); neither -> only the OrgId test
+```
+
 The `where` array is AND-joined. [Tenant scoping](./tenant-scoping.md) preserves evidence
-through both separate entries and `.and()`; `.or()` discards it.
+through both separate entries, `.and()` and `CH.and()`; `.or()` and `CH.or()` discard it.
 
 _(Backed by `docs/expressions.md > Combining conditions with and/or`.)_
 

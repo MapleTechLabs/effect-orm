@@ -61,6 +61,21 @@ export type InferOutput<S extends SelectRecord> = {
 
 type OrderBySpec<Output> = [keyof Output & string, "asc" | "desc"]
 
+/** How a locking clause waits for rows another transaction holds. */
+export interface LockOptions {
+	/** `SKIP LOCKED`: leave out rows another transaction has locked. */
+	readonly skipLocked?: boolean
+	/** `NOWAIT`: fail at once instead of waiting. Not with `skipLocked`. */
+	readonly noWait?: boolean
+	/** `OF alias, ...`: lock only these tables' rows (the FROM alias or table name, or join aliases). */
+	readonly of?: ReadonlyArray<string>
+}
+
+/** @internal — the locking clause of a query. */
+export interface LockClause extends LockOptions {
+	readonly strength: "UPDATE" | "NO KEY UPDATE" | "SHARE" | "KEY SHARE"
+}
+
 /** Callback for ON conditions — receives main and joined column accessors. */
 export type JoinOnCallback<MainCols extends ColumnDefs, JoinedCols extends ColumnDefs> = (
 	main: ColumnAccessor<MainCols>,
@@ -98,6 +113,10 @@ export interface CHQueryState {
 	readonly limitValue?: number
 	readonly offsetValue?: number
 	readonly formatValue?: string
+	/** Set by `distinct` (`true`) or `distinctOn` (the output aliases). */
+	readonly distinct?: true | ReadonlyArray<string>
+	/** Set by `forUpdate` and the other locking methods. */
+	readonly lock?: LockClause
 	/** Execution-route metadata carried onto the CompiledQuery (see compile.ts). */
 	readonly routeValue?: string
 	/** Set by `.crossTenant()`. Forces `tenantScope: "cross-tenant"` (see compile.ts). */
@@ -174,6 +193,28 @@ export interface CHQuery<
 	offset(n: number): CHQuery<Cols, Output, Joins, Route>
 
 	format(fmt: "JSON" | "JSONEachRow"): CHQuery<Cols, Output, Joins, Route>
+
+	/** `SELECT DISTINCT`: drop duplicate output rows. */
+	distinct(): CHQuery<Cols, Output, Joins, Route>
+
+	/**
+	 * `SELECT DISTINCT ON (keys)`: keep the first row of each group of these
+	 * output aliases, in ORDER BY order (Postgres wants the keys to lead the
+	 * ORDER BY). Replaces `distinct()`.
+	 */
+	distinctOn(...keys: [keyof Output & string, ...Array<keyof Output & string>]): CHQuery<Cols, Output, Joins, Route>
+
+	/**
+	 * `FOR UPDATE`: lock the selected rows until the transaction ends. Run it
+	 * inside `Database.transaction`. Postgres only; replaces any earlier lock.
+	 */
+	forUpdate(options?: LockOptions): CHQuery<Cols, Output, Joins, Route>
+	/** `FOR NO KEY UPDATE`: as `forUpdate`, without blocking inserts that reference the rows. */
+	forNoKeyUpdate(options?: LockOptions): CHQuery<Cols, Output, Joins, Route>
+	/** `FOR SHARE`: a shared lock, which blocks writers but not other sharers. */
+	forShare(options?: LockOptions): CHQuery<Cols, Output, Joins, Route>
+	/** `FOR KEY SHARE`: the weakest lock, blocking only deletes and key updates. */
+	forKeyShare(options?: LockOptions): CHQuery<Cols, Output, Joins, Route>
 
 	/**
 	 * Tag this query with an execution route, carried through to the compiled
@@ -443,6 +484,30 @@ function makeQuery<
 
 		format(fmt) {
 			return makeQuery({ ...state, formatValue: fmt })
+		},
+
+		distinct() {
+			return makeQuery({ ...state, distinct: true })
+		},
+
+		distinctOn(...keys) {
+			return makeQuery({ ...state, distinct: keys as ReadonlyArray<string> })
+		},
+
+		forUpdate(options = {}) {
+			return makeQuery({ ...state, lock: { strength: "UPDATE", ...options } })
+		},
+
+		forNoKeyUpdate(options = {}) {
+			return makeQuery({ ...state, lock: { strength: "NO KEY UPDATE", ...options } })
+		},
+
+		forShare(options = {}) {
+			return makeQuery({ ...state, lock: { strength: "SHARE", ...options } })
+		},
+
+		forKeyShare(options = {}) {
+			return makeQuery({ ...state, lock: { strength: "KEY SHARE", ...options } })
 		},
 
 		route(route) {

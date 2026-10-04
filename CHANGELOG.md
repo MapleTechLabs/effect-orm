@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Add `isNull()`, `isNotNull()`, `between()` and `notBetween()` on every expression, and
+  variadic `CH.and(...)` / `CH.or(...)` that skip `undefined` and write one flat group.
+- Add `distinct()` and `distinctOn(...aliases)` to queries, on both dialects.
+- Add Postgres row locks: `forUpdate`, `forNoKeyUpdate`, `forShare`, `forKeyShare`, with
+  `skipLocked`, `noWait` and `of` (`LockOptions`). Add `DialectClauses.locking`; ClickHouse
+  refuses them. `SqlQuery` gains `distinct`, `distinctOn` and `lock`.
+- `compile(query)` no longer needs a params argument when the query has no params.
 - Add `update(table).set(...).where(...)` and `deleteFrom(table).where(...)` (see
   `docs/updates-and-deletes.md`), with `returning` on Postgres and `settings` on ClickHouse,
   where they compile to an `ALTER TABLE ... UPDATE` mutation and a lightweight `DELETE`. A write

@@ -49,6 +49,23 @@ export class CompiledQueryEncodeError extends Schema.TaggedError<CompiledQueryEn
 	},
 ) {}
 
+/** `FOR UPDATE SKIP LOCKED` and the like, refused where the dialect has no locking. */
+const lockClause = (lock: import("./query").LockClause | undefined): string | undefined => {
+	if (lock === undefined) return undefined
+	const dialect = currentDialect()
+	if (dialect.clauses.locking !== true) {
+		throw new QueryBuilderDefect({
+			message: `CHQuery: FOR ${lock.strength} has no meaning for the ${dialect.name} dialect, which has no row locks`,
+		})
+	}
+	if (lock.skipLocked === true && lock.noWait === true) {
+		throw new QueryBuilderDefect({ message: "CHQuery: a lock takes skipLocked or noWait, not both" })
+	}
+	const of = lock.of !== undefined && lock.of.length > 0 ? ` OF ${lock.of.map(quoteIdentPath).join(", ")}` : ""
+	const wait = lock.skipLocked === true ? " SKIP LOCKED" : lock.noWait === true ? " NOWAIT" : ""
+	return `FOR ${lock.strength}${of}${wait}`
+}
+
 /** `orderBy` takes `[column, direction]` tuples. A bare string is the natural
  *  mistake (`.orderBy("count", "desc")`), and it is invisible without types:
  *  destructuring a string yields its first two characters, so `"count"` used to
@@ -531,11 +548,12 @@ export function compileCH<
 	Output extends Record<string, any>,
 	Joins extends Record<string, ColumnDefs>,
 	Route extends string | undefined,
-	Params extends Record<string, any>,
+	Params extends Record<string, any> = {},
 	Decoded extends Output = Output,
 >(
 	query: CHQuery<Cols, Output, Joins, Route>,
-	params: Params,
+	/** Values for the query's `param.*` markers. Optional when it has none. */
+	params?: Params,
 	options?: {
 		skipFormat?: boolean
 		rowSchema?: CompiledQueryRowSchema<Decoded>
@@ -578,11 +596,12 @@ export function compileCHUnsafe<
 	Output extends Record<string, any>,
 	Joins extends Record<string, ColumnDefs>,
 	Route extends string | undefined,
-	Params extends Record<string, any>,
+	Params extends Record<string, any> = {},
 	Decoded extends Output = Output,
 >(
 	query: CHQuery<Cols, Output, Joins, Route>,
-	params: Params,
+	/** Values for the query's `param.*` markers. Optional when it has none. */
+	params?: Params,
 	options?: {
 		skipFormat?: boolean
 		rowSchema?: CompiledQueryRowSchema<Decoded>
@@ -827,6 +846,16 @@ function compileInner<
 		})
 
 		const sqlQuery: SqlQuery = {
+			distinct: state.distinct !== undefined,
+			distinctOn: Array.isArray(state.distinct)
+				? state.distinct.map((key) => {
+						if (!(options?.selectKeys ?? keys).includes(key)) {
+							throw new QueryBuilderDefect({ message: `CHQuery: distinctOn(${JSON.stringify(key)}) is not a selected alias` })
+						}
+						return raw(quoteIdent(key))
+					})
+				: undefined,
+			lock: lockClause(state.lock),
 			select: selectFragments,
 			from: fromFragment,
 			joins,

@@ -68,6 +68,9 @@ export interface DialectClauses {
 	/** `SETTINGS` on an INSERT, UPDATE or DELETE (ClickHouse). Absent means
 	 *  no: a write with `.settings()` fails to compile for the dialect. */
 	readonly writeSettings?: boolean
+	/** Row locking on a SELECT (`FOR UPDATE`, `FOR SHARE`, `SKIP LOCKED`). Absent
+	 *  means no: a query with `.forUpdate()` and the like fails to compile. */
+	readonly locking?: boolean
 	/** UPDATE is written `ALTER TABLE t UPDATE ... WHERE ...`, a ClickHouse
 	 *  mutation, rather than `UPDATE t SET ... WHERE ...`. */
 	readonly alterTableUpdate?: boolean
