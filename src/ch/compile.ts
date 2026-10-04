@@ -1221,6 +1221,12 @@ function derivedLiteralSchema(schema: Schema.Codec<any, any>): Schema.Codec<any,
 	return schema
 }
 
+/** The aliases a query selects, read without compiling it; `undefined` before `select()`. */
+export function selectedAliasesOf(query: CHQuery<any, any, any>): ReadonlyArray<string> | undefined {
+	const exprs = selectExprsOf(query)
+	return exprs === undefined ? undefined : Object.keys(exprs)
+}
+
 /** Evaluate a query's SELECT callback without compiling it. */
 function selectExprsOf(query: CHQuery<any, any, any>): Record<string, unknown> | undefined {
 	const state = query._state

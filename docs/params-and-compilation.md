@@ -305,6 +305,7 @@ const query = CH.from(Events)
 	.where(($) => [$.Name.eq(CH.param.string("name"))])
 
 export const outcome = await Effect.runPromise(
+	// @ts-expect-error -- a missing param is a type error too; this shows the runtime failure
 	CH.compile(query, {}).pipe(
 		Effect.map((compiled) => ({ ok: true as const, sql: compiled.sql })),
 		Effect.catchTag("@maple-dev/effect-orm/QueryBuilderError", (error) =>

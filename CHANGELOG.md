@@ -25,6 +25,12 @@
   - Built-in functions belong to a dialect: a ClickHouse function (such as `count()`) in a
     Postgres compile fails, and the reverse. `coalesce`, `nullIf` and `lower` are portable.
     `Dialect.functions` names a dialect's function set.
+  - `makeExpr`, `makeUntypedExpr` and `makeCond` take the expressions they interpolate as
+    `uses`, whose params the result carries; a param in the SQL that no `uses` entry carries
+    fails to compile. Their value type comes from the schema: explicit type arguments
+    (`makeExpr<T>`, `subqueryExpr<T>`, `compileTypedFnCall<R>`) are errors, so they cannot
+    silently drop params. `untypedSubqueryExpr` returns `Expr<unknown>`.
+  - `inSubquery` / `notInSubquery` check at compile time that the subquery selects one column.
 - Add `CH.sql`: SQL templates inside expressions and conditions. `CH.sql(type)\`…\`` is a typed
   `Expr`, ``CH.sql`…` `` an untyped one, `CH.sql.cond` a `Condition`; with `sql.ident`, `sql.raw`
   and `sql.join`. Interpolated columns and params render as SQL and placeholders, a builder

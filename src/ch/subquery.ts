@@ -7,7 +7,8 @@
 // — one top-level `const` away from a TDZ crash in the bundle.
 
 import { renderSubquery } from "./subquery-context"
-import { compileCHUnsafe } from "./compile"
+import { compileCHUnsafe, selectedAliasesOf } from "./compile"
+import { QueryBuilderDefect } from "./errors"
 import { type Condition, type Expr, makeCond, makeExpr, makeUntypedExpr } from "./expr"
 import type { CHQuery, NeedsSelect, SingleColumnOf } from "./query"
 import type { QueryParams } from "./union"
@@ -34,6 +35,22 @@ const toSql = (subquery: Subquery): string =>
 			: compileCHUnsafe(query, {}, { skipFormat: true, deferParams: true }).sql,
 	)
 
+/**
+ * `expr IN (subquery)` compares against one column. The type says so; this
+ * says so to a caller past the types (a cast, an untyped query), where the
+ * database would otherwise fail on, or ClickHouse silently compare, a tuple.
+ */
+const oneColumn = (what: string, subquery: Subquery): Subquery => {
+	if (typeof subquery === "string") return subquery
+	const aliases = selectedAliasesOf(subquery)
+	if (aliases !== undefined && aliases.length !== 1) {
+		throw new QueryBuilderDefect({
+			message: `${what}: the subquery must select exactly one column, not ${aliases.length === 0 ? "none" : aliases.join(", ")}`,
+		})
+	}
+	return subquery
+}
+
 // Subqueries contribute their own source scope, never a binding on outer rows.
 // An inner tenant filter cannot confine an otherwise unfiltered outer source.
 
@@ -52,7 +69,7 @@ export function inSubquery<T, O extends Record<string, any>, Q = never, SP = nev
 	expr: Expr<T, Q>,
 	subquery: string | (CHQuery<any, O, any, any, SP> & SingleColumnOf<O, T>),
 ): Condition<Q | SP> {
-	return makeCond(lazy(() => `${compile(expr.toFragment())} IN (${toSql(subquery)})`))
+	return makeCond(lazy(() => `${compile(expr.toFragment())} IN (${toSql(oneColumn("inSubquery", subquery))})`))
 }
 
 /**
@@ -65,7 +82,7 @@ export function notInSubquery<T, O extends Record<string, any>, Q = never, SP = 
 	expr: Expr<T, Q>,
 	subquery: string | (CHQuery<any, O, any, any, SP> & SingleColumnOf<O, T>),
 ): Condition<Q | SP> {
-	return makeCond(lazy(() => `${compile(expr.toFragment())} NOT IN (${toSql(subquery)})`))
+	return makeCond(lazy(() => `${compile(expr.toFragment())} NOT IN (${toSql(oneColumn("notInSubquery", subquery))})`))
 }
 
 // Spliced sub-SELECTs
@@ -100,7 +117,10 @@ export function notInSubquery<T, O extends Record<string, any>, Q = never, SP = 
  * Expression composition preserves deferred rendering, including when a caller
  * builds the expression or condition before the outer query.
  */
-export function subqueryExpr<T, S extends Subquery = Subquery>(
+// The subquery is the first type parameter, and inferred: an explicit type
+// argument (`subqueryExpr<number>(…)`) is then an error rather than a call that
+// stops inferring the subquery and drops its params from the type.
+export function subqueryExpr<S extends Subquery, T>(
 	subquery: S,
 	type: CHType<string, T, any>,
 	wrap: (sql: string) => string = (sql) => `(${sql})`,
@@ -113,12 +133,13 @@ export function subqueryExpr<T, S extends Subquery = Subquery>(
 
 /** {@link subqueryExpr} for a spliced value with no declared result type — a
  *  sort tuple, an `argMin` tiebreaker. Selecting one costs the query its row
- *  schema, the same as `untypedExpr`. */
-export function untypedSubqueryExpr<T = unknown, S extends Subquery = Subquery>(
+ *  schema, the same as `untypedExpr`. Its value is `unknown`; for a value of a
+ *  type, use `subqueryExpr` with that type. */
+export function untypedSubqueryExpr<S extends Subquery>(
 	subquery: S,
 	wrap: (sql: string) => string = (sql) => `(${sql})`,
-): Expr<T, QueryParams<S>> {
-	return makeUntypedExpr<T>(lazy(() => wrap(toSql(subquery))))
+): Expr<unknown, QueryParams<S>> {
+	return makeUntypedExpr<unknown>(lazy(() => wrap(toSql(subquery))))
 }
 
 /** {@link subqueryExpr} as a predicate — for the `IN`/`EXISTS` shapes the three

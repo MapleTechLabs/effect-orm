@@ -78,7 +78,7 @@ import * as CH from "@maple-dev/effect-orm"
 import * as T from "@maple-dev/effect-orm/types"
 
 const greatestOf = (first: CH.Expr<number>, ...rest: CH.Expr<number>[]) =>
-	CH.compileTypedFnCall<number>("greatest", T.float64.schema, first, ...rest)
+	CH.compileTypedFnCall("greatest", T.float64.schema, first, ...rest)
 
 const Events = CH.table("events", { Name: T.string, DurationMs: T.uint64 })
 export const compiled = CH.compileUnsafe(
@@ -104,11 +104,16 @@ anything bespoke:
 import { makeExpr } from "@maple-dev/effect-orm"
 import { raw, compile } from "@maple-dev/effect-orm/sql"
 
-const quantileExact = (q: number) => (expr: CH.Expr<number>) =>
-	makeExpr<number>(raw(`quantileExact(${q})(${compile(expr.toFragment())})`), T.float64.schema)
+const quantileExact =
+	(q: number) =>
+	<Q = never>(expr: CH.Expr<number, Q>) =>
+		makeExpr(raw(`quantileExact(${q})(${compile(expr.toFragment())})`), T.float64.schema, undefined, [expr])
 ```
 
-This is how the bundled `quantile` is built. Note the second argument: `makeExpr` requires a
+This is how the bundled `quantile` is built. The last argument, `uses`, lists the expressions
+the fragment interpolates (see [below](#params-and-checks-on-a-custom-function)). The value
+type comes from the schema; `makeExpr<number>(…)` with an explicit type argument does not
+type-check. Note the second argument: `makeExpr` requires a
 schema — passing `undefined` is how a wrapper _forwards_ the untypedness of its own argument
 (`schemaOf(arg)`), not something to write. For an expression that genuinely has no type, use
 `makeUntypedExpr`, which says so and costs the query its row schema knowingly.
@@ -131,18 +136,15 @@ control, and validate numeric inputs such as the quantile level separately.
 ### Params and checks on a custom function
 
 `Expr<T, P>` carries the `param.*` placeholders inside an expression, so `compile` can require
-them. `defineFn` and `defineCondFn` pass their arguments' params on by themselves. A wrapper
-built with `makeExpr` says so in its signature, with one type parameter per argument:
+them. `defineFn`, `defineCondFn` and `compileTypedFnCall` pass their arguments' params on by
+themselves. `makeExpr`, `makeUntypedExpr` and `makeCond` cannot see inside the SQL you build,
+so they take the expressions you interpolate as `uses` (the last argument): the result carries
+their params, and compiling fails with a `QueryBuilderDefect` if the SQL holds a param that no
+`uses` entry carries. A param can therefore not reach a query without being in its type.
 
-```ts
-const quantileExact =
-	(q: number) =>
-	<Q = never>(expr: CH.Expr<number, Q>): CH.Expr<number, Q> =>
-		makeExpr<number>(raw(`quantileExact(${q})(${compile(expr.toFragment())})`), T.float64.schema)
-```
-
-Without it the function still works; a param inside it is then checked when compiling rather
-than by the type. SQL built with `makeExpr`, `defineFn` or `CH.sql` is also opaque to the GROUP
+Generic functions take their params as one type parameter per argument (`Expr<number, Q>`
+above); a parameter written as a plain `Expr<T>` accepts any expression but drops its params
+from the type, so they are then checked only when compiling. SQL built with `makeExpr`, `defineFn` or `CH.sql` is also opaque to the GROUP
 BY checks (see [Queries](./queries.md#groupby)): a mistake inside it reaches the database, but
 it never makes a valid query fail.
 

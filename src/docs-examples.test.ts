@@ -848,7 +848,7 @@ describe("docs/extending.md", () => {
 
 	it("makeExpr builds custom call syntax", () => {
 		const quantileExact = (q: number) => (expr: CH.Expr<number>) =>
-			CH.makeExpr<number>(
+			CH.makeExpr(
 				rawFragment(`quantileExact(${q})(${compileFragment(expr.toFragment())})`),
 				T.float64.schema,
 			)

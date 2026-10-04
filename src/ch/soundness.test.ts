@@ -194,3 +194,32 @@ describe("function sets", () => {
 		expect(sql).toContain("coalesce(")
 	})
 })
+
+describe("what the types cannot see", () => {
+	it("refuses a custom expression that interpolates a param it does not declare in uses", () => {
+		const param = CH.param.string("secret")
+		const hidden = CH.makeExpr(
+			CH.untypedExpr(`concat('a', ${"__x__"})`).toFragment(),
+			CH.string.schema,
+		)
+		expect(compileCHUnsafe(CH.from(Users).select(() => ({ h: hidden }))).sql).toContain("concat")
+		const sneaky = CH.makeCond(CH.sql.cond`${param} = 'x'`.toFragment())
+		expect(() => compileCHUnsafe(CH.from(Users).select("Id").where(() => [sneaky]), { secret: "s" })).toThrow(
+			/no expression in `uses` carries/,
+		)
+		const declared = CH.makeCond(CH.sql.cond`${param} = 'x'`.toFragment(), [param])
+		expect(compileCHUnsafe(CH.from(Users).select("Id").where(() => [declared]), { secret: "s" }).sql).toContain(
+			"('s') = 'x'",
+		)
+	})
+
+	it("refuses an IN subquery that selects other than one column, past the types", () => {
+		const two = CH.from(Orders).select("UserId", "Amount") as any
+		expect(() => compileCHUnsafe(CH.from(Users).select("Id").where(($) => [CH.inSubquery($.Id, two)]))).toThrow(
+			/exactly one column, not UserId, Amount/,
+		)
+		expect(() => compileCHUnsafe(CH.from(Users).select("Id").where(($) => [CH.notInSubquery($.Id, two)]))).toThrow(
+			/exactly one column/,
+		)
+	})
+})

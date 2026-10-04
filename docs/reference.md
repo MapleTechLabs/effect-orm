@@ -152,7 +152,7 @@ outer set and its failures land in the outer error channel. See
 | Export                             | Purpose                                   |
 | ---------------------------------- | ----------------------------------------- |
 | `subqueryExpr(q, type, wrap?)`     | Inner SQL as an `Expr` of a declared type |
-| `untypedSubqueryExpr<T>(q, wrap?)` | Same with no type — costs the row schema  |
+| `untypedSubqueryExpr(q, wrap?)`    | Same with no type — costs the row schema  |
 | `subqueryCond(q, wrap)`            | Inner SQL as a `Condition`                |
 
 `wrap` receives the inner SQL and returns the text to emit. It defaults to wrapping the SQL in
@@ -177,9 +177,9 @@ parentheses, which is the plain "this value is a sub-SELECT" case.
 | `compileFnCall<R>(name, ...args)`      | Variadic/generic wrapper (untyped result)          |
 | `compileTypedFnCall<R>(name, schema,)` | Same, with the result codec                        |
 | `compileFnCallCond(name, ...args)`     | Same, returning `Condition`                        |
-| `makeExpr<T>(fragment, schema)`        | Build an `Expr` from a fragment and its codec      |
-| `makeUntypedExpr<T>(fragment)`         | Same with no codec — costs the row schema          |
-| `makeCond(fragment)`                   | Build a `Condition` from a fragment                |
+| `makeExpr(fragment, schema, literal?, uses?)` | Build an `Expr` from a fragment and its codec; `uses` carries params |
+| `makeUntypedExpr(fragment, literal?, uses?)`  | Same with no codec — costs the row schema          |
+| `makeCond(fragment, uses?)`            | Build a `Condition` from a fragment                |
 | `schemaOf(expr)`                       | An expression's codec, or `undefined`              |
 | `schemaOfAny(...exprs)`                | The first codec among several                      |
 | `elementSchema(expr)`                  | The element codec of an array expression           |

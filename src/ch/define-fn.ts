@@ -82,7 +82,7 @@ export const withoutNull = <T>(
 }
 
 // Re-export for consumer convenience
-export { makeExpr, makeUntypedExpr, makeCond }
+export { makeExpr, makeUntypedExpr, makeCond } from "./custom-expr"
 
 // compileFnCall — low-level helper for handwritten generic/special functions
 
@@ -92,7 +92,10 @@ export function compileFnCall<R, A extends unknown[] = unknown[]>(name: string, 
 }
 
 /** `compileFnCall` for a function whose result type is known. */
-export function compileTypedFnCall<R, A extends unknown[] = unknown[]>(
+// `A` first, and inferred: `R` comes from `schema`, so an explicit
+// `compileTypedFnCall<number>(…)` is an error rather than a call that stops
+// reading its arguments' params.
+export function compileTypedFnCall<A extends unknown[], R>(
 	name: string,
 	schema: Schema.Codec<R, unknown> | undefined,
 	...args: A
@@ -144,7 +147,7 @@ export function defineFn<Args extends unknown[], R>(
 	name: string,
 	result: FnResult<Args, R>,
 ): <A extends Args>(...args: A) => Expr<R, ParamsIn<A[number]>> {
-	return <A extends Args>(...args: A) => compileTypedFnCall<R, A>(name, resultSchema(result, args), ...args)
+	return <A extends Args>(...args: A) => compileTypedFnCall<A, R>(name, resultSchema(result, args), ...args)
 }
 
 /**

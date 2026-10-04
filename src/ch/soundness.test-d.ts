@@ -157,3 +157,28 @@ const del = CH.deleteFrom(Orders).where(($) => [$.Id.eq(CH.param.string("id"))])
 // @ts-expect-error -- `id` is missing
 run(del)
 run(del, { id: "a" })
+
+// A custom expression carries the params of the expressions it declares in `uses`
+{
+	const { raw } = { raw: (sql: string) => CH.untypedExpr(sql).toFragment() }
+	const scaled = CH.from(Users).select(($) => {
+		const factor = CH.param.float("factor")
+		return { x: CH.makeExpr(raw("x"), CH.float64.schema, undefined, [$.Age, factor]) }
+	})
+	// @ts-expect-error -- `factor` comes from `uses`
+	CH.compileUnsafe(scaled, {})
+	CH.compileUnsafe(scaled, { factor: 2 })
+}
+
+// @ts-expect-error -- the value type comes from the schema; an explicit one would stop `uses` being read
+CH.makeExpr<number>(CH.untypedExpr("1").toFragment(), CH.float64.schema)
+
+// An explicit type argument on a subquery expression is an error, not a silent loss of params
+const scoped = CH.from(Orders).select(() => ({ n: CH.count() })).where(($) => [$.UserId.eq(CH.param.string("u"))])
+// @ts-expect-error -- the subquery is inferred; give the type as a column type
+CH.subqueryExpr<number>(scoped, CH.uint64)
+// @ts-expect-error -- untypedSubqueryExpr takes no value type
+CH.untypedSubqueryExpr<number>(scoped)
+const withScalar = CH.from(Users).select(() => ({ n: CH.subqueryExpr(scoped, CH.uint64) }))
+// @ts-expect-error -- the subquery's `u` is required
+CH.compileUnsafe(withScalar, {})

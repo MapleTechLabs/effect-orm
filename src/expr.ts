@@ -11,9 +11,6 @@ export {
 	inExprList,
 	inList,
 	lit,
-	makeCond,
-	makeExpr,
-	makeUntypedExpr,
 	not,
 	notInList,
 	or,
@@ -27,6 +24,8 @@ export {
 	when,
 	whenTrue,
 } from "./ch/expr"
+// The checked constructors: a param interpolated without `uses` fails to compile.
+export { makeCond, makeExpr, makeUntypedExpr } from "./ch/custom-expr"
 export * from "./ch/functions"
 // The factories behind `./ch/functions`, so a consumer can declare a function
 // this package does not model and have it carry a result type like a built-in.
