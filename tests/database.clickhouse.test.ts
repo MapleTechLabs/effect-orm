@@ -134,6 +134,37 @@ describe("database", () => {
 			expect(rows).toEqual([{ OrgId: "o", Name: "a", Total: 3 }])
 		})
 
+		it("runs update as an ALTER TABLE mutation and deleteFrom as a lightweight delete", async () => {
+			const rows = await Effect.runPromise(
+				withDatabase((db) =>
+					Effect.gen(function* () {
+						yield* db.execute(Db.sql`CREATE TABLE jobs (OrgId String, Id UInt32, State String) ENGINE = MergeTree ORDER BY (OrgId, Id)`)
+						const Jobs = CH.table("jobs", { OrgId: CH.string, Id: CH.uint32, State: CH.string }, { tenantColumn: "OrgId" })
+						yield* db.run(
+							CH.insertInto(Jobs).values([
+								{ OrgId: "o", Id: 1, State: "queued" },
+								{ OrgId: "o", Id: 2, State: "queued" },
+								{ OrgId: "p", Id: 3, State: "queued" },
+							]),
+						)
+						yield* db.run(
+							CH.update(Jobs)
+								.set({ State: "done" })
+								.where(($) => [$.OrgId.eq(CH.param.string("org")), $.Id.eq(1)])
+								.settings({ mutations_sync: 2 }),
+							{ org: "o" },
+						)
+						yield* db.run(CH.deleteFrom(Jobs).where(($) => [$.OrgId.eq("p")]).settings({ lightweight_deletes_sync: 2 }))
+						return yield* db.run(CH.from(Jobs).select("OrgId", "Id", "State").orderBy(["Id", "asc"]))
+					}),
+				),
+			)
+			expect(rows).toEqual([
+				{ OrgId: "o", Id: 1, State: "done" },
+				{ OrgId: "o", Id: 2, State: "queued" },
+			])
+		})
+
 		it("refuses a transaction before sending anything", async () => {
 			const result = await Effect.runPromise(
 				withDatabase((db, sent) =>

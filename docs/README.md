@@ -16,7 +16,7 @@ You do not need a Maple account, Maple's schema, or tenant columns. Tenant analy
 optional feature for applications that share tables between tenants.
 
 The root builder does not manage connections, create tables, or run migrations. It builds
-SELECTs and [INSERTs](./inserts.md); UPDATE and DELETE are not built yet. Opt-in [schema and migration entry points](./migrations.md) add DDL and migrations for
+SELECTs, [INSERTs](./inserts.md), and [UPDATEs and DELETEs](./updates-and-deletes.md). Opt-in [schema and migration entry points](./migrations.md) add DDL and migrations for
 ClickHouse. It does not validate SQL against a live server, choose query plans, enforce authorization,
 or supply retries. Existing ClickHouse tables and your executor own those responsibilities.
 [Getting started](./getting-started.md) covers npm installation and building from source.
@@ -47,6 +47,7 @@ Roughly in reading order.
 | [Joins and subqueries](./joins-and-subqueries.md)     | The join family, `fromQuery`, correlated subqueries                                 |
 | [Unions and CTEs](./unions-and-ctes.md)               | `unionAll`, `fromUnion`, `withCTE`                                                  |
 | [Inserting rows](./inserts.md)                        | `insertInto`, the insert row type, `DEFAULT`, binding                               |
+| [Updating and deleting](./updates-and-deletes.md)     | `update`, `deleteFrom`, `allRows`, ClickHouse mutations                             |
 | [Params and compilation](./params-and-compilation.md) | `param.*`, how values reach the SQL, `CompiledQuery`                                |
 | [Decoding results](./decoding-results.md)             | `rowSchema`, `decodeRows`, `decodeFirstRow`, decode errors                          |
 | [Running a query](./running-queries.md)               | Executing the SQL with a real client, wire settings, `SETTINGS`                     |

@@ -11,6 +11,8 @@ import { custom, dateTime, dateTime64, type CHType, type ColumnDefs } from "./ty
 import type { CHQuery, CHQueryState } from "./query"
 import type { CHUnionQuery } from "./union"
 import { isInsert, type CHInsert } from "./insert"
+import { isDelete, isUpdate, type CHDelete, type CHUpdate } from "./update"
+import type { Table } from "./table"
 import { createColumnAccessor, createQualifiedColumnAccessor, createJoinedColumnAccessor, sourceAlias } from "./query"
 import { aliased, columnTypeOf, isExprLike, type Expr } from "./expr"
 import { raw, identPath, quoteIdent, quoteIdentPath, compile as compileSqlFragment } from "../sql/sql-fragment"
@@ -133,9 +135,9 @@ interface CompiledQueryBase<Output> {
 	 * so an executor runs it the way it runs DDL (`Database.run` does), not
 	 * through a client path that expects a result set.
 	 */
-	readonly kind: "select" | "insert"
+	readonly kind: "select" | "insert" | "update" | "delete"
 	/**
-	 * The aliases of an insert's RETURNING list, when it has one. An insert
+	 * The aliases of a write's RETURNING list, when it has one. A write
 	 * without it sends back no rows; one with it is read like a query.
 	 */
 	readonly returning?: ReadonlyArray<string>
@@ -347,7 +349,7 @@ const makeCompiledQuery = <Output, Route extends string | undefined>(
 	rawSql?: { readonly reason: string; readonly justification: string },
 	rowSchemaMismatch?: RowSchemaMismatch,
 	dialect?: string,
-	kind: "select" | "insert" = "select",
+	kind: CompiledQueryBase<Output>["kind"] = "select",
 	returning?: ReadonlyArray<string>,
 ): CompiledQuery<Output, Route> => {
 	let cachedDecodeRow: ((row: unknown) => Effect.Effect<Output, unknown, never>) | undefined
@@ -473,8 +475,8 @@ export const rawCompiledQuery = <
 	readonly route?: Route
 	/** The `name` of the dialect the SQL is written for, so an executor can check it. */
 	readonly dialect?: string
-	/** `insert` for a write that returns no rows. Default `select`. */
-	readonly kind?: "select" | "insert"
+	/** `insert`, `update` or `delete` for a write that returns no rows. Default `select`. */
+	readonly kind?: "select" | "insert" | "update" | "delete"
 }): CompiledQuery<Output, Route> =>
 	makeCompiledQuery(
 		args.sql,
@@ -541,21 +543,24 @@ export function compileCH<
 		dialect?: Dialect
 	},
 ): Effect.Effect<CompiledQuery<Decoded, Route>, QueryBuilderError>
-/** An INSERT. `params` fills the `param.*` markers among its values. */
+/** An INSERT, UPDATE or DELETE. `params` fills the `param.*` markers among its values. */
 export function compileCH<Output>(
-	insert: CHInsert<any, any, any, Output>,
+	insert: CHWrite<Output>,
 	params?: Record<string, unknown>,
 	options?: InsertCompileOptions,
 ): Effect.Effect<CompiledQuery<Output, undefined>, QueryBuilderError>
 export function compileCH(
-	query: CHQuery<any, any, any, any> | CHInsert<any, any, any, any>,
+	query: CHQuery<any, any, any, any> | CHWrite<any>,
 	params?: Record<string, unknown>,
 	options?: any,
 ): Effect.Effect<CompiledQuery<any, any>, QueryBuilderError> {
 	return asEffect(() => compileCHUnsafe(query as CHQuery<any, any, any, any>, params ?? {}, options))
 }
 
-/** What compiling an INSERT takes: only the dialect. */
+/** A write statement: what `compile` takes besides a query. */
+export type CHWrite<Output> = CHInsert<any, any, any, Output> | CHUpdate<any, any, Output> | CHDelete<any, Output>
+
+/** What compiling a write takes: only the dialect. */
 export interface InsertCompileOptions {
 	readonly dialect?: Dialect
 }
@@ -589,19 +594,23 @@ export function compileCHUnsafe<
 		dialect?: Dialect
 	},
 ): CompiledQuery<Decoded, Route>
-/** An INSERT. `params` fills the `param.*` markers among its values. */
+/** An INSERT, UPDATE or DELETE. `params` fills the `param.*` markers among its values. */
 export function compileCHUnsafe<Output>(
-	insert: CHInsert<any, any, any, Output>,
+	insert: CHWrite<Output>,
 	params?: Record<string, unknown>,
 	options?: InsertCompileOptions,
 ): CompiledQuery<Output, undefined>
 export function compileCHUnsafe(
-	query: CHQuery<any, any, any, any> | CHInsert<any, any, any, any>,
+	query: CHQuery<any, any, any, any> | CHWrite<any>,
 	params?: Record<string, unknown>,
 	options?: any,
 ): CompiledQuery<any, any> {
 	return withDialect(options?.dialect ?? currentDialect(), () =>
-		isInsert(query) ? compileInsert(query, params ?? {}) : compileInner(query, params ?? {}, options),
+		isInsert(query)
+			? compileInsert(query, params ?? {})
+			: isUpdate(query) || isDelete(query)
+				? compileUpdateOrDelete(query, params ?? {})
+				: compileInner(query as CHQuery<any, any, any, any>, params ?? {}, options),
 	)
 }
 
@@ -1378,23 +1387,7 @@ const onConflictClause = (
 	const existing = createQualifiedColumnAccessor(table.name, undefined, table.columns)
 	const excluded = createQualifiedColumnAccessor("excluded", undefined, table.columns)
 	const set = typeof conflict.set === "function" ? conflict.set(existing, excluded) : conflict.set
-	const computed = new Set<string>(table.computed ?? [])
-	// The SET record may come from data, so a bad key is a failure, as in a row.
-	const assignments = Object.entries(set as Record<string, unknown>).flatMap(([column, value]) => {
-		if (value === undefined) return []
-		if (!Object.hasOwn(table.columns, column) || computed.has(column)) {
-			throw new QueryBuilderError({
-				code: "InvalidArguments",
-				message: `${where}: onConflictDoUpdate sets ${JSON.stringify(column)}, which is not an insertable column of the table`,
-			})
-		}
-		const sql = cell(column, value, "onConflictDoUpdate set")
-		wrote(column, value, sql)
-		return [`${quoteIdent(column)} = ${sql}`]
-	})
-	if (assignments.length === 0) {
-		throw new QueryBuilderError({ code: "InvalidArguments", message: `${where}: onConflictDoUpdate sets no columns` })
-	}
+	const assignments = setAssignments(table, set as Record<string, unknown>, cell, wrote, where, "onConflictDoUpdate")
 	const condition = conflict.where?.(existing, excluded)
 	return `\nON CONFLICT${target} DO UPDATE SET ${assignments.join(", ")}${
 		condition === undefined ? "" : ` WHERE ${compileSqlFragment(condition.toFragment())}`
@@ -1402,21 +1395,101 @@ const onConflictClause = (
 }
 
 /** The RETURNING clause and its row schema, or none without `returning`. */
-const returningOf = (insert: CHInsert<any, any, any, any>) => {
-	const { table, returningFn } = insert._state
+const returningOf = (
+	table: Table<string, ColumnDefs>,
+	returningFn: (($: any) => Record<string, Expr<any>>) | undefined,
+	where: string,
+) => {
 	if (returningFn === undefined) return undefined
 	const dialect = currentDialect()
 	if (dialect.clauses.returning !== true) {
 		throw new QueryBuilderDefect({
-			message: `insertInto(${table.name}): returning() has no meaning for the ${dialect.name} dialect, which has no RETURNING clause`,
+			message: `${where}: returning() has no meaning for the ${dialect.name} dialect, which has no RETURNING clause`,
 		})
 	}
 	const exprs = returningFn(createColumnAccessor(table.columns))
 	const aliases = Object.keys(exprs)
 	if (aliases.length === 0) {
-		throw new QueryBuilderDefect({ message: `insertInto(${table.name}): returning() needs at least one column` })
+		throw new QueryBuilderDefect({ message: `${where}: returning() needs at least one column` })
 	}
-	return { exprs, aliases, derived: deriveRowSchema(exprs) }
+	const sql = `\nRETURNING ${aliases.map((alias) => compileSqlFragment(aliased(exprs[alias]!, alias))).join(", ")}`
+	return { exprs, aliases, sql, derived: deriveRowSchema(exprs) }
+}
+
+/** A write's compiled query, with the row schema its RETURNING list derives. */
+const writeCompiledQuery = (
+	rendered: { readonly sql: string; readonly parameters: ReadonlyArray<unknown> },
+	kind: "insert" | "update" | "delete",
+	tenantScope: TenantScope,
+	tenantBound: string | undefined,
+	returning: ReturnType<typeof returningOf>,
+): CompiledQuery<any, undefined> => {
+	const returnedSchema = returning !== undefined && "schema" in returning.derived ? returning.derived.schema : undefined
+	return withTenantBound(
+		makeCompiledQuery<any, undefined>(
+			rendered.sql,
+			rendered.parameters,
+			tenantScope,
+			returning === undefined || returnedSchema !== undefined ? "derived" : "none",
+			() => (returning === undefined ? EMPTY_ROW : returnedSchema),
+			undefined,
+			returning !== undefined && "untyped" in returning.derived ? returning.derived.untyped : [],
+			undefined,
+			undefined,
+			currentDialect().name,
+			kind,
+			returning?.aliases,
+		),
+		tenantBound,
+	)
+}
+
+/**
+ * Literal values of a write as params of their column's type: encoded by the
+ * column's codec (so a failure names the column), then sent the way the
+ * dialect sends params. `values` is the params bag to render with.
+ */
+const valueCells = (table: Table<string, ColumnDefs>, params: Record<string, unknown>, where: string) => {
+	const values: Record<string, unknown> = { ...params }
+	let next = 0
+	const cell = (column: string, value: unknown, context: string): string => {
+		if (value === undefined) return "DEFAULT"
+		if (isExprLike(value)) return compileSqlFragment(value.toFragment())
+		const wire = encodeValue(table.columns[column]!.literalSchema, value, `${where}: ${context}, column ${column}`)
+		let name = `${VALUE_PARAM}${next++}`
+		while (Object.hasOwn(params, name)) name = `${VALUE_PARAM}${next++}`
+		values[name] = wire
+		return compileSqlFragment(param.of(insertWireValue, name).toFragment())
+	}
+	return { values, cell }
+}
+
+/** `column = value, ...` for a SET record, which may come from data, so a bad key is a failure. */
+const setAssignments = (
+	table: Table<string, ColumnDefs>,
+	set: Record<string, unknown>,
+	cell: (column: string, value: unknown, context: string) => string,
+	wrote: (column: string, value: unknown, sql: string) => void,
+	where: string,
+	context: string,
+): ReadonlyArray<string> => {
+	const computed = new Set<string>(table.computed ?? [])
+	const assignments = Object.entries(set).flatMap(([column, value]) => {
+		if (value === undefined) return []
+		if (!Object.hasOwn(table.columns, column) || computed.has(column)) {
+			throw new QueryBuilderError({
+				code: "InvalidArguments",
+				message: `${where}: ${context} sets ${JSON.stringify(column)}, which is not an insertable column of the table`,
+			})
+		}
+		const sql = cell(column, value, `${context} set`)
+		wrote(column, value, sql)
+		return [`${quoteIdent(column)} = ${sql}`]
+	})
+	if (assignments.length === 0) {
+		throw new QueryBuilderError({ code: "InvalidArguments", message: `${where}: ${context} sets no columns` })
+	}
+	return assignments
 }
 
 /**
@@ -1451,20 +1524,23 @@ const insertSelectSource = (
 }
 
 /** `SETTINGS a = 1, b = 'x'`, or `""` without settings. */
-const insertSettingsClause = (insert: CHInsert<any, any, any, any>): string => {
-	const { table, settings } = insert._state
+const writeSettingsClause = (
+	table: Table<string, ColumnDefs>,
+	settings: Readonly<Record<string, unknown>> | undefined,
+	where: string,
+): string => {
 	const entries = Object.entries(settings ?? {})
 	if (entries.length === 0) return ""
 	const dialect = currentDialect()
-	if (dialect.clauses.insertSettings !== true) {
+	if (dialect.clauses.writeSettings !== true) {
 		throw new QueryBuilderDefect({
-			message: `insertInto(${table.name}): settings() has no meaning for the ${dialect.name} dialect, which has no INSERT SETTINGS`,
+			message: `${where}: settings() has no meaning for the ${dialect.name} dialect, which has no SETTINGS on writes`,
 		})
 	}
 	return ` SETTINGS ${entries
 		.map(([name, value]) => {
 			if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
-				throw new QueryBuilderDefect({ message: `insertInto(${table.name}): ${JSON.stringify(name)} is not a setting name` })
+				throw new QueryBuilderDefect({ message: `${where}: ${JSON.stringify(name)} is not a setting name` })
 			}
 			return `${name} = ${checkedLiteral(dialect, value, `setting ${name}`)}`
 		})
@@ -1484,17 +1560,7 @@ function compileInsert(insert: CHInsert<any, any, any, any>, params: Record<stri
 		throw new QueryBuilderDefect({ message: `${where}: values() or select() is required` })
 	}
 	const dialect = currentDialect()
-	const values: Record<string, unknown> = { ...params }
-	let next = 0
-	const cell = (column: string, value: unknown, context: string): string => {
-		if (value === undefined) return "DEFAULT"
-		if (isExprLike(value)) return compileSqlFragment(value.toFragment())
-		const wire = encodeValue(table.columns[column]!.literalSchema, value, `${where}: ${context}, column ${column}`)
-		let name = `${VALUE_PARAM}${next++}`
-		while (Object.hasOwn(params, name)) name = `${VALUE_PARAM}${next++}`
-		values[name] = wire
-		return compileSqlFragment(param.of(insertWireValue, name).toFragment())
-	}
+	const { values, cell } = valueCells(table, params, where)
 
 	// A tenant table's insert is single-tenant when every row it writes (and an
 	// upsert's SET, if it writes the column) pins the tenant column to the same
@@ -1557,13 +1623,9 @@ function compileInsert(insert: CHInsert<any, any, any, any>, params: Record<stri
 		},
 	)
 
-	const returning = returningOf(insert)
-	const returningSql =
-		returning === undefined
-			? ""
-			: `\nRETURNING ${returning.aliases.map((alias) => compileSqlFragment(aliased(returning.exprs[alias]!, alias))).join(", ")}`
+	const returning = returningOf(table, insert._state.returningFn, where)
 	const rendered = renderParams(
-		`INSERT INTO ${quoteIdentPath(table.name)} (${columns.map(quoteIdent).join(", ")})${insertSettingsClause(insert)}\n${source}${conflictSql}${returningSql}`,
+		`INSERT INTO ${quoteIdentPath(table.name)} (${columns.map(quoteIdent).join(", ")})${writeSettingsClause(table, insert._state.settings, where)}\n${source}${conflictSql}${returning?.sql ?? ""}`,
 		values,
 		dialect,
 	)
@@ -1575,25 +1637,7 @@ function compileInsert(insert: CHInsert<any, any, any, any>, params: Record<stri
 				: "cross-tenant"
 	const tenantBound =
 		tenantScope !== "single-tenant" ? undefined : tenant === undefined ? undefined : [...bounds][0]
-	const returnedSchema = returning !== undefined && "schema" in returning.derived ? returning.derived.schema : undefined
-
-	return withTenantBound(
-		makeCompiledQuery<any, undefined>(
-			rendered.sql,
-			rendered.parameters,
-			tenantScope,
-			returning === undefined || returnedSchema !== undefined ? "derived" : "none",
-			() => (returning === undefined ? EMPTY_ROW : returnedSchema),
-			undefined,
-			returning !== undefined && "untyped" in returning.derived ? returning.derived.untyped : [],
-			undefined,
-			undefined,
-			dialect.name,
-			"insert",
-			returning?.aliases,
-		),
-		tenantBound,
-	)
+	return writeCompiledQuery(rendered, "insert", tenantScope, tenantBound, returning)
 }
 
 /** The VALUES rows' columns, in table order, after checking every key. */
@@ -1631,4 +1675,99 @@ const valuesColumns = (
 		throw new QueryBuilderError({ code: "InvalidArguments", message: `${where}: every row is empty; give at least one column` })
 	}
 	return columns
+}
+
+// UPDATE and DELETE
+
+/**
+ * An UPDATE or DELETE. Postgres writes `UPDATE t SET ... WHERE ...` and
+ * `DELETE FROM t WHERE ...`; ClickHouse an `ALTER TABLE t UPDATE ... WHERE ...`
+ * mutation and a lightweight `DELETE FROM t WHERE ...`, both of which need a
+ * WHERE, so `allRows()` writes `WHERE 1` there.
+ */
+function compileUpdateOrDelete(
+	write: CHUpdate<any, any, any> | CHDelete<any, any>,
+	params: Record<string, unknown>,
+): CompiledQuery<any, undefined> {
+	const state = write._state
+	const { table } = state
+	const kind = write._tag === "CHUpdate" ? "update" : "delete"
+	const where = `${kind === "update" ? "update" : "deleteFrom"}(${table.name})`
+	const dialect = currentDialect()
+	const { values, cell } = valueCells(table, params, where)
+	const $ = createColumnAccessor(table.columns, table.tenantColumn)
+
+	// No WHERE at all is a mistake in the source; a WHERE whose conditions all
+	// came out undefined is data, and would otherwise turn a filtered write into
+	// one over every row.
+	if (state.whereFn === undefined && state.allRows !== true) {
+		throw new QueryBuilderDefect({ message: `${where}: no where(); call allRows() to write every row` })
+	}
+	const conditions = (state.whereFn?.($) ?? []).filter((c): c is NonNullable<typeof c> => c != null)
+	if (state.whereFn !== undefined && conditions.length === 0 && state.allRows !== true) {
+		throw new QueryBuilderError({
+			code: "InvalidArguments",
+			message: `${where}: every where() condition was undefined, which would write every row; call allRows() if that is meant`,
+		})
+	}
+
+	const tenant = table.tenantColumn
+	const setWrites: Array<{ readonly value: unknown; readonly sql: string }> = []
+
+	const [assignments, whereSql] = withSubqueryCompiler(
+		(subquery) =>
+			typeof subquery === "string" ? subquery : compileInner(subquery, values, { skipFormat: true, nested: true }).sql,
+		() => {
+			let assignments: ReadonlyArray<string> = []
+			if (write._tag === "CHUpdate") {
+				const set = (write as CHUpdate<any, any, any>)._state.set
+				if (set === undefined) throw new QueryBuilderDefect({ message: `${where}: set() is required` })
+				const record = typeof set === "function" ? set($) : set
+				assignments = setAssignments(table, record as Record<string, unknown>, cell, (column, value, sql) => {
+					if (column === tenant) setWrites.push({ value, sql })
+				}, where, "update")
+			}
+			const rendered = conditions.map((c) => compileSqlFragment(c.toFragment()))
+			const whereSql =
+				rendered.length > 0
+					? `\nWHERE ${rendered.join("\n  AND ")}`
+					: dialect.clauses.alterTableUpdate === true
+						? "\nWHERE 1"
+						: ""
+			return [assignments, whereSql] as const
+		},
+	)
+
+	// Scope as for a query over the table, from the WHERE; an UPDATE that moves
+	// rows to another tenant reaches past it.
+	let tenantScope: TenantScope = "untenanted"
+	let tenantBound: string | undefined
+	if (tenant !== undefined) {
+		const derived = deriveTenantScope(
+			[{ column: tenant, scope: "cross-tenant" }],
+			[{ predicates: conditions.flatMap((c) => tenantPredicatesOf(c)) }],
+			(value) => inlineParams(compileSqlFragment(value), values),
+		)
+		tenantScope = derived.scope
+		tenantBound = derived.bound
+		for (const { value, sql } of setWrites) {
+			const pinned = value !== null && (!isExprLike(value) || "_paramName" in value)
+			if (!pinned || inlineParams(sql, values) !== tenantBound) {
+				tenantScope = "cross-tenant"
+				tenantBound = undefined
+			}
+		}
+	}
+
+	const returning = returningOf(table, state.returningFn, where)
+	const settings = writeSettingsClause(table, state.settings, where)
+	const target = quoteIdentPath(table.name)
+	const head =
+		kind === "delete"
+			? `DELETE FROM ${target}`
+			: dialect.clauses.alterTableUpdate === true
+				? `ALTER TABLE ${target} UPDATE ${assignments.join(", ")}`
+				: `UPDATE ${target} SET ${assignments.join(", ")}`
+	const rendered = renderParams(`${head}${whereSql}${returning?.sql ?? ""}${settings}`, values, dialect)
+	return writeCompiledQuery(rendered, kind, tenantScope, tenantScope === "single-tenant" ? tenantBound : undefined, returning)
 }

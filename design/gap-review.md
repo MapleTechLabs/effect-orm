@@ -24,8 +24,8 @@ builder; **P1** commonly used; **P2** niche.
 
 | Gap | Maple | Effort |
 | --- | --- | --- |
-| UPDATE builder: SET values and expressions, WHERE, RETURNING | ~120 | M |
-| DELETE builder: WHERE, RETURNING | ~79 | S |
+| ~~UPDATE builder: SET values and expressions, WHERE, RETURNING~~ (built) | ~120 | M |
+| ~~DELETE builder: WHERE, RETURNING~~ (built) | ~79 | S |
 | A typed, value-binding `sql` template usable inside expressions; `sql.join` / `raw` / `empty` on `Db.sql` | ~163 | M |
 | Postgres column types: `timestamptz` as `Date`, `timestamp`, `date`, `interval`, `varchar(n)`, serial / identity | 226 timestamp columns | S |
 | DISTINCT (and DISTINCT ON) | ~10 | S |

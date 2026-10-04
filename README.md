@@ -150,6 +150,7 @@ Full guides live in [`docs/`](./docs/README.md):
 | [Joins and subqueries](./docs/joins-and-subqueries.md)     | The join family, `fromQuery`, correlated subqueries             |
 | [Unions and CTEs](./docs/unions-and-ctes.md)               | `unionAll`, `fromUnion`, `withCTE`                              |
 | [Inserting rows](./docs/inserts.md)                        | `insertInto`, the insert row type, `DEFAULT`, binding            |
+| [Updating and deleting](./docs/updates-and-deletes.md)     | `update`, `deleteFrom`, `allRows`, ClickHouse mutations         |
 | [Params and compilation](./docs/params-and-compilation.md) | `param.*`, how values reach the SQL, `CompiledQuery`            |
 | [Decoding results](./docs/decoding-results.md)             | `rowSchema`, `decodeRows`, decode errors                        |
 | [Running a query](./docs/running-queries.md)               | Executing the SQL with a real client, wire settings, `SETTINGS` |

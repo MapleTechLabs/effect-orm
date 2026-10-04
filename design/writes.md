@@ -1,7 +1,8 @@
 # Writes: INSERT
 
 Status: phases 1 to 4 built (`values`, `returning`, `onConflictDoNothing` /
-`onConflictDoUpdate`, `select`, `settings`; see `docs/inserts.md`). `encodeInsertRows` (§7) is
+`onConflictDoUpdate`, `select`, `settings`; see `docs/inserts.md`), and UPDATE and DELETE (§12,
+`docs/updates-and-deletes.md`). `encodeInsertRows` (§7) is
 not built: no consumer has asked for it. Section 11 lists where the build differs from the plan. UPDATE and DELETE come later and
 will reuse what this note sets up (the write-statement state, the `RETURNING` path, value
 encoding).
@@ -257,4 +258,23 @@ note, reusing `kind: "write"`, the returning path and the `set` record type from
   Its tenant scope is the SELECT's for an untenanted target (the read), and for a tenant target
   single-tenant only when the read is and each row takes its tenant from a source tenant column
   or the same param.
-- **Settings are a dialect clause**, `DialectClauses.insertSettings`, like the others.
+- **Settings are a dialect clause**, `DialectClauses.writeSettings`, like the others.
+
+## 12. UPDATE and DELETE
+
+`update(table).set(...).where(...)` and `deleteFrom(table).where(...)`, in `src/ch/update.ts`,
+compiled beside INSERT and sharing its value encoding (`valueCells`), SET record
+(`setAssignments`, also used by `onConflictDoUpdate`), RETURNING (`returningOf`) and settings.
+
+- **No WHERE is refused.** No `where()` is a defect; a `where()` whose conditions are all
+  `undefined` is a failure, since optional filters come from data and that case would widen the
+  write to every row. `allRows()` opts in.
+- **ClickHouse**: UPDATE is an `ALTER TABLE ... UPDATE` mutation (`DialectClauses.alterTableUpdate`),
+  the one form every supported server takes; DELETE is the lightweight `DELETE FROM`. Both need
+  a WHERE, so `allRows()` writes `WHERE 1`. Settings go last (`mutations_sync`,
+  `lightweight_deletes_sync`), and `DialectClauses.insertSettings` became `writeSettings`.
+  Checked on 26.2.19.43 and 26.8.2.7.
+- **Tenant scope** is derived from the WHERE as for a query over the table; an UPDATE that sets
+  the tenant column to anything but the pinned value is cross-tenant.
+- Not built: UPDATE ... FROM / joins, DELETE USING, ORDER BY / LIMIT, a VALUES source for bulk
+  updates. See `design/gap-review.md`.
