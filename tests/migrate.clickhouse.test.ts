@@ -1,7 +1,7 @@
 import { ClickhouseClient } from "@effect/sql-clickhouse"
 import { Effect, Exit, Layer } from "effect"
 import { describe, expect, it } from "vitest"
-import * as CH from "@maple-dev/effect-orm"
+import * as CH from "@maple-dev/effect-orm/clickhouse"
 import * as Migrate from "@maple-dev/effect-orm/migrate"
 import * as S from "@maple-dev/effect-orm/schema"
 import { endpoint } from "./clickhouse-support"
@@ -33,25 +33,25 @@ const withDatabase = <A, E>(body: Effect.Effect<A, E, Migrate.MigrationDriver | 
 		)
 	}).pipe(Effect.provide(client("default")))
 
-const Events = S.defineTable("events", {
+const Events = CH.table("events", {
 	columns: {
 		OrgId: CH.string,
-		Timestamp: S.column(CH.dateTime64, { codec: "Delta, ZSTD(1)" }),
+		Timestamp: CH.column(CH.dateTime64, { codec: "Delta, ZSTD(1)" }),
 		Name: CH.string,
-		Count: S.column(CH.uint64, { default: 1 }),
+		Count: CH.column(CH.uint64, { default: 1 }),
 	},
-	engine: S.engine.mergeTree(),
+	engine: CH.engine.mergeTree(),
 	orderBy: ["OrgId", "Timestamp"],
 	partitionBy: "toDate(Timestamp)",
-	ttl: S.ttlAfterDays("toDate(Timestamp)", 30),
-	indexes: [S.index("idx_name", ($) => $.Name, "bloom_filter(0.01)")],
+	ttl: CH.ttlAfterDays("toDate(Timestamp)", 30),
+	indexes: [CH.index("idx_name", ($) => $.Name, "bloom_filter(0.01)")],
 })
-const Totals = S.defineTable("totals", {
+const Totals = CH.table("totals", {
 	columns: { OrgId: CH.string, Name: CH.string, Count: CH.uint64 },
-	engine: S.engine.summingMergeTree(),
+	engine: CH.engine.summingMergeTree(),
 	orderBy: ["OrgId", "Name"],
 })
-const TotalsMv = S.materializedView("totals_mv", {
+const TotalsMv = CH.materializedView("totals_mv", {
 	to: Totals,
 	as: CH.from(Events)
 		.select(($) => ({ OrgId: $.OrgId, Name: $.Name, Count: CH.sum($.Count) }))
@@ -100,12 +100,12 @@ describe("migrate", () => {
 				withDatabase(
 					Effect.gen(function* () {
 						const first = yield* generated([], [Events, Totals, TotalsMv], [S.ORIGIN_ID])
-						const Totals2 = S.defineTable("totals", {
-							columns: { OrgId: CH.string, Name: CH.string, Count: CH.uint64, Events: S.column(CH.uint64, { default: 0 }) },
-							engine: S.engine.summingMergeTree(),
+						const Totals2 = CH.table("totals", {
+							columns: { OrgId: CH.string, Name: CH.string, Count: CH.uint64, Events: CH.column(CH.uint64, { default: 0 }) },
+							engine: CH.engine.summingMergeTree(),
 							orderBy: ["OrgId", "Name"],
 						})
-						const Mv2 = S.materializedView("totals_mv", {
+						const Mv2 = CH.materializedView("totals_mv", {
 							to: Totals2,
 							as: CH.from(Events)
 								.select(($) => ({ OrgId: $.OrgId, Name: $.Name, Count: CH.sum($.Count), Events: CH.count() }))

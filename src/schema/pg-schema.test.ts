@@ -4,27 +4,27 @@ import * as CH from "../ch/index"
 import * as PG from "../postgres"
 import * as S from "../schema"
 
-const Dashboards = S.pg.table("dashboards", {
+const Dashboards = PG.table("dashboards", {
 	columns: {
 		org_id: PG.text,
 		id: PG.text,
-		name: S.pg.column(PG.text, { default: "Untitled" }),
-		tags: S.pg.column(PG.array(PG.text), { default: [] }),
-		layout: S.pg.column(PG.jsonb(), { default: {} }),
+		name: PG.column(PG.text, { default: "Untitled" }),
+		tags: PG.column(PG.array(PG.text), { default: [] }),
+		layout: PG.column(PG.jsonb(), { default: {} }),
 		widgets: PG.int4,
-		archived: S.pg.column(PG.bool, { default: false }),
-		created_at: S.pg.column(PG.timestamptz, { defaultExpr: "now()" }),
+		archived: PG.column(PG.bool, { default: false }),
+		created_at: PG.column(PG.timestamptz, { defaultExpr: "now()" }),
 		archived_at: PG.nullable(PG.timestamptz),
 	},
 	primaryKey: { columns: ["org_id", "id"], name: "dashboards_org_id_id_pk" },
 	indexes: [
-		S.pg.index("dashboards_org_idx", ["org_id"]),
-		S.pg.index("dashboards_live_idx", ["org_id", "created_at"], { where: ($) => $.archived_at.isNull() }),
+		PG.index("dashboards_org_idx", ["org_id"]),
+		PG.index("dashboards_live_idx", ["org_id", "created_at"], { where: ($) => $.archived_at.isNull() }),
 	],
 	tenantColumn: "org_id",
 })
 
-const Shares = S.pg.table("dashboard_shares", {
+const Shares = PG.table("dashboard_shares", {
 	columns: {
 		org_id: PG.text,
 		id: PG.text,
@@ -35,12 +35,12 @@ const Shares = S.pg.table("dashboard_shares", {
 	},
 	primaryKey: ["org_id", "id"],
 	indexes: [
-		S.pg.uniqueIndex("dashboard_shares_live_unq", ($) => [$.org_id, $.dashboard_id, CH.coalesce($.widget_id, CH.lit(""))], {
+		PG.uniqueIndex("dashboard_shares_live_unq", ($) => [$.org_id, $.dashboard_id, CH.coalesce($.widget_id, CH.lit(""))], {
 			where: "revoked_at is null",
 		}),
 	],
 	foreignKeys: [
-		S.pg.foreignKey({
+		PG.foreignKey({
 			columns: ["org_id", "dashboard_id"],
 			references: Dashboards,
 			foreignColumns: ["org_id", "id"],
@@ -50,7 +50,7 @@ const Shares = S.pg.table("dashboard_shares", {
 	],
 })
 
-describe("S.pg.table", () => {
+describe("PG.table", () => {
 	it("is a Table the query builder accepts, with defaults optional on insert", () => {
 		const { sql } = PG.compileUnsafe(CH.from(Dashboards).select("name").where(($) => [$.org_id.eq("o")]), {})
 		expect(sql).toContain('FROM "dashboards"')
@@ -107,40 +107,40 @@ describe("S.pg.table", () => {
 	})
 
 	it("names a foreign key as drizzle-kit does when no name is given", () => {
-		const Checks = S.pg.table("checks", {
+		const Checks = PG.table("checks", {
 			columns: { id: PG.text, target_id: PG.text },
-			foreignKeys: [S.pg.foreignKey({ columns: ["target_id"], references: "targets", foreignColumns: ["id"] })],
+			foreignKeys: [PG.foreignKey({ columns: ["target_id"], references: "targets", foreignColumns: ["id"] })],
 		})
 		expect(Checks.ddl.foreignKeys[0]?.name).toBe("checks_target_id_targets_id_fk")
 	})
 
 	it("shortens a default foreign key name past 63 characters with drizzle-kit's hash", () => {
-		const long = S.pg.table("organization_membership_invitations", {
+		const long = PG.table("organization_membership_invitations", {
 			columns: { organization_id: PG.text, invited_by_user_id: PG.text },
 			foreignKeys: [
-				S.pg.foreignKey({ columns: ["organization_id", "invited_by_user_id"], references: "organization_members", foreignColumns: ["organization_id", "user_id"] }),
+				PG.foreignKey({ columns: ["organization_id", "invited_by_user_id"], references: "organization_members", foreignColumns: ["organization_id", "user_id"] }),
 			],
 		})
 		const name = long.ddl.foreignKeys[0]!.name
 		expect(name).toMatch(/^organization_membership_invitations_[0-9A-Za-z]{12}_fk$/)
 		expect(name.length).toBeLessThanOrEqual(63)
 		// Deterministic, so a snapshot and the next generate agree.
-		expect(S.pg.defaultForeignKeyName("organization_membership_invitations", ["organization_id", "invited_by_user_id"], "organization_members", ["organization_id", "user_id"])).toBe(name)
-		expect(S.pg.defaultForeignKeyName("t".repeat(60), ["a"], "u", ["b"])).toMatch(/^[0-9A-Za-z]{12}_fk$/)
+		expect(PG.defaultForeignKeyName("organization_membership_invitations", ["organization_id", "invited_by_user_id"], "organization_members", ["organization_id", "user_id"])).toBe(name)
+		expect(PG.defaultForeignKeyName("t".repeat(60), ["a"], "u", ["b"])).toMatch(/^[0-9A-Za-z]{12}_fk$/)
 	})
 
 	it("rejects definitions Postgres would not take as written", () => {
-		expect(() => S.pg.table("t", { columns: { a: PG.nullable(PG.text) }, primaryKey: ["a"] })).toThrow(/cannot be nullable/)
-		expect(() => S.pg.table("t".repeat(64), { columns: { a: PG.text } })).toThrow(/longer than 63/)
+		expect(() => PG.table("t", { columns: { a: PG.nullable(PG.text) }, primaryKey: ["a"] })).toThrow(/cannot be nullable/)
+		expect(() => PG.table("t".repeat(64), { columns: { a: PG.text } })).toThrow(/longer than 63/)
 		expect(() =>
-			S.pg.table("t", { columns: { a: PG.text }, foreignKeys: [S.pg.foreignKey({ columns: ["a"], references: "u", foreignColumns: ["x", "y"] })] }),
+			PG.table("t", { columns: { a: PG.text }, foreignKeys: [PG.foreignKey({ columns: ["a"], references: "u", foreignColumns: ["x", "y"] })] }),
 		).toThrow(/same, non-zero, length/)
 	})
 
 	it("validates a schema as a whole", () => {
-		const Other = S.pg.table("other", {
+		const Other = PG.table("other", {
 			columns: { a: PG.text },
-			indexes: [S.pg.index("dashboards_org_idx", ["a"])],
+			indexes: [PG.index("dashboards_org_idx", ["a"])],
 		})
 		expect(() => S.pgEntitiesOf([Dashboards, Other])).toThrow(/one namespace/)
 		expect(() => S.pgEntitiesOf([Shares])).toThrow(/not a table in this schema/)
@@ -162,19 +162,19 @@ describe("canonicalPgType", () => {
 describe("diffPgSchemas", () => {
 	const v1 = S.pgEntitiesOf([Dashboards])
 	const v2 = S.pgEntitiesOf([
-		S.pg.table("dashboards", {
+		PG.table("dashboards", {
 			columns: {
 				org_id: PG.text,
 				id: PG.text,
-				name: S.pg.column(PG.text, { default: "New dashboard" }),
+				name: PG.column(PG.text, { default: "New dashboard" }),
 				widgets: PG.int8,
 				archived: PG.bool,
-				created_at: S.pg.column(PG.timestamptz, { defaultExpr: "now()" }),
+				created_at: PG.column(PG.timestamptz, { defaultExpr: "now()" }),
 				archived_at: PG.nullable(PG.timestamptz),
 				owner: PG.nullable(PG.text),
 			},
 			primaryKey: ["org_id", "id"],
-			indexes: [S.pg.index("dashboards_org_idx", ["org_id", "owner"])],
+			indexes: [PG.index("dashboards_org_idx", ["org_id", "owner"])],
 		}),
 	])
 

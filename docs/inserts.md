@@ -5,26 +5,25 @@ read. Like a query, it is an immutable value: nothing is sent until you run it, 
 writes it for the dialect you compile with.
 
 ```ts
-import * as CH from "@maple-dev/effect-orm"
 import * as Db from "@maple-dev/effect-orm/database"
 import * as PG from "@maple-dev/effect-orm/postgres"
 
-const ApiKeys = CH.table(
-	"api_keys",
-	{
+const ApiKeys = PG.table("api_keys", {
+	columns: {
 		id: PG.uuid,
 		org_id: PG.text,
 		name: PG.text,
-		created_at: PG.timestamptz,
-		revoked: PG.bool,
+		created_at: PG.column(PG.timestamptz, { defaultExpr: "now()" }),
+		revoked: PG.column(PG.bool, { default: false }),
 		note: PG.nullable(PG.text),
 	},
-	{ tenantColumn: "org_id", defaults: ["created_at", "revoked"] },
-)
+	primaryKey: ["id"],
+	tenantColumn: "org_id",
+})
 
-const insertKey = CH.insertInto(ApiKeys).values({
-	id: CH.param.string("id"),
-	org_id: CH.param.string("orgId"),
+const insertKey = PG.insertInto(ApiKeys).values({
+	id: PG.param.string("id"),
+	org_id: PG.param.string("orgId"),
 	name: "default",
 })
 
@@ -38,30 +37,36 @@ const insertKey = CH.insertInto(ApiKeys).values({
 
 Each row is typed from the table:
 
-- A column is **required** unless it is nullable or listed in `defaults`.
+- A column is **required** unless it is nullable or its column options give it a default.
 - Leaving an optional column out, or passing `undefined`, writes the column's default.
 - `null` writes NULL, and only type-checks on a nullable column.
 - A value can be a plain value of the column's type, a `param.*` of it, or any expression of it,
-  such as `CH.rawExpr("now()", CH.dateTime)`. A `DateTime` column also takes a `Date` or the
+  such as `PG.now()`. A `DateTime` column also takes a `Date` or the
   `'YYYY-MM-DD hh:mm:ss'` string, as in a comparison.
 
 `InsertRowOf<typeof ApiKeys>` names the row type, for a function that builds rows.
 
 ### Which columns have defaults
 
-`table()` cannot see your DDL, so you list the columns the database fills in with
-`defaults`: a Postgres `serial` or `DEFAULT now()`, a ClickHouse `DEFAULT`. A table declared
-with [`defineTable`](./migrations.md) works this out from its column options: a column with
-`default` or `defaultExpr` is optional, and a `materialized` or `alias` column cannot be inserted
-at all (it is not in the row type, and a row that names it anyway fails to compile). On `table()`,
-list such columns (a Postgres `GENERATED ALWAYS` column) with `computed`; they stay readable.
+The row type is derived from the column options that also write the [DDL](./migrations.md), so
+it cannot drift from what the database fills in:
+
+- `default` or `defaultExpr` (both dialects) or `identity` (Postgres) makes a column optional.
+- `materialized` or `alias` (ClickHouse) makes a column not writable: it is not in the row type,
+  and a row that names it anyway fails to compile. It stays readable.
+
+Postgres `GENERATED ALWAYS AS (...) STORED` columns are not modeled yet: there is no column
+option for them, so such a column reads as an ordinary required column.
+
+An [external table](./migrations.md) (`external: true`, for a table another tool migrates) has
+no DDL, but its column options still drive the row type the same way.
 
 `insertInto(table)` offers only `values` and `select` until it has rows (its type is
 `CHInsertStart`), so an insert cannot be compiled or run before it says what to insert.
 
 ClickHouse fills every column it is not given with a default, even without a `DEFAULT` clause:
-`0` for a number, `''` for a string. The row type still requires those columns unless you list
-them, so a forgotten value is a type error rather than a silent zero.
+`0` for a number, `''` for a string. The row type still requires those columns unless they
+declare a default, so a forgotten value is a type error rather than a silent zero.
 
 ## What it compiles to
 
@@ -70,11 +75,12 @@ in different orders cannot swap values. A column that some rows give and others 
 `DEFAULT` in the rows that leave it out:
 
 ```ts
-const Events = CH.table(
-	"events",
-	{ OrgId: CH.string, Id: CH.uint64, At: CH.dateTime },
-	{ tenantColumn: "OrgId", defaults: ["Id"] },
-)
+const Events = CH.table("events", {
+	columns: { OrgId: CH.string, Id: CH.column(CH.uint64, { default: 0 }), At: CH.dateTime },
+	engine: CH.engine.mergeTree(),
+	orderBy: ["OrgId", "At"],
+	tenantColumn: "OrgId",
+})
 
 CH.compileUnsafe(
 	CH.insertInto(Events).values([
@@ -100,8 +106,18 @@ the codec rejects fails to compile with a `QueryBuilderError` that names the row
 selected alias names the column it goes into, so select under the target's column names:
 
 ```ts
-const Spans = CH.table("spans", { OrgId: CH.string, Name: CH.string, Ms: CH.uint64 }, { tenantColumn: "OrgId" })
-const Daily = CH.table("daily", { OrgId: CH.string, Name: CH.string, Total: CH.uint64 }, { tenantColumn: "OrgId" })
+const Spans = CH.table("spans", {
+	columns: { OrgId: CH.string, Name: CH.string, Ms: CH.uint64 },
+	engine: CH.engine.mergeTree(),
+	orderBy: ["OrgId", "Name"],
+	tenantColumn: "OrgId",
+})
+const Daily = CH.table("daily", {
+	columns: { OrgId: CH.string, Name: CH.string, Total: CH.uint64 },
+	engine: CH.engine.summingMergeTree(),
+	orderBy: ["OrgId", "Name"],
+	tenantColumn: "OrgId",
+})
 
 CH.insertInto(Daily).select(
 	CH.from(Spans)
@@ -114,7 +130,7 @@ CH.insertInto(Daily).select(
 ```
 
 The selected row is checked against the table: selecting a column the table does not have (or
-a computed one), selecting a value of another type, or leaving out a required column is a type
+a `materialized` or `alias` one), selecting a value of another type, or leaving out a required column is a type
 error naming the columns (`targetCannotTake`, `missingColumns`). A nullable result, such as a
 Postgres `sum`, does not fit a NOT NULL column; wrap it in `coalesce`.
 
@@ -132,8 +148,8 @@ decoded. With no arguments it returns every column, as Drizzle's bare `.returnin
 also takes column names, or a callback building one expression per alias, as `select` does:
 
 ```ts
-const created = CH.insertInto(ApiKeys)
-	.values({ id: CH.param.string("id"), org_id: CH.param.string("orgId"), name: "default" })
+const created = PG.insertInto(ApiKeys)
+	.values({ id: PG.param.string("id"), org_id: PG.param.string("orgId"), name: "default" })
 	.returning(($) => ({ id: $.id, createdAt: $.created_at }))
 
 // const [row] = yield* Db.run(created, { id, orgId }) // { id: string; createdAt: DateTime.Utc }
@@ -150,13 +166,16 @@ On Postgres, `onConflictDoNothing` and `onConflictDoUpdate` add an `ON CONFLICT`
 options follow Drizzle's, so code moving from Drizzle changes little.
 
 ```ts
-const Counters = CH.table("counters", { key: PG.text, count: PG.int8, locked: PG.bool }, { defaults: ["locked"] })
+const Counters = PG.table("counters", {
+	columns: { key: PG.text, count: PG.int8, locked: PG.column(PG.bool, { default: false }) },
+	primaryKey: ["key"],
+})
 
 // Skip a row whose key exists. Without `target`, any unique index or constraint counts.
-CH.insertInto(Counters).values({ key: "a", count: 1 }).onConflictDoNothing({ target: ["key"] })
+PG.insertInto(Counters).values({ key: "a", count: 1 }).onConflictDoNothing({ target: ["key"] })
 
 // Upsert: add to the existing count, unless the row is locked.
-CH.insertInto(Counters)
+PG.insertInto(Counters)
 	.values({ key: "a", count: 1 })
 	.onConflictDoUpdate({
 		target: ["key"],
@@ -216,7 +235,7 @@ without a tenant column gives `"untenanted"`.
 | Case                                              | Result                                   |
 | ------------------------------------------------- | ---------------------------------------- |
 | `values([])`, a row with no values                | `QueryBuilderError` `InvalidArguments`   |
-| A key that is not a column, or a computed column  | `QueryBuilderError` `InvalidArguments`   |
+| A key that is not a column, or a non-writable one | `QueryBuilderError` `InvalidArguments`   |
 | A value the column's codec rejects                | `QueryBuilderError` `InvalidLiteral`     |
 | A param with no value                             | `QueryBuilderError` `UnresolvedParam`    |
 | Over the dialect's bound-value limit              | `QueryBuilderError` `InvalidArguments`   |

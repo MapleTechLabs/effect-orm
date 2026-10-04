@@ -1,7 +1,6 @@
 import { readFileSync } from "node:fs"
 import { describe, expect, it } from "vitest"
-import * as CH from "@maple-dev/effect-orm"
-import * as T from "@maple-dev/effect-orm/types"
+import * as CH from "@maple-dev/effect-orm/clickhouse"
 import * as PG from "@maple-dev/effect-orm/postgres"
 import { coreCases, coreSkips } from "./core-cases"
 import { dialectCases, typeCases } from "./dialect-cases"
@@ -22,8 +21,32 @@ const methods = (object: CH.CHQuery<any, any, any> | CH.CHUnionQuery<any>, prefi
 	Object.entries(object)
 		.filter(([, value]) => typeof value === "function")
 		.map(([name]) => `${prefix}:${name}`)
-const one = CH.from(CH.table("system.one", {})).select(() => ({ n: CH.lit(1) }))
-const types = Object.keys(T).map((name) => `type:${name}`)
+const one = CH.from(CH.table("system.one", { external: true, columns: {} })).select(() => ({ n: CH.lit(1) }))
+// The column type constructors on `/clickhouse`, which also carries functions and the builder.
+const typeConstructors = [
+	"CHNumber",
+	"aggregateState",
+	"array",
+	"bool",
+	"brand",
+	"custom",
+	"dateTime",
+	"dateTime64",
+	"dateTime64String",
+	"dateTimeString",
+	"float64",
+	"int32",
+	"int64",
+	"map",
+	"nullable",
+	"string",
+	"uint8",
+	"uint16",
+	"uint32",
+	"uint64",
+	"untyped",
+] as const satisfies ReadonlyArray<keyof typeof CH>
+const types = typeConstructors.map((name) => `type:${name}`)
 
 const exemptions = {
 	"type:CHNumber": "Wire codec, exercised by all numeric descriptor fixtures in both quote64 modes.",
@@ -133,15 +156,31 @@ describe("core coverage manifest", () => {
 	})
 })
 
-// Every runtime export of the ./postgres entry.
+// Every runtime export of the ./postgres entry that is its own. The shared
+// builder it re-exports is the same value on /clickhouse, covered above;
+// `brand` and `custom` are shared too, but are Postgres column types here.
+const sharedPgTypes = new Set(["brand", "custom"])
 export const postgresInventory = Object.keys(PG)
+	.filter(
+		(name) =>
+			sharedPgTypes.has(name) || (PG as Record<string, unknown>)[name] !== (CH as Record<string, unknown>)[name],
+	)
 	.map((name) => `pg:${name}`)
 	.sort()
+
+const ddl =
+	"DDL definition, not a query: rendered and diffed in src/schema/pg-schema.test.ts and applied to PGlite in src/migrate/pg-migrate.test.ts."
 
 const postgresExemptions = {
 	"pg:PgNumber": "Wire codec behind every numeric type; the types fixture decodes it from number, bigint and string.",
 	"pg:timestampLiteral":
 		"Factory for timestamp literal codecs; its instances (PgTimestampLiteral, dateTimeSeconds) are exercised.",
+	"pg:table": ddl,
+	"pg:column": ddl,
+	"pg:index": ddl,
+	"pg:uniqueIndex": ddl,
+	"pg:foreignKey": ddl,
+	"pg:defaultForeignKeyName": ddl,
 }
 
 describe("postgres coverage manifest", () => {

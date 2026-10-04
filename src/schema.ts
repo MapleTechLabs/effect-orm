@@ -1,36 +1,13 @@
 // @maple-dev/effect-orm/schema
 //
-// Tables and materialized views that carry their DDL, snapshots of them, and
-// the offline diff that turns two snapshots into migration ops. ClickHouse
-// definitions are the top-level exports; Postgres ones live under `pg`
-// (`S.pg.table`). Pure: nothing here reads files or opens a connection. See
+// The tooling under migrations: schema entities, snapshots, DDL rendering and
+// the offline diff that turns two snapshots into migration ops. Tables are
+// declared with `table` from `/clickhouse` or `/postgres`; this entry reads
+// them. Pure: nothing here reads files or opens a connection. See
 // docs/migrations.md.
 
-export * as pg from "./schema/pg-define"
-
-export {
-	column,
-	defineTable,
-	engine,
-	index,
-	materializedView,
-	ttlAfterDays,
-	SchemaDefinitionDefect,
-	type ColumnInput,
-	type ColumnOptions,
-	type ColumnSpec,
-	type ColumnsOf,
-	type ComputedColumnsOf,
-	type DefaultedColumnsOf,
-	type DdlExpr,
-	type DdlKey,
-	type IndexSpec,
-	type MaterializedView,
-	type MisfitColumns,
-	type SchemaTable,
-	type TableDdl,
-	type TableDefinition,
-} from "./schema/define"
+export { type SchemaTable, type MaterializedView } from "./schema/define"
+export { type PgSchemaTable } from "./schema/pg-define"
 export {
 	ClickHouseSnapshot,
 	ColumnDefault,

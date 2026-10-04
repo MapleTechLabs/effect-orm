@@ -2,9 +2,8 @@
 // resolve dependencies or source files from Maple's workspace.
 import assert from "node:assert/strict"
 import { Effect, Schema } from "effect"
-import * as CH from "@maple-dev/effect-orm"
+import * as CH from "@maple-dev/effect-orm/clickhouse"
 import * as F from "@maple-dev/effect-orm/expr"
-import * as T from "@maple-dev/effect-orm/types"
 import * as Bench from "@maple-dev/effect-orm/benchmark"
 import { makeHttpClient } from "@maple-dev/effect-orm/benchmark/http"
 import { runCli } from "@maple-dev/effect-orm/benchmark/cli"
@@ -14,7 +13,7 @@ import * as Migrate from "@maple-dev/effect-orm/migrate"
 import * as Db from "@maple-dev/effect-orm/database"
 import { defineConfig } from "@maple-dev/effect-orm/kit"
 
-const events = CH.table("events", { id: T.uint64, name: T.string })
+const events = CH.table("events", { external: true, columns: { id: CH.uint64, name: CH.string } })
 const query = CH.from(events)
 	.select(($) => ({ id: CH.toString($.id), name: F.lower_($.name) }))
 	.where(($) => [$.name.eq(CH.param.string("name"))])
@@ -26,21 +25,21 @@ const typed: readonly { readonly id: string; readonly name: string }[] = rows
 assert.equal(typed[0]?.id, "18446744073709551615")
 assert.deepEqual(await Effect.runPromise(compiled.encodeRows(rows)), rows)
 assert.equal(SQL.compile(SQL.str("O'Reilly")), "'O\\'Reilly'")
-assert.equal(T.custom("String", Schema.String).sql, "String")
-assert.equal(T.untyped("Tuple(String)").sql, "Tuple(String)")
-const length = CH.defineFn<[CH.Expr<string>], number>("length", T.uint64)
+assert.equal(CH.custom("String", Schema.String).sql, "String")
+assert.equal(CH.untyped("Tuple(String)").sql, "Tuple(String)")
+const length = CH.defineFn<[CH.Expr<string>], number>("length", CH.uint64)
 assert.equal(SQL.compile(length(CH.lit("abc")).toFragment()), "length('abc')")
 // @ts-expect-error -- a missing param is a type error too; this checks the runtime failure
 const invalid = Effect.runSync(Effect.exit(CH.compile(query, {})))
 assert.equal(invalid._tag, "Failure")
 
-const managed = S.defineTable("managed", {
-	columns: { id: T.uint64, name: S.column(T.string, { default: "" }) },
-	engine: S.engine.mergeTree(),
+const managed = CH.table("managed", {
+	columns: { id: CH.uint64, name: CH.column(CH.string, { default: "" }) },
+	engine: CH.engine.mergeTree(),
 	orderBy: ["id"],
 })
-const counts = S.defineTable("counts", { columns: { name: T.string, n: T.uint64 }, engine: S.engine.summingMergeTree(), orderBy: ["name"] })
-const countsMv = S.materializedView("counts_mv", {
+const counts = CH.table("counts", { columns: { name: CH.string, n: CH.uint64 }, engine: CH.engine.summingMergeTree(), orderBy: ["name"] })
+const countsMv = CH.materializedView("counts_mv", {
 	to: counts,
 	as: CH.from(managed).select(($) => ({ name: $.name, n: CH.count() })).groupBy("name"),
 })
@@ -63,7 +62,7 @@ const checkTypes = () => {
 	const id: number = rows[0]!.id
 	void id
 	// @ts-expect-error a view output column the target table lacks must not typecheck
-	S.materializedView("bad_mv", { to: counts, as: CH.from(managed).select(($) => ({ missing: $.name })) })
+	CH.materializedView("bad_mv", { to: counts, as: CH.from(managed).select(($) => ({ missing: $.name })) })
 }
 void checkTypes
 console.log("Isolated tarball imports, types, compilation and codecs passed")

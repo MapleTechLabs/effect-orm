@@ -1,11 +1,10 @@
 import { DateTime, Effect, Schema } from "effect"
 import { FetchHttpClient } from "effect/http"
 import { describe, expect, it } from "@effect/vitest"
-import * as CH from "@maple-dev/effect-orm"
-import * as T from "@maple-dev/effect-orm/types"
+import * as CH from "@maple-dev/effect-orm/clickhouse"
 import { endpoint, execute } from "./clickhouse-support"
 
-const One = CH.table("system.one", {})
+const One = CH.table("system.one", { external: true, columns: {} })
 
 it.layer(FetchHttpClient.layer)("composed codecs against ClickHouse", (it) => {
 	describe.skipIf(!endpoint)("live", () => {
@@ -20,13 +19,13 @@ it.layer(FetchHttpClient.layer)("composed codecs against ClickHouse", (it) => {
 		}))
 
 		it.effect("decodes a narrowed coalesce fallback", () => Effect.gen(function* () {
-			const a = CH.rawExpr("CAST(NULL AS Nullable(String))", T.nullable(T.custom("String", Schema.Literal("a"))))
+			const a = CH.rawExpr("CAST(NULL AS Nullable(String))", CH.nullable(CH.custom("String", Schema.Literal("a"))))
 			const compiled = CH.compileUnsafe(CH.from(One).select(() => ({ result: CH.coalesce(a, CH.lit("b")) })), {})
 			expect((yield* execute(compiled)).rows).toEqual([{ result: "b" }])
 		}))
 
 		it.effect("decodes overflowed aggregates and nonfinite numeric strings", () => Effect.gen(function* () {
-			const Numbers = CH.table("numbers(2)", {})
+			const Numbers = CH.table("numbers(2)", { external: true, columns: {} })
 			const compiled = CH.compileUnsafe(CH.from(Numbers).select(() => ({
 				total: CH.sum(CH.lit(1e308)),
 				filtered: CH.sumIf(CH.lit(1e308), CH.lit(1).eq(1)),
@@ -41,8 +40,8 @@ it.layer(FetchHttpClient.layer)("composed codecs against ClickHouse", (it) => {
 			})), { time: "2026-01-02T00:00:00.500+02:00" })
 			expect((yield* execute(seconds)).rows).toEqual([{ time: "2026-01-01 22:00:00" }])
 			const result = CH.compileUnsafe(CH.from(One).select(() => ({
-				time: CH.if_(CH.lit(0).eq(1), CH.rawExpr("toDateTime('2026-01-01 00:00:00')", T.dateTime),
-					CH.rawExpr("toDateTime64('2026-01-02 00:00:00.789', 3)", T.dateTime64)),
+				time: CH.if_(CH.lit(0).eq(1), CH.rawExpr("toDateTime('2026-01-01 00:00:00')", CH.dateTime),
+					CH.rawExpr("toDateTime64('2026-01-02 00:00:00.789', 3)", CH.dateTime64)),
 			})), {})
 			const rows = (yield* execute(result)).rows
 			expect(DateTime.toEpochMillis(rows[0]!.time)).toBe(Date.parse("2026-01-02T00:00:00.789Z"))

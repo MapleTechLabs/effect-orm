@@ -1,4 +1,4 @@
-import * as T from "../types"
+import * as T from "../ch/types"
 import * as CH from "../ch/index"
 import { describe, expect, it } from "vitest"
 import { Effect, Schema } from "effect"

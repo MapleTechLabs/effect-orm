@@ -2,9 +2,8 @@ import { defineConfig } from "tsdown"
 
 export default defineConfig({
 	entry: {
-		index: "./src/index.ts",
+		clickhouse: "./src/clickhouse.ts",
 		expr: "./src/expr.ts",
-		types: "./src/types.ts",
 		sql: "./src/sql/index.ts",
 		postgres: "./src/postgres.ts",
 		schema: "./src/schema.ts",

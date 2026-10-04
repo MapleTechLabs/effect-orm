@@ -10,8 +10,10 @@ or row decoding. [Running a query](./running-queries.md#error-boundaries) separa
 | npm returns 404 for the builder                              | The package name or configured registry is incorrect.                     | Check `@maple-dev/effect-orm` and your npm registry; see [Getting started](./getting-started.md#installation-and-compatibility). |
 | `Schema.TaggedError is not a function`                       | Effect 3 is installed or resolving ahead of Effect 4. | Install the documented Effect 4 version and inspect the resolved dependency tree.                    |
 | `ERR_REQUIRE_ESM` or an import cannot be loaded by `require` | The builder ships ESM.                                | Use ESM imports and `"type": "module"`, or your bundler's ESM support.                               |
-| A helper exists in source but not in the package             | A deep source import or stale local build.            | Use the seven public entry points and rebuild/reinstall your tarball.                                 |
-| An example's `Events`, `Services`, `CH`, or `T` is undefined | A guide fragment expects the shared schema/imports.   | Start with the complete example and shared `schema.ts`; recipe files include their own imports.      |
+| A helper exists in source but not in the package             | A deep source import or stale local build.            | Use the public entry points in `package.json` `exports` and rebuild/reinstall your tarball.           |
+| `@maple-dev/effect-orm` or `@maple-dev/effect-orm/types` cannot be resolved | Code written for the removed root and `/types` entries. | Import everything for one database from `@maple-dev/effect-orm/clickhouse` or `@maple-dev/effect-orm/postgres`; write `CH.string`, not `T.string`. |
+| An example's `Events`, `Services`, or `CH` is undefined      | A guide fragment expects the shared schema/imports.   | Start with the complete example and shared `schema.ts`; recipe files include their own imports.      |
+| `SchemaDefinitionDefect` when a module loads                 | A `table` definition is invalid, such as a MergeTree table without `orderBy`. | Read the message; pass `orderBy: []` for `ORDER BY tuple()`, or `external: true` for a table this schema does not own. |
 
 ## Compilation failures
 
@@ -61,12 +63,12 @@ alongside `compiled.rowSchemaSource`, `compiled.untypedColumns`, and `compiled.r
 | A field disappeared after decoding   | An explicit schema replaced the derived shape. Inspect `rowSchemaMismatch`.                                                                   |
 | An ID's last digits changed          | The value passed through JavaScript `number`. Project `toString(...)` in SQL before parsing JSON.                                             |
 | Timestamps shifted by several hours  | The codec assumes zone-less text is UTC, but the server/column emitted another timezone. Normalize SQL output or use a matching custom codec. |
-| Microseconds/nanoseconds disappeared | Parsed `DateTime.Utc` has millisecond precision. Preserve the text with `T.dateTime64String`.                                                 |
+| Microseconds/nanoseconds disappeared | Parsed `DateTime.Utc` has millisecond precision. Preserve the text with `CH.dateTime64String`.                                                 |
 | An average/percentile is NULL        | Empty/non-finite aggregate results can serialize as JSON null. Keep the nullable type or explicitly define a fallback.                        |
 | “No rows” crashes a point lookup     | Use `decodeFirstRow` and handle `Option.none`; an empty result is not a decode failure.                                                       |
 
-The built-in numeric codecs are wire decoders, not full range validators. `T.uint64` does not
-make JavaScript numbers lossless or enforce UInt64 bounds. `T.untyped` validates nothing for its
+The built-in numeric codecs are wire decoders, not full range validators. `CH.uint64` does not
+make JavaScript numbers lossless or enforce UInt64 bounds. `CH.untyped` validates nothing for its
 field even when the rest of the row has a derived schema.
 
 ## Reporting a problem

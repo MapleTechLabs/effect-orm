@@ -4,7 +4,7 @@
 import { ClickhouseClient } from "@effect/sql-clickhouse"
 import { DateTime, Effect, Exit } from "effect"
 import { describe, expect, it } from "vitest"
-import * as CH from "@maple-dev/effect-orm"
+import * as CH from "@maple-dev/effect-orm/clickhouse"
 import * as Db from "@maple-dev/effect-orm/database"
 import { endpoint } from "./clickhouse-support"
 
@@ -39,7 +39,7 @@ describe("database", () => {
 					Effect.gen(function* () {
 						yield* db.execute(Db.sql`CREATE TABLE events (Id UInt32, Name String) ENGINE = MergeTree ORDER BY Id`)
 						yield* db.execute(Db.sql`INSERT INTO events VALUES (${1}, ${"a"}), (${2}, ${"it's"})`)
-						const Events = CH.table("events", { Id: CH.uint32, Name: CH.string })
+						const Events = CH.table("events", { external: true, columns: { Id: CH.uint32, Name: CH.string } })
 						return yield* db.run(CH.from(Events).select("Id", "Name").orderBy(["Id", "asc"]))
 					}),
 				),
@@ -65,18 +65,18 @@ describe("database", () => {
 								Day String MATERIALIZED toString(toDate(At))
 							) ENGINE = MergeTree ORDER BY (OrgId, Id)`,
 						)
-						const Events = CH.table(
-							"events",
-							{
+						const Events = CH.table("events", {
+							external: true,
+							tenantColumn: "OrgId",
+							columns: {
 								OrgId: CH.string,
-								Id: CH.uint64,
+								Id: CH.column(CH.uint64, { default: 42 }),
 								At: CH.dateTime64,
 								Attrs: CH.map(CH.string, CH.string),
 								Note: CH.nullable(CH.string),
 								Tags: CH.array(CH.string),
 							},
-							{ tenantColumn: "OrgId", defaults: ["Id"] },
-						)
+						})
 						const inserted = yield* db.run(
 							CH.insertInto(Events).values([
 								{ OrgId: CH.param.string("org"), At: new Date("2026-01-02T03:04:05.678Z"), Attrs: { a: "it's; x" }, Tags: ["t"], Note: null },
@@ -105,8 +105,8 @@ describe("database", () => {
 					Effect.gen(function* () {
 						yield* db.execute(Db.sql`CREATE TABLE spans (OrgId String, Name String, Ms UInt64) ENGINE = MergeTree ORDER BY OrgId`)
 						yield* db.execute(Db.sql`CREATE TABLE daily (OrgId String, Name String, Total UInt64) ENGINE = MergeTree ORDER BY OrgId`)
-						const Spans = CH.table("spans", { OrgId: CH.string, Name: CH.string, Ms: CH.uint64 }, { tenantColumn: "OrgId" })
-						const Daily = CH.table("daily", { OrgId: CH.string, Name: CH.string, Total: CH.uint64 }, { tenantColumn: "OrgId" })
+						const Spans = CH.table("spans", { external: true, columns: { OrgId: CH.string, Name: CH.string, Ms: CH.uint64 }, tenantColumn: "OrgId" })
+						const Daily = CH.table("daily", { external: true, columns: { OrgId: CH.string, Name: CH.string, Total: CH.uint64 }, tenantColumn: "OrgId" })
 						yield* db.run(
 							CH.insertInto(Spans)
 								.values([
@@ -139,7 +139,7 @@ describe("database", () => {
 				withDatabase((db) =>
 					Effect.gen(function* () {
 						yield* db.execute(Db.sql`CREATE TABLE jobs (OrgId String, Id UInt32, State String) ENGINE = MergeTree ORDER BY (OrgId, Id)`)
-						const Jobs = CH.table("jobs", { OrgId: CH.string, Id: CH.uint32, State: CH.string }, { tenantColumn: "OrgId" })
+						const Jobs = CH.table("jobs", { external: true, columns: { OrgId: CH.string, Id: CH.uint32, State: CH.string }, tenantColumn: "OrgId" })
 						yield* db.run(
 							CH.insertInto(Jobs).values([
 								{ OrgId: "o", Id: 1, State: "queued" },
@@ -170,7 +170,7 @@ describe("database", () => {
 				withDatabase((db) =>
 					Effect.gen(function* () {
 						yield* db.execute(Db.sql`CREATE TABLE ev (OrgId String, Id UInt32, Note Nullable(String)) ENGINE = MergeTree ORDER BY (OrgId, Id)`)
-						const Ev = CH.table("ev", { OrgId: CH.string, Id: CH.uint32, Note: CH.nullable(CH.string) })
+						const Ev = CH.table("ev", { external: true, columns: { OrgId: CH.string, Id: CH.uint32, Note: CH.nullable(CH.string) } })
 						yield* db.run(
 							CH.insertInto(Ev).values([
 								{ OrgId: "o", Id: 1, Note: null },

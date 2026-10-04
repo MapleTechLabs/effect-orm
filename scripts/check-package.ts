@@ -33,7 +33,7 @@ const program = Effect.gen(function* () {
 	const packed = (yield* Schema.decodeEffect(PackResult)(output))[0]
 	if (!packed) return yield* check(false, "tarball", "npm pack produced no artifact")
 	yield* check(
-		packed.files.some((file) => file.path === "dist/index.mjs"),
+		packed.files.some((file) => file.path === "dist/clickhouse.mjs") && packed.files.some((file) => file.path === "dist/postgres.mjs"),
 		"tarball",
 		"Missing built entry point",
 	)

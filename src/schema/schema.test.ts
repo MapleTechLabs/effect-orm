@@ -1,32 +1,32 @@
 import { Effect } from "effect"
 import { describe, expect, it } from "vitest"
-import * as CH from "../ch/index"
+import * as CH from "../clickhouse"
 import * as S from "../schema"
 
-const Spans = S.defineTable("spans", {
+const Spans = CH.table("spans", {
 	columns: {
 		OrgId: CH.custom("LowCardinality(String)", CH.string.schema),
-		Timestamp: S.column(CH.dateTime64, { codec: "Delta, ZSTD(1)" }),
+		Timestamp: CH.column(CH.dateTime64, { codec: "Delta, ZSTD(1)" }),
 		ServiceName: CH.string,
-		Duration: S.column(CH.uint64, { default: 0 }),
-		Day: S.column(CH.string, { materialized: ($) => CH.formatDateTime($.Timestamp, "%F") }),
+		Duration: CH.column(CH.uint64, { default: 0 }),
+		Day: CH.column(CH.string, { materialized: ($) => CH.formatDateTime($.Timestamp, "%F") }),
 	},
-	engine: S.engine.mergeTree(),
+	engine: CH.engine.mergeTree(),
 	orderBy: ["OrgId", "ServiceName", "Timestamp"],
 	partitionBy: "toDate(Timestamp)",
-	ttl: S.ttlAfterDays("toDate(Timestamp)", 30),
+	ttl: CH.ttlAfterDays("toDate(Timestamp)", 30),
 	settings: { index_granularity: 8192 },
-	indexes: [S.index("idx_duration", ($) => $.Duration, "minmax")],
+	indexes: [CH.index("idx_duration", ($) => $.Duration, "minmax")],
 	tenantColumn: "OrgId",
 })
 
-const ServiceCounts = S.defineTable("service_counts", {
+const ServiceCounts = CH.table("service_counts", {
 	columns: { OrgId: CH.string, ServiceName: CH.string, Spans: CH.uint64 },
-	engine: S.engine.summingMergeTree(),
+	engine: CH.engine.summingMergeTree(),
 	orderBy: ["OrgId", "ServiceName"],
 })
 
-const ServiceCountsMv = S.materializedView("service_counts_mv", {
+const ServiceCountsMv = CH.materializedView("service_counts_mv", {
 	to: ServiceCounts,
 	as: CH.from(Spans)
 		.select(($) => ({ OrgId: $.OrgId, ServiceName: $.ServiceName, Spans: CH.count() }))
@@ -75,13 +75,13 @@ describe("defineTable", () => {
 
 	it("rejects a MergeTree without a sorting key", () => {
 		expect(() =>
-			S.defineTable("bad", { columns: { a: CH.string }, engine: S.engine.mergeTree() }),
+			CH.table("bad", { columns: { a: CH.string }, engine: CH.engine.mergeTree() }),
 		).toThrow(/needs orderBy/)
 	})
 
 	it("rejects a non-identifier name", () => {
 		expect(() =>
-			S.defineTable("bad name", { columns: { a: CH.string }, engine: S.engine.null() }),
+			CH.table("bad name", { columns: { a: CH.string }, engine: CH.engine.null() }),
 		).toThrow(/plain identifier/)
 	})
 })
@@ -98,7 +98,7 @@ describe("materializedView", () => {
 	it("rejects at the type level an output column the target lacks", () => {
 		const misfit = () =>
 			// @ts-expect-error `Nope` is not a column of service_counts
-			S.materializedView("bad_mv", {
+			CH.materializedView("bad_mv", {
 				to: ServiceCounts,
 				as: CH.from(Spans).select(($) => ({ OrgId: $.OrgId, Nope: $.ServiceName })),
 			})
@@ -134,12 +134,12 @@ describe("diffSchemas", () => {
 	})
 
 	it("adds a column after its neighbour and recreates a changed view", () => {
-		const Counts2 = S.defineTable("service_counts", {
-			columns: { OrgId: CH.string, Env: S.column(CH.string, { default: "" }), ServiceName: CH.string, Spans: CH.uint64 },
-			engine: S.engine.summingMergeTree(),
+		const Counts2 = CH.table("service_counts", {
+			columns: { OrgId: CH.string, Env: CH.column(CH.string, { default: "" }), ServiceName: CH.string, Spans: CH.uint64 },
+			engine: CH.engine.summingMergeTree(),
 			orderBy: ["OrgId", "ServiceName"],
 		})
-		const Mv2 = S.materializedView("service_counts_mv", {
+		const Mv2 = CH.materializedView("service_counts_mv", {
 			to: Counts2,
 			as: CH.from(Spans)
 				.select(($) => ({ OrgId: $.OrgId, Env: CH.lit(""), ServiceName: $.ServiceName, Spans: CH.count() }))
@@ -165,9 +165,9 @@ describe("diffSchemas", () => {
 	})
 
 	it("reports changes ALTER cannot make", () => {
-		const Resorted = S.defineTable("service_counts", {
+		const Resorted = CH.table("service_counts", {
 			columns: { OrgId: CH.string, ServiceName: CH.string, Spans: CH.uint32 },
-			engine: S.engine.summingMergeTree(),
+			engine: CH.engine.summingMergeTree(),
 			orderBy: ["ServiceName", "OrgId"],
 		})
 		const { unsupported } = S.diffSchemas(S.entitiesOf([ServiceCounts]), S.entitiesOf([Resorted]))
@@ -178,9 +178,9 @@ describe("diffSchemas", () => {
 	})
 
 	it("modifies TTL without materializing it", () => {
-		const Shorter = S.defineTable("service_counts", {
+		const Shorter = CH.table("service_counts", {
 			columns: { OrgId: CH.string, ServiceName: CH.string, Spans: CH.uint64 },
-			engine: S.engine.summingMergeTree(),
+			engine: CH.engine.summingMergeTree(),
 			orderBy: ["OrgId", "ServiceName"],
 			ttl: "now() + toIntervalDay(1)",
 		})
@@ -192,7 +192,7 @@ describe("diffSchemas", () => {
 
 	it("ignores settings that only changed key order", () => {
 		const make = (settings: Record<string, number>) =>
-			S.defineTable("ordered", { columns: { a: CH.string }, engine: S.engine.mergeTree(), orderBy: ["a"], settings })
+			CH.table("ordered", { columns: { a: CH.string }, engine: CH.engine.mergeTree(), orderBy: ["a"], settings })
 		const before = S.entitiesOf([make({ index_granularity: 8192, merge_with_ttl_timeout: 3600 })])
 		const after = S.entitiesOf([make({ merge_with_ttl_timeout: 3600, index_granularity: 8192 })])
 		expect(S.diffSchemas(before, after).ops).toEqual([])

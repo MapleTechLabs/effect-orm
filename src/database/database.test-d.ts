@@ -2,7 +2,7 @@
 
 import { Effect, Schema } from "effect"
 import { expectTypeOf } from "expect-type"
-import * as CH from "../index"
+import * as CH from "../ch/index"
 import * as PG from "../postgres"
 import * as Db from "../database"
 

@@ -46,7 +46,7 @@ try {
 		`
 import assert from "node:assert/strict"
 import { Effect } from "effect"
-import * as CH from "@maple-dev/effect-orm"
+import * as CH from "@maple-dev/effect-orm/clickhouse"
 import { Events } from "./schema"
 const sql = (query: { sql: string }) => query.sql.replace(/\\s+/g, " ").trim()
 const quick = await import("./quick-start")

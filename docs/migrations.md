@@ -1,11 +1,13 @@
 # Schema and migrations
 
-The query builder works with tables you manage elsewhere. If you would rather keep the schema
-in TypeScript too, three entry points add that, all opt-in:
+Every table is declared with its DDL: `table` from `/clickhouse` or `/postgres` carries the
+engine, keys, indexes, and defaults beside the columns the query builder reads. You can ignore
+that and manage the database elsewhere, or let three opt-in entry points turn the definitions
+into migrations:
 
 | Entry                              | Runs where         | What it does                                                                  |
 | ---------------------------------- | ------------------ | ----------------------------------------------------------------------------- |
-| `@maple-dev/effect-orm/schema`     | anywhere, pure     | `defineTable` / `materializedView` / `pg.table`, DDL rendering, snapshots, the diff |
+| `@maple-dev/effect-orm/schema`     | anywhere, pure     | reads `table` / `materializedView` values: DDL rendering, snapshots, the diff |
 | `@maple-dev/effect-orm/kit`        | Node or Bun        | `generate` and `check` over a migrations folder; the `effect-orm` command     |
 | `@maple-dev/effect-orm/migrate`    | anywhere Effect runs | applies migrations through a driver you provide, `status`, `verify`        |
 
@@ -18,38 +20,39 @@ sections below describe ClickHouse first; [Postgres](#postgres) covers what diff
 
 ## Defining tables
 
-`defineTable` returns a `Table`, so every query API accepts it. Columns are the usual column
-types, or `S.column(type, options)` for a default, a codec, or a comment. Keys, TTL, defaults,
-and index expressions are SQL strings or DSL callbacks.
+`CH.table` returns a `Table`, so every query API accepts it. Columns are the usual column
+types, or `CH.column(type, options)` for a default, a codec, or a comment. Keys, TTL, defaults,
+and index expressions are SQL strings or DSL callbacks. `/schema` only reads these values: it
+renders them, snapshots them, and diffs them.
 
 ```ts title="migrations-schema.ts"
-import * as CH from "@maple-dev/effect-orm"
+import * as CH from "@maple-dev/effect-orm/clickhouse"
 import * as S from "@maple-dev/effect-orm/schema"
 
-export const Requests = S.defineTable("requests", {
+export const Requests = CH.table("requests", {
 	columns: {
 		OrgId: CH.custom("LowCardinality(String)", CH.string.schema),
 		Timestamp: CH.dateTime,
 		Route: CH.string,
-		Status: S.column(CH.uint16, { default: 200 }),
+		Status: CH.column(CH.uint16, { default: 200 }),
 	},
-	engine: S.engine.mergeTree(),
+	engine: CH.engine.mergeTree(),
 	orderBy: ["OrgId", "Route", "Timestamp"],
 	partitionBy: "toDate(Timestamp)",
-	ttl: S.ttlAfterDays("toDate(Timestamp)", 30),
-	indexes: [S.index("idx_status", ($) => $.Status, "set(100)")],
+	ttl: CH.ttlAfterDays("toDate(Timestamp)", 30),
+	indexes: [CH.index("idx_status", ($) => $.Status, "set(100)")],
 	tenantColumn: "OrgId",
 })
 
-export const RoutesHourly = S.defineTable("routes_hourly", {
+export const RoutesHourly = CH.table("routes_hourly", {
 	columns: { OrgId: CH.string, Hour: CH.dateTime, Route: CH.string, Requests: CH.uint64 },
-	engine: S.engine.summingMergeTree(),
+	engine: CH.engine.summingMergeTree(),
 	orderBy: ["OrgId", "Hour", "Route"],
 })
 
 // The body is a DSL query. An output column the target lacks, or of another
 // type, is a type error here rather than a failed insert later.
-export const RoutesHourlyMv = S.materializedView("routes_hourly_mv", {
+export const RoutesHourlyMv = CH.materializedView("routes_hourly_mv", {
 	to: RoutesHourly,
 	as: CH.from(Requests)
 		.select(($) => ({ OrgId: $.OrgId, Hour: CH.toStartOfHour($.Timestamp), Route: $.Route, Requests: CH.count() }))
@@ -67,6 +70,11 @@ the module loads. `CH.dateTime64` renders as `DateTime64`, which ClickHouse read
 Write engines as the plain family. Replicated engines and `ON CLUSTER` are render options
 (`{ replicated: {}, cluster: "main" }`), so one schema serves a single server, a cluster, and
 ClickHouse Cloud.
+
+A table declared with `external: true` (a system table, a table function, a table another tool
+migrates) carries no DDL: `S.isSchemaObject` is false for it, so `generate` skips it and
+`entitiesOf` does not take it. See
+[External tables](./tables-and-types.md#external-tables).
 
 ## Generating migrations
 
@@ -182,55 +190,55 @@ its own runner.)_
 
 ## Postgres
 
-Set `dialect: "postgres"` in the config and define tables with `S.pg.table`. `generate`, `check`,
+Set `dialect: "postgres"` in the config and define tables with `PG.table`. `generate`, `check`,
 `migrate`, `status` and `verify` then work as above, with the differences below.
 
 ```ts title="migrations-postgres.ts"
-import * as CH from "@maple-dev/effect-orm"
 import * as PG from "@maple-dev/effect-orm/postgres"
 import * as S from "@maple-dev/effect-orm/schema"
 
-export const Dashboards = S.pg.table("dashboards", {
+export const Dashboards = PG.table("dashboards", {
 	columns: {
 		org_id: PG.text,
 		id: PG.text,
-		status: S.pg.column(PG.text, { default: "open" }),
-		created_at: S.pg.column(PG.timestamptz, { defaultExpr: "now()" }),
+		status: PG.column(PG.text, { default: "open" }),
+		created_at: PG.column(PG.timestamptz, { defaultExpr: "now()" }),
 		archived_at: PG.nullable(PG.timestamptz),
 	},
 	primaryKey: ["org_id", "id"],
-	indexes: [S.pg.index("dashboards_open_idx", ["org_id"], { where: ($) => $.archived_at.isNull() })],
+	indexes: [PG.index("dashboards_open_idx", ["org_id"], { where: ($) => $.archived_at.isNull() })],
 	tenantColumn: "org_id",
 })
 
-export const Shares = S.pg.table("dashboard_shares", {
+export const Shares = PG.table("dashboard_shares", {
 	columns: { org_id: PG.text, id: PG.text, dashboard_id: PG.text, widget_id: PG.nullable(PG.text), revoked_at: PG.nullable(PG.timestamptz) },
 	primaryKey: ["org_id", "id"],
 	indexes: [
 		// At most one live share per dashboard and widget: a partial unique index on an expression.
-		S.pg.uniqueIndex("dashboard_shares_live_unq", ($) => [$.org_id, $.dashboard_id, CH.coalesce($.widget_id, CH.lit(""))], {
+		PG.uniqueIndex("dashboard_shares_live_unq", ($) => [$.org_id, $.dashboard_id, PG.coalesce($.widget_id, PG.lit(""))], {
 			where: "revoked_at is null",
 		}),
 	],
 	foreignKeys: [
-		S.pg.foreignKey({ columns: ["org_id", "dashboard_id"], references: Dashboards, foreignColumns: ["org_id", "id"], onDelete: "cascade" }),
+		PG.foreignKey({ columns: ["org_id", "dashboard_id"], references: Dashboards, foreignColumns: ["org_id", "id"], onDelete: "cascade" }),
 	],
 })
 
 export const ddl = S.renderPgSchema(S.pgEntitiesOf([Dashboards, Shares]))
 ```
 
-**Definitions.** A column is `NOT NULL` unless its type is `PG.nullable(...)`. `S.pg.column(type,
+**Definitions.** A column is `NOT NULL` unless its type is `PG.nullable(...)`. `PG.column(type,
 options)` adds a `default` (a value of the column's type), a `defaultExpr` (SQL or a DSL
 expression) or an `identity` (`"always"` or `"by default"`); any of them makes the column
 optional on insert. `primaryKey` takes column names, or `{ columns, name }`; the default name is
-`<table>_pkey`. Indexes are `S.pg.index` / `S.pg.uniqueIndex` over column names or expressions,
+`<table>_pkey`. Indexes are `PG.index` / `PG.uniqueIndex` over column names or expressions,
 with `where` for a partial index and `using` for the access method. A foreign key without a
 `name` gets drizzle-orm's, `<table>_<columns>_<foreign table>_<foreign columns>_fk`, shortened
 with drizzle-kit's hash to `<table>_<hash>_fk` when it would pass 63 characters. Types are
 stored as Postgres names them (`int4` is `integer`), so snapshots compare with the catalog and
-with drizzle-kit. Check and unique constraints, enums, views, sequences and other schemas are
-not modeled yet; write them in a `--custom` migration.
+with drizzle-kit. Check and unique constraints, generated columns, enums, views, sequences and other schemas
+are not modeled yet; write them in a `--custom` migration, and declare a view you query as an
+[external table](./tables-and-types.md#external-tables).
 
 **Generating.** Postgres changes a column's type, nullability, default or identity in place
 (`ALTER COLUMN`), and a primary key, an index or a foreign key by dropping and re-creating it,
@@ -262,13 +270,13 @@ and set aside, so the folder runs as it is. Adoption is two steps:
 1. `effect-orm generate --baseline --from-drizzle` writes a migration that runs nothing, whose
    snapshot is drizzle-kit's last one converted to entities. Anything the conversion cannot model
    is listed and nothing is written. Without `--from-drizzle` the snapshot comes from your
-   `S.pg.table` definitions instead. Migrations before the baseline are legacy: they run, but
+   `PG.table` definitions instead. Migrations before the baseline are legacy: they run, but
    nothing diffs against them, and a plain `generate` refuses to run until a baseline exists.
 2. On a database drizzle-kit (or anything else) already migrated, `effect-orm baseline <name>`
    (`Migrate.baseline`) records the baseline and every migration before it as applied, without
    running them. A fresh database, such as a test's, simply runs everything.
 
-The first `generate` after the baseline diffs your `S.pg.table` definitions against what
+The first `generate` after the baseline diffs your `PG.table` definitions against what
 drizzle-kit recorded, so every place they disagree (a constraint name, a default) shows up as an
 op to accept or fix. `verify` against the baseline also finds objects the database has and
 drizzle-kit's snapshot does not, such as a table a hand-written migration created and nothing

@@ -6,15 +6,14 @@
 // holds on ClickHouse must hold on Postgres too, or the case says why not
 // (`expected` per target, or `rejects` for a clause a dialect refuses).
 import { DateTime } from "effect"
-import * as CH from "@maple-dev/effect-orm"
-import * as T from "@maple-dev/effect-orm/types"
+import * as CH from "@maple-dev/effect-orm/clickhouse"
 import * as PG from "@maple-dev/effect-orm/postgres"
 
 export type DialectName = "clickhouse" | "postgres"
 /** ClickHouse runs twice: `join_use_nulls=0` fills a missing join row with defaults. */
 export type Target = "clickhouse" | "clickhouse-join-nulls" | "postgres"
 
-type Col<A> = T.CHType<string, A, any>
+type Col<A> = CH.CHType<string, A, any>
 type Orders = {
 	readonly OrgId: Col<string>
 	readonly Id: Col<number>
@@ -132,22 +131,22 @@ const withFixtures = (dialect: DialectName) =>
 
 export const clickhouseContext: CoreContext = {
 	dialect: "clickhouse",
-	orders: CH.table(
-		"orders",
-		{
-			OrgId: T.string,
-			Id: T.uint32,
-			Customer: T.string,
-			Amount: T.int64,
-			Status: T.string,
-			Note: T.nullable(T.string),
-			Created: T.dateTime64,
+	orders: CH.table("orders", {
+		external: true,
+		tenantColumn: "OrgId",
+		columns: {
+			OrgId: CH.string,
+			Id: CH.uint32,
+			Customer: CH.string,
+			Amount: CH.int64,
+			Status: CH.string,
+			Note: CH.nullable(CH.string),
+			Created: CH.dateTime64,
 		},
-		{ tenantColumn: "OrgId" },
-	),
-	customers: CH.table("customers", { OrgId: T.string, Name: T.string, Tier: T.string }, { tenantColumn: "OrgId" }),
+	}),
+	customers: CH.table("customers", { external: true, columns: { OrgId: CH.string, Name: CH.string, Tier: CH.string }, tenantColumn: "OrgId" }),
 	from: withFixtures("clickhouse"),
-	types: { text: T.string, int: T.int64 },
+	types: { text: CH.string, int: CH.int64 },
 	fn: {
 		count: () => CH.count(),
 		countIf: (condition) => CH.countIf(condition),
@@ -162,9 +161,10 @@ export const clickhouseContext: CoreContext = {
 
 export const postgresContext: CoreContext = {
 	dialect: "postgres",
-	orders: CH.table(
-		"orders",
-		{
+	orders: PG.table("orders", {
+		external: true,
+		tenantColumn: "OrgId",
+		columns: {
 			OrgId: PG.text,
 			Id: PG.int4,
 			Customer: PG.text,
@@ -173,9 +173,8 @@ export const postgresContext: CoreContext = {
 			Note: PG.nullable(PG.text),
 			Created: PG.timestamptz,
 		},
-		{ tenantColumn: "OrgId" },
-	),
-	customers: CH.table("customers", { OrgId: PG.text, Name: PG.text, Tier: PG.text }, { tenantColumn: "OrgId" }),
+	}),
+	customers: PG.table("customers", { external: true, columns: { OrgId: PG.text, Name: PG.text, Tier: PG.text }, tenantColumn: "OrgId" }),
 	from: withFixtures("postgres"),
 	types: { text: PG.text, int: PG.int8 },
 	fn: {
@@ -528,7 +527,7 @@ export const coreCases: readonly CoreCase[] = [
 		id: "cte",
 		covers: q("withCTE"),
 		build: (ctx) => {
-			const paid = CH.table("paid", { Customer: ctx.types.text, Amount: ctx.types.int })
+			const paid = CH.table("paid", { external: true, columns: { Customer: ctx.types.text, Amount: ctx.types.int } })
 			return ctx.compile(
 				ctx
 					.from(paid)

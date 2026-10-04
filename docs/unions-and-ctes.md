@@ -57,7 +57,7 @@ in-progress hour, then re-aggregating over both.
 `compile` time and its tenant scope is **derived**, so nobody has to assert it:
 
 ```ts
-const Recent = CH.table("recent", { Name: T.string })
+const Recent = CH.table("recent", { external: true, columns: { Name: CH.string } })
 
 const cte = CH.from(Events)
 	.select(($) => ({ Name: $.Name }))
@@ -73,8 +73,9 @@ const compiled = CH.compileUnsafe(query, {})
 compiled.tenantScope // "single-tenant" — read off the CTE, not declared
 ```
 
-To _read_ a CTE, declare a table whose name matches it and start the query there. That is what
-gives you typed accessors over the CTE's columns.
+To _read_ a CTE, declare an external table (`external: true`) whose name matches it and start the
+query there. That is what gives you typed accessors over the CTE's columns; being external, it
+carries no DDL, so `effect-orm generate` never tries to create it.
 
 _(Backed by `docs/unions-and-ctes.md > Selecting from a CTE`.)_
 
@@ -86,7 +87,7 @@ all you have:
 ```ts
 const cteSql = "SELECT Name FROM events WHERE OrgId = 'org_123'"
 
-CH.from(CH.table("recent", { Name: T.string }))
+CH.from(CH.table("recent", { external: true, columns: { Name: CH.string } }))
 	.withCTE("recent", cteSql, { tenantScope: "single-tenant" })
 	.select(($) => ({ name: $.Name }))
 ```

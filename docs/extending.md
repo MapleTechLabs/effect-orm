@@ -13,7 +13,7 @@ import type { DateTime } from "effect"
 
 const toStartOfFiveMinute = CH.defineFn<[CH.Expr<DateTime.Utc>], DateTime.Utc>(
 	"toStartOfFiveMinute",
-	T.dateTime,
+	CH.dateTime,
 )
 
 CH.from(Events)
@@ -74,13 +74,16 @@ _(Backed by `docs/extending.md > defineCondFn declares a predicate`.)_
 When the signature is too irregular for `defineFn`, write the wrapper yourself:
 
 ```ts title="typed-function.ts"
-import * as CH from "@maple-dev/effect-orm"
-import * as T from "@maple-dev/effect-orm/types"
+import * as CH from "@maple-dev/effect-orm/clickhouse"
 
 const greatestOf = (first: CH.Expr<number>, ...rest: CH.Expr<number>[]) =>
-	CH.compileTypedFnCall("greatest", T.float64.schema, first, ...rest)
+	CH.compileTypedFnCall("greatest", CH.float64.schema, first, ...rest)
 
-const Events = CH.table("events", { Name: T.string, DurationMs: T.uint64 })
+const Events = CH.table("events", {
+	columns: { Name: CH.string, DurationMs: CH.uint64 },
+	engine: CH.engine.mergeTree(),
+	orderBy: ["Name"],
+})
 export const compiled = CH.compileUnsafe(
 	CH.from(Events).select(($) => ({ name: $.Name, durationMs: greatestOf($.DurationMs, CH.lit(1)) })),
 	{},
@@ -101,13 +104,13 @@ For functions whose call syntax is not `fn(a, b)` at all — parametric aggregat
 anything bespoke:
 
 ```ts
-import { makeExpr } from "@maple-dev/effect-orm"
+import { makeExpr } from "@maple-dev/effect-orm/clickhouse"
 import { raw, compile } from "@maple-dev/effect-orm/sql"
 
 const quantileExact =
 	(q: number) =>
 	<Q = never>(expr: CH.Expr<number, Q>) =>
-		makeExpr(raw(`quantileExact(${q})(${compile(expr.toFragment())})`), T.float64.schema, undefined, [expr])
+		makeExpr(raw(`quantileExact(${q})(${compile(expr.toFragment())})`), CH.float64.schema, undefined, [expr])
 ```
 
 This is how the bundled `quantile` is built. The last argument, `uses`, lists the expressions
@@ -150,16 +153,20 @@ it never makes a valid query fail.
 
 ## A column type of your own
 
-`T.custom(sql, schema)` is the extension point the built-in types are built from — `T.uint64` is
+`CH.custom(sql, schema)` is the extension point the built-in types are built from — `CH.uint64` is
 `custom("UInt64", CHNumber)`. Declare one for a ClickHouse type this package does not model and
 it works everywhere a built-in does: rows decode through it, literals encode through it, and
 `param.of(type, name)` takes it as a param.
 
 ```ts
-const Level = T.custom("Enum8('warn' = 1, 'error' = 2)", Schema.Literals(["warn", "error"]))
-const Decimal = T.custom("Decimal(18, 4)", Schema.String)
+const Level = CH.custom("Enum8('warn' = 1, 'error' = 2)", Schema.Literals(["warn", "error"]))
+const Decimal = CH.custom("Decimal(18, 4)", Schema.String)
 
-const Logs = CH.table("logs", { OrgId: T.string, Level, Amount: Decimal })
+const Logs = CH.table("logs", {
+	columns: { OrgId: CH.string, Level, Amount: Decimal },
+	engine: CH.engine.mergeTree(),
+	orderBy: ["OrgId"],
+})
 ```
 
 This Decimal declaration expects decimal text from your client and preserves it as a string.
@@ -176,15 +183,16 @@ _(Backed by `src/ch/literal.test.ts > param.of`.)_
 
 For SQL the builder has no syntax for — a cast, an operator, a Postgres function — write a
 template. It is an expression (or, with `.cond`, a condition), so it goes anywhere the builder
-takes one: a select, a `where`, a join's ON, an UPDATE's SET.
+takes one: a select, a `where`, a join's ON, an UPDATE's SET. `sql` is on both entries; this
+example is Postgres.
 
 ```ts
-CH.from(Keys)
+PG.from(Keys)
 	.select(($) => ({
-		txid: CH.sql(PG.text)`pg_current_xact_id()::xid::text`,
-		next: CH.sql(PG.int8)`${$.uses} + ${1}`,
+		txid: PG.sql(PG.text)`pg_current_xact_id()::xid::text`,
+		next: PG.sql(PG.int8)`${$.uses} + ${1}`,
 	}))
-	.where(($) => [CH.sql.cond`${$.meta} @> ${CH.param.string("filter")}::jsonb`])
+	.where(($) => [PG.sql.cond`${$.meta} @> ${PG.param.string("filter")}::jsonb`])
 // SELECT (pg_current_xact_id()::xid::text) AS "txid", ("keys"."uses" + 1) AS "next" …
 // WHERE ("keys"."meta" @> $1::jsonb)
 ```
@@ -226,7 +234,7 @@ SQL produces, so the row it lands in can still be decoded:
 
 ```ts
 CH.from(Events)
-	.select(($) => ({ odd: CH.rawExpr("DurationMs % 2", T.float64) }))
+	.select(($) => ({ odd: CH.rawExpr("DurationMs % 2", CH.float64) }))
 	.where(($) => [$.OrgId.eq("org_123"), CH.rawCond("Name GLOBAL IN (SELECT 1)")])
 ```
 
@@ -237,7 +245,7 @@ CH.from(Events)
 that is only ever an `argMin` tiebreaker, never a selected value. Selecting one costs the query
 its row schema, so it is deliberately a separate name.
 
-`dynamicColumn<T>(name, type?)` (on the root and `/expr` subpath) is the same idea for a column name only
+`dynamicColumn<T>(name, type?)` (on both dialect entries and `/expr`) is the same idea for a column name only
 known at runtime; pass the type where you know it.
 
 _(Backed by `docs/extending.md > rawExpr and rawCond are the last resort`.)_

@@ -13,7 +13,7 @@ These examples assume UTC timestamps.
 
 ```ts title="time-buckets.ts"
 import { Effect } from "effect"
-import * as CH from "@maple-dev/effect-orm"
+import * as CH from "@maple-dev/effect-orm/clickhouse"
 import { Events } from "./schema"
 
 const query = CH.from(Events)
@@ -57,7 +57,7 @@ in your product, return an empty result before executing instead.
 
 ```ts title="optional-filters.ts"
 import { Effect } from "effect"
-import * as CH from "@maple-dev/effect-orm"
+import * as CH from "@maple-dev/effect-orm/clickhouse"
 import { Events } from "./schema"
 
 export const buildQuery = (names: readonly string[], minDurationMs?: number) =>
@@ -93,15 +93,14 @@ Use `where` to choose events, then `having` to choose groups by their aggregated
 
 ```ts title="aggregate-filter.ts"
 import { Effect } from "effect"
-import * as CH from "@maple-dev/effect-orm"
-import * as T from "@maple-dev/effect-orm/types"
+import * as CH from "@maple-dev/effect-orm/clickhouse"
 import { Events } from "./schema"
 
 const query = CH.from(Events)
 	.select(($) => ({ name: $.Name, count: CH.count() }))
 	.where(($) => [$.OrgId.eq(CH.param.string("orgId"))])
 	.groupBy("name")
-	.having(() => [CH.dynamicColumn("count", T.uint64).gte(CH.param.int("minimumCount"))])
+	.having(() => [CH.dynamicColumn("count", CH.uint64).gte(CH.param.int("minimumCount"))])
 	.orderBy(["count", "desc"], ["name", "asc"])
 	.limit(20)
 
@@ -124,7 +123,7 @@ makes `name` unique in this result, so it breaks ties between equal counts.
 
 ```ts title="pagination.ts"
 import { Effect } from "effect"
-import * as CH from "@maple-dev/effect-orm"
+import * as CH from "@maple-dev/effect-orm/clickhouse"
 import { Events } from "./schema"
 
 const pageSize = 25
@@ -153,10 +152,13 @@ JSON parsing could lose precision. This also works for IDs produced by numeric h
 
 ```ts title="large-ids.ts"
 import { Effect } from "effect"
-import * as CH from "@maple-dev/effect-orm"
-import * as T from "@maple-dev/effect-orm/types"
+import * as CH from "@maple-dev/effect-orm/clickhouse"
 
-const Records = CH.table("records", { Id: T.uint64, Name: T.string })
+const Records = CH.table("records", {
+	columns: { Id: CH.uint64, Name: CH.string },
+	engine: CH.engine.mergeTree(),
+	orderBy: ["Id"],
+})
 const query = CH.from(Records)
 	.select(($) => ({ id: CH.toString($.Id), name: $.Name }))
 	.limit(1)

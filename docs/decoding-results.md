@@ -19,7 +19,7 @@ Provide the `ClickhouseClient` layer at the application boundary.
 
 ## The row schema is derived from the SELECT
 
-Column types _are_ Effect schemas — `T.uint64` is "a 64-bit integer as ClickHouse actually sends
+Column types _are_ Effect schemas — `CH.uint64` is "a 64-bit integer as ClickHouse actually sends
 it", not a phantom tag. So a query built from typed pieces already knows how its rows decode, and
 `compile` folds those schemas into one:
 
@@ -40,7 +40,7 @@ await Effect.runPromise(compiled.decodeRows([{ name: "checkout", calls: "42" }])
 Note `calls`. ClickHouse's `FORMAT JSON` quotes 64-bit integers, a client that sets
 `output_format_json_quote_64bit_integers=0` gets them bare, and a gateway
 that refuses `output_format_json_quote_64bit_integers=0` quotes them whatever you asked for.
-`T.uint64` accepts both wire representations and decodes them to JavaScript numbers.
+`CH.uint64` accepts both wire representations and decodes them to JavaScript numbers.
 
 ## When there is nothing to derive from
 
@@ -62,8 +62,8 @@ await Effect.runPromise(compiled.decodeRows([{ name: 42, odd: 1 }]))
 
 Inventing a permissive schema for that one field would hand back something that _looks_ validated
 and is not, so the query keeps its honest answer instead. `untypedColumns` names what to fix;
-close the gap by typing the escape hatch — `CH.rawExpr("anyLast(Whatever)", T.string)`,
-`CH.defineFn("myFn", T.uint64)` — or by declaring the whole schema yourself.
+close the gap by typing the escape hatch — `CH.rawExpr("anyLast(Whatever)", CH.string)`,
+`CH.defineFn("myFn", CH.uint64)` — or by declaring the whole schema yourself.
 
 ## Going back to the wire
 
@@ -170,6 +170,6 @@ Only relevant when you declare one by hand; the column types already handle thes
 - **64-bit integers** — accept both wire shapes. A `UInt64` above `2^53` cannot survive as a
   JavaScript number at all; have such columns emitted as strings (`toString(...)`) in the SELECT
   and use a string schema for the projected field.
-- **`DateTime` columns** — `T.dateTime` parses them as UTC; `T.dateTimeString` leaves them as
+- **`DateTime` columns** — `CH.dateTime` parses them as UTC; `CH.dateTimeString` leaves them as
   sent. See [Tables and column types](./tables-and-types.md#column-types).
 - **`leftJoin` columns** — nullable on the SQL side, so pair them with `Schema.NullOr`.

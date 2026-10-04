@@ -24,7 +24,7 @@ export type FunctionSet = "clickhouse" | "postgres"
 export type BuiltinKind = "scalar" | "aggregate" | "window"
 
 const setLabel: Record<FunctionSet, string> = {
-	clickhouse: "a ClickHouse function (from the root entry)",
+	clickhouse: "a ClickHouse function (from @maple-dev/effect-orm/clickhouse)",
 	postgres: "a Postgres function (from @maple-dev/effect-orm/postgres)",
 }
 

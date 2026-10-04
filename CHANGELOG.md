@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+- **Breaking:** one entry per database, drizzle style. `@maple-dev/effect-orm/clickhouse` and
+  `@maple-dev/effect-orm/postgres` each export the whole query builder plus that database's
+  column types, functions, table definitions and `compile`; one import covers a dialect.
+  - The root entry (`@maple-dev/effect-orm`) and `/types` are removed. Import from
+    `/clickhouse` instead (`CH.string` rather than `T.string`); Postgres code imports only
+    `/postgres` (`PG.from`, `PG.param`, `PG.insertInto`).
+  - `table` is the only way to declare a table, and it carries its DDL: `CH.table(name,
+    { columns, engine, orderBy, ... })` and `PG.table(name, { columns, primaryKey, ... })`.
+    The plain `table(name, columns, { tenantColumn, defaults, computed })` is removed; which
+    columns an insert may omit or may not write now comes from `column(type, options)`.
+  - `S.defineTable`, `S.column`, `S.engine`, `S.index`, `S.materializedView` and
+    `S.ttlAfterDays` move to `/clickhouse` (`CH.table`, `CH.column`, ...); `S.pg.*` moves to
+    `/postgres` (`PG.table`, `PG.column`, `PG.index`, `PG.uniqueIndex`, `PG.foreignKey`).
+    `/schema` keeps the tooling: rendering, snapshots and the diff.
+  - Add `external: true` to `table` for what the schema does not own: system tables, table
+    functions, subqueries, views, tables another tool migrates. It queries like any table,
+    carries no DDL (so `generate` skips it), and its name is written verbatim as the FROM target.
+- Postgres `GENERATED ALWAYS AS` columns are not modeled yet; the removed `computed` option was
+  the only way to mark one read-only.
+
 - **Breaking:** branded column types compare strictly. A comparison, an insert or update value,
   and an `INSERT ... SELECT` into a column that decodes to a branded type (`Brand<...>`) take
   that brand: a value of it, a column of the same brand, or a param declared with the type

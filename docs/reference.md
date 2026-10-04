@@ -1,64 +1,45 @@
 # API reference
 
-Everything on this page is exported from the root entry point
-(`@maple-dev/effect-orm`) unless marked otherwise.
+The package has one entry per database, each self-contained:
+
+```ts
+import * as CH from "@maple-dev/effect-orm/clickhouse"
+import * as PG from "@maple-dev/effect-orm/postgres"
+```
+
+Both carry the whole [query builder](#query-builder-both-entries). Each adds its own column
+types, functions, table definitions and a `compile` that defaults to its dialect:
+[`/clickhouse`](#clickhouse) and [`/postgres`](#postgres). Everything else is on a
+[subpath](#other-subpaths) for a narrower job.
 
 ## Naming conventions
 
 Some ClickHouse functions collide with JavaScript reserved words or globals. The source defines
-those with a trailing underscore, and **the root barrel drops it**: `min_`, `max_`, `any_`,
+those with a trailing underscore, and **`/clickhouse` drops it**: `min_`, `max_`, `any_`,
 `toString_`, `length_`, `left_`, `extract_`, `least_`, `greatest_`, `position_`, `lower_`,
-`round_`, `path_` and `domain_` are all exported from the root under their bare names.
+`round_`, `path_` and `domain_` are all exported from `/clickhouse` under their bare names.
 
 One exception, because it cannot be anything else:
 
-| Root barrel name | Also on `/expr` as | Note                             |
-| ---------------- | ------------------ | -------------------------------- |
-| `if_`            | `if_`              | `if` is a reserved word          |
-| `in_` / `notIn`  | —                  | `Expr` methods; `in` is reserved |
+| `/clickhouse` name | Also on `/expr` as | Note                             |
+| ------------------ | ------------------ | -------------------------------- |
+| `if_`              | `if_`              | `if` is a reserved word          |
+| `in_` / `notIn`    | —                  | `Expr` methods; `in` is reserved |
 
 Importing the kitchen-sink namespace
 (`import * as CH from "@maple-dev/effect-orm/expr"`) gives you the raw underscored names
 uniformly, which some codebases prefer for exactly this reason.
 
-## What's only on a subpath
-
-The root barrel is curated. These are exported by the package but not from it:
-
-| Symbol                                                                                           | Subpath           |
-| ------------------------------------------------------------------------------------------------ | ----------------- |
-| `toFragment` — value → `SqlFragment`, for hand-rolled function wrappers                          | `/expr`           |
-| `raw`, `str`, `ident`, `int`, `join`, `as_`, `lazy`, `when`, `compile`, `escapeClickHouseString` | `/sql`            |
-| `SqlQuery`, `compileQuery`                                                                       | `/sql`            |
-| `ClickHouseStatement`, `parseStatement`, `renderStatement`, `withSettings`, `withFormat`         | `/sql`            |
-| `ClickHouseStatementFromString`, `splitTerminalClauses`, `maskLiteralsAndComments`               | `/sql`            |
-| `defineSuite`, `query`, `caseFromCompiled`, `runSuite`, `compareRuns`, `compareBudgets`          | `/benchmark`      |
-| `Suite`, `RunOutput`, `BenchmarkError` and benchmark contracts                                   | `/benchmark`      |
-| `makeHttpClient`, `makeHttpTransport`, `httpConfigFromEnv`                                       | `/benchmark/http` |
-| `runCli`                                                                                         | `/benchmark/cli`  |
-| `postgresDialect`, Postgres column types and functions, Postgres-default `compile`              | `/postgres`       |
-| `Database`, `run`, `sql`, `query`, `execute`, `transaction`, `requireTransaction`, `retryContention`, `Transaction` | `/database` |
-| `DatabaseError`, `TransactionCommitFailed`, `TransactionRollbackFailed` and the other transaction errors | `/database` |
-
-Every column-type constructor and every expression helper is on the root as well as on its
-subpath. See [Running a query](./running-queries.md) for what the `/sql` statement helpers are
-for. See [Benchmarking](./benchmarking.md) for the complete benchmark API, command
-workflow, result verification, and JSON protocol.
-
-Note `/sql` exports a `compile` (fragment → string) distinct from the root `compile`
-(query → `CompiledQuery`), and a `when` distinct from the root `when` (optional conditions).
-
 ---
 
-## Entry points
+## Query builder (both entries)
+
+Everything in this section is exported, identically, from both `/clickhouse` and `/postgres`.
 
 ### Query construction
 
 | Export      | Signature                                 |
 | ----------- | ----------------------------------------- |
-| `table`     | `(name, columns, options?) => Table`      |
-| `custom`    | `(sql, schema, literalSchema?) => CHType` |
-| `brand`     | `(type, schema) => CHType`: the type narrowed by `schema` (a branded id, a literal union); see [Branded columns](./tables-and-types.md#branded-columns) |
 | `from`      | `(table, alias?) => CHQuery`              |
 | `fromQuery` | `(query, alias) => CHQuery`               |
 | `fromUnion` | `(union, alias) => CHQuery`               |
@@ -66,6 +47,9 @@ Note `/sql` exports a `compile` (fragment → string) distinct from the root `co
 | `update`     | `(table) => CHUpdateStart`, then `CHUpdate`: `.set(record \| fn)`, `.where(fn)` or `.allRows()`, `.returning(...)`, `.settings(record)`. See [Updating and deleting](./updates-and-deletes.md) |
 | `deleteFrom` | `(table) => CHDelete`: `.where(fn)` or `.allRows()`, `.returning(...)`, `.settings(record)` |
 | `insertInto` | `(table) => CHInsertStart`, then `CHInsert`; `.values(row \| rows)` or `.select(query)` sets its rows, `.settings(record)` ClickHouse `SETTINGS`, `.returning(...)` the RETURNING list, `.onConflictDoNothing(options?)` / `.onConflictDoUpdate(options)` the ON CONFLICT clause (Postgres). See [Inserting rows](./inserts.md) |
+
+Tables come from the dialect's `table`: [`CH.table`](#tables-and-ddl) or
+[`PG.table`](#tables-and-ddl-1).
 
 ### `CHQuery` methods
 
@@ -90,6 +74,9 @@ Note `/sql` exports a `compile` (fragment → string) distinct from the root `co
 
 ### Compilation
 
+Each entry exports `compile`, `compileUnsafe`, `compileUnion` and `compileUnionUnsafe`, defaulting
+to its own dialect; `options.dialect` overrides it.
+
 | Export               | Signature                                                                            |
 | -------------------- | ------------------------------------------------------------------------------------ |
 | `compile`            | `(query, params?, options?) => Effect<CompiledQuery<Output>, QueryBuilderError>`; also `(insert, params?, options?)`, whose options (`InsertCompileOptions`) are only `dialect` |
@@ -97,7 +84,6 @@ Note `/sql` exports a `compile` (fragment → string) distinct from the root `co
 | `compileUnion`       | `(union, params, options?) => Effect<CompiledQuery<Output>, QueryBuilderError>`      |
 | `compileUnionUnsafe` | The same, throwing instead                                                           |
 | `rawCompiledQuery`   | `({ sql, tenantScope, reason, justification, rowSchema?, route?, dialect?, kind? }) => CompiledQuery` |
-| `clickhouseDialect`  | The default `Dialect`: params written into the SQL as ClickHouse literals            |
 
 `Dialect`, `DialectClauses` and `ParamStyle` describe a database: how identifiers and literals
 are written, how params reach the server, and which clauses exist. Pass one as
@@ -112,9 +98,7 @@ which transactions the database supports; see [Database](./database.md). See [Pa
 type. Each checks the value it is handed at compile
 time; see [Params and compilation](./params-and-compilation.md#what-each-kind-accepts).
 
----
-
-## Expressions
+### Expressions
 
 | Export                    | Purpose                                                    |
 | ------------------------- | ---------------------------------------------------------- |
@@ -143,7 +127,7 @@ as `number | null` — ClickHouse sends `inf`/`nan` as JSON `null` — except by
 magnitude ≥ 1 (`Quotient<L, R>`), which keeps the dividend's nullability; use
 `ifNull(ifNotFinite(expr, 0), lit(0))` for a guaranteed number otherwise.
 
-### Spliced sub-SELECTs
+#### Spliced sub-SELECTs
 
 For SQL the builder has no syntax for — an inner query's text inside an aggregate or a tuple
 comparison. The inner query is compiled by the **outer** `compile`, so its params resolve from the
@@ -163,7 +147,7 @@ parentheses, which is the plain "this value is a sub-SELECT" case.
 
 `ColumnRef` adds `.get(key)` for `Map` columns; the result decodes as the map's value type.
 
-## Extensibility
+### Extensibility
 
 | Export                                 | Purpose                                            |
 | -------------------------------------- | -------------------------------------------------- |
@@ -187,11 +171,146 @@ parentheses, which is the plain "this value is a sub-SELECT" case.
 | `withoutNull(schema)`                  | A codec minus its `null` arm, or `undefined`       |
 | `paramPlaceholder(kind, name)`         | The `__PARAM_…__` text, for handwritten fragments  |
 
+### Types
+
+**Column plumbing** — `CHType` (every column type, on either dialect, is one), `InferTS` (the
+decoded type of a column), `InferEncoded` (its wire type), `ColumnDefs`, `NullableColumnDefs`,
+`OutputToColumnDefs`.
+
+**Inference** — `InferOutput`, `InferQueryOutput`, `InferUnionOutput`, `SelectRowOf`,
+`InsertRow`, `InsertRowOf`, `UpdateSet`, `UpdateSetOf`.
+
+**Everything else** — `Table` (what `from` and the write builders accept; every `table` value is
+one), `Expr`, `ColumnRef`, `Condition`, `Comparable` (what a value of a type may be compared
+against), `MapValueOf`, `Subquery`, `ParamMarker`, `ParamKind`, `CHQuery`, `CHUnionQuery`,
+`CHInsert`, `CHInsertStart`, `CHUpdate`, `CHUpdateStart`, `CHDelete`, `CHWrite`, `InsertValue`,
+`InsertSelectMisfits`, `InsertSelectMissing`, `InsertSettingValue`, `ConflictTarget`,
+`ConflictSet`, `OnConflictDoNothing`, `OnConflictDoUpdate`, `ColumnAccessor`,
+`JoinedColumnAccessor`, `JoinOnCallback`, `LockOptions`, `CompiledQuery`, `CompiledQueryInput`,
+`CompiledQueryRowSchema`, `RowSchemaMismatch`, `TenantScope`, `Dialect`, `DialectClauses`,
+`DialectTransactions`, `IsolationLevel`, `TransactionSettings`, `ParamStyle`, `FnResult`.
+
+### Errors
+
+These errors are Effect `Schema.TaggedError` classes. Expected failures can be caught by
+their full namespaced tag; `QueryBuilderDefect` remains a defect rather than a typed failure.
+
+#### `QueryBuilderError`
+
+Tag `"@maple-dev/effect-orm/QueryBuilderError"`. Raised while compiling, and surfaced in
+`compile`'s error channel (thrown by `compileUnsafe`).
+
+| `code`             | Cause                                                                    |
+| ------------------ | ------------------------------------------------------------------------ |
+| `UnresolvedParam`  | A param the params bag has no value for                                  |
+| `InvalidLiteral`   | A param value, or a comparison operand, the column's codec rejects       |
+| `InvalidArguments` | Arguments a function cannot use — an empty condition list, a bad pattern, an insert with no rows or an unknown column, more bound values than the dialect allows |
+
+#### `QueryBuilderDefect`
+
+Tag `"@maple-dev/effect-orm/QueryBuilderDefect"`. A DSL misuse no runtime value can cause
+— a query with no `select()`, an `orderBy` entry that is not a tuple, a bad param name, a
+comparison called on a param marker. Always
+a defect: `compile` maps only `QueryBuilderError` into the error channel. See
+[Failures and defects](./params-and-compilation.md#failures-and-defects).
+
+#### `CompiledQueryEncodeError`
+
+Tag `"@maple-dev/effect-orm/CompiledQueryEncodeError"`. Fails the `encodeRows` Effect
+when a decoded row cannot be written back to its wire shape. Fields: `message`, `rowIndex`,
+`cause`.
+
+#### `CompiledQueryDecodeError`
+
+Tag `"@maple-dev/effect-orm/CompiledQueryDecodeError"`. Fails the `decodeRows` /
+`decodeFirstRow` Effect. Fields: `message`, `rowIndex`, `cause`.
+
+#### `SchemaDefinitionDefect`
+
+Tag `"@maple-dev/effect-orm/SchemaDefinitionDefect"`. Thrown by `table` (either dialect) and
+`CH.materializedView` for a definition that cannot render: a name that is not a plain
+identifier, a MergeTree-family engine with no `orderBy`, a view reading from a union.
+
 ---
 
-## ClickHouse functions
+## `/clickhouse`
 
-### Aggregate
+`import * as CH from "@maple-dev/effect-orm/clickhouse"`: the query builder above, plus the
+following.
+
+### Tables and DDL
+
+`table` is the only way to declare a table. A managed table carries the DDL
+`effect-orm generate` diffs; see [Schema and migrations](./migrations.md).
+
+```ts
+const Events = CH.table("events", {
+	columns: {
+		OrgId: CH.string,
+		Name: CH.string,
+		Timestamp: CH.dateTime,
+		DurationMs: CH.uint64,
+		Status: CH.column(CH.uint16, { default: 200 }),
+	},
+	engine: CH.engine.mergeTree(),
+	orderBy: ["OrgId", "Timestamp"],
+	tenantColumn: "OrgId",
+})
+```
+
+| Export             | Signature                                                                                |
+| ------------------ | ---------------------------------------------------------------------------------------- |
+| `table`            | `(name, TableDefinition) => SchemaTable`, or `(name, ExternalTableDefinition) => Table`  |
+| `column`           | `(type, ColumnOptions) => ColumnSpec`: a column with options; a bare type works where none are needed |
+| `engine`           | `mergeTree()`, `replacingMergeTree({ version?, isDeleted? })`, `summingMergeTree({ columns? })`, `aggregatingMergeTree()`, `collapsingMergeTree(sign)`, `versionedCollapsingMergeTree(sign, version)`, `null()`, `memory()` |
+| `index`            | `(name, expr, type, granularity = 1) => IndexSpec`: a data-skipping index                |
+| `ttlAfterDays`     | `(expr, days) => DdlExpr`: `<expr> + toIntervalDay(days)`, the usual row TTL             |
+| `materializedView` | `(name, { to, as }) => MaterializedView`: `as` is a DSL query; its output is checked against `to`'s columns (`MisfitColumns`). Never `POPULATE` |
+
+**`TableDefinition`** — `columns` (required), `engine` (required), `orderBy` (required for the
+MergeTree family; `[]` for `ORDER BY tuple()`), `partitionBy`, `primaryKey`, `ttl`, `settings`,
+`indexes`, `comment`, `tenantColumn`. Key and expression options are `DdlKey` / `DdlExpr`: SQL
+text, or a callback building it from the column accessor.
+
+**`ExternalTableDefinition`** — `{ external: true, columns, tenantColumn? }`. A table the schema
+does not own: a system table, a table function, a subquery, a CTE name, a table another tool
+migrates. No DDL, so `generate` never sees it; the name is written verbatim as the FROM target;
+`columns` may be empty.
+
+```ts
+const One = CH.table("system.one", { external: true, columns: {} })
+const Numbers = CH.table("numbers(10)", { external: true, columns: { number: CH.uint64 } })
+```
+
+**`ColumnOptions`** — at most one of `default` (a literal, encoded through the column's type),
+`defaultExpr`, `materialized`, `alias`; plus `codec` and `comment`. They type inserts: a column
+with `default` or `defaultExpr` may be left out (`DefaultedColumnsOf`), a `materialized` or
+`alias` column may not be written (`ComputedColumnsOf`).
+
+**Types** — `ColumnInput` (a type or a `ColumnSpec`), `ColumnsOf` (the query-side column types
+of a `columns` record), `TableDdl`, `SchemaTable`, `MaterializedView`, `IndexSpec`. A definition
+that cannot render throws `SchemaDefinitionDefect` while the module loads.
+
+### Column types
+
+**Constructors** — `string`, `bool`, `uint8`, `uint16`, `uint32`, `uint64`, `int32`,
+`int64`, `float64`, `dateTime`, `dateTime64`, `dateTimeString`, `dateTime64String`, `map`,
+`array`, `nullable`, `aggregateState(fn, ...args)`, `custom(sql, schema, literalSchema?)`,
+`brand(type, schema)` (the type narrowed by `schema`: a branded id, a literal union; see
+[Branded columns](./tables-and-types.md#branded-columns)), and `untyped(sql)` for a wire value
+passed through unvalidated. See [Tables and column types](./tables-and-types.md).
+
+**Type descriptors** — `CHString`, `CHBool`, `CHUInt8`, `CHUInt16`, `CHUInt32`,
+`CHUInt64`, `CHInt32`, `CHInt64`, `CHFloat64`, `CHDateTime`, `CHDateTime64`, `CHDateTimeString`,
+`CHDateTime64String`, `CHMap`, `CHArray`, `CHNullable`, and `CHStringLike` (any `String` column,
+branded or not, for a helper that accepts either).
+
+`CHNumber` is the codec the 64-bit integer types decode with: a JSON number, or the same value
+quoted.
+
+### Functions
+
+#### Aggregate
 
 `count()`, `countIf(cond)`, `avg(e)`, `sum(e)`, `min(e)`, `max(e)`, `any(e)`, `uniq(e)`,
 `sumIf(e, cond)`, `avgIf(e, cond)`, `minIf(e, cond)`, `maxIf(e, cond)`, `anyIf(e, cond)`,
@@ -202,7 +321,7 @@ _(both curried; `WindowFunnelMode` is the mode union)_.
 
 `min`/`max` return `Expr<NonNullable<T>>`; `groupUniqArray` returns `Expr<ReadonlyArray<T>>`.
 
-### String
+#### String
 
 `toString(e)`, `length(e)`, `lower(e)`, `hex(e)`, `match(e, pattern)`, `matchCond(e, pattern)`
 → `Condition`, `domain(url)`, `path(url)`, `cutQueryString(url)`, `position(haystack, needle)`,
@@ -212,41 +331,41 @@ _(both curried; `WindowFunnelMode` is the mode union)_.
 
 `hasToken` and `hasAllTokens` return `Condition`.
 
-### Numeric
+#### Numeric
 
 `toFloat64(e)`, `toFloat64OrZero(e)`, `toUInt16OrZero(e)`, `toUInt64(e)`, `toInt64(e)`,
 `intDiv(a, b)`, `round(e, decimals?)`, `least(...exprs)`, `greatest(...exprs)`,
 `cityHash64(...exprs)`.
 
-### Date/time
+#### Date/time
 
 `toStartOfInterval(col, seconds)`, `toStartOfHour(col)`, `toUnixTimestamp(col)`,
 `toUnixTimestamp64Nano(col)`, `intervalSub(col, seconds)`, `intervalAdd(col, seconds)`,
 `formatDateTime(col, format)`, `toDateTime(col)`, `toStartOfMinute(col)`, `toHour(col)`.
 
-### Conditional
+#### Conditional
 
 `if_(cond, then, else)`, `multiIf([[cond, value], …], fallback)`, `coalesce(...exprs)`,
-`nullIf(expr, value)`, `ifNotFinite(expr, fallback)` (`expr` unless it is `nan`/`inf` — the SQL-side
-guard for division; preserves SQL NULL). `nullIf` returns `Expr<T | null>`.
-`avg`, `avgIf`, and `quantile` return `Expr<number | null>` for empty input.
+`ifNull(expr, fallback)`, `nullIf(expr, value)`, `ifNotFinite(expr, fallback)` (`expr` unless it
+is `nan`/`inf` — the SQL-side guard for division; preserves SQL NULL). `nullIf` returns
+`Expr<T | null>`. `avg`, `avgIf`, and `quantile` return `Expr<number | null>` for empty input.
 
-### Array
+#### Array
 
 `arrayOf(...exprs)`, `arrayStringConcat(arr, sep)`, `arrayFilter(fn, arr)`, `arrayJoin(arr)`,
 `arraySort(arr)`, `arrayReverseSort(arr)`, `arrayDistinct(arr)`, `arrayPushFront(arr, value)`,
 `arrayElement(arr, index)`, `has(arr, value)` → `Condition`.
 
-### Map
+#### Map
 
 `mapContains(map, key)` → `Condition`, `mapGet(map, key)`, `mapKeys(map)`, `mapValues(map)`,
 `mapLiteral(...[key, expr])`. Prefer `$.Column.get(key)` for a declared `Map` column.
 
-### JSON
+#### JSON
 
 `toJSONString(e)`.
 
-### Window
+#### Window
 
 `over(expr, spec)`, `windowSpec({ partitionBy?, orderBy?, frame? })`,
 `rowsBetween(start, end)`, `lagInFrame(expr, offset, defaultValue)` _(all three arguments
@@ -267,62 +386,110 @@ CH.over(
 Types: `WindowSpec`, `CompiledWindowSpec`, `WindowFrameBound`, `WindowRowsFrame`,
 `WindowOrderDirection`.
 
+### Dialect
+
+`compile` and the other compile functions default to `clickhouseDialect`: params written into the
+SQL as ClickHouse literals.
+
 ---
 
-## Types
+## `/postgres`
 
-**Column-type constructors** — `string`, `bool`, `uint8`, `uint16`, `uint32`, `uint64`, `int32`,
-`int64`, `float64`, `dateTime`, `dateTime64`, `dateTimeString`, `dateTime64String`, `map`,
-`array`, `nullable`, `aggregateState(fn, ...args)`, `custom(sql, schema, literalSchema?)`, and
-`untyped(sql)` for a wire value passed through unvalidated. See
-[Tables and column types](./tables-and-types.md).
+`import * as PG from "@maple-dev/effect-orm/postgres"`: the query builder above, plus the
+following. See [Postgres](./postgres.md).
 
-**Type descriptors** — `CHType`, `CHString`, `CHBool`, `CHUInt8`, `CHUInt16`, `CHUInt32`,
-`CHUInt64`, `CHInt32`, `CHInt64`, `CHFloat64`, `CHDateTime`, `CHDateTime64`, `CHDateTimeString`,
-`CHDateTime64String`, `CHMap`, `CHArray`, `CHNullable`.
+### Tables and DDL
 
-**Inference** — `InferTS` (the decoded type of a column), `InferEncoded` (its wire type),
-`InferOutput`, `InferQueryOutput`, `InferUnionOutput`, `OutputToColumnDefs`,
-`NullableColumnDefs`, `ColumnDefs`.
+```ts
+const Users = PG.table("users", {
+	columns: {
+		id: PG.column(PG.int8, { identity: "always" }),
+		orgId: PG.text,
+		email: PG.text,
+		createdAt: PG.column(PG.timestamptz, { defaultExpr: "now()" }),
+	},
+	primaryKey: ["id"],
+	indexes: [PG.uniqueIndex("users_org_email_idx", ["orgId", "email"])],
+	tenantColumn: "orgId",
+})
+```
 
-**Everything else** — `Table`, `TableOptions`, `Expr`, `ColumnRef`, `Condition`, `Comparable`
-(what a value of a type may be compared against), `MapValueOf`, `Subquery`, `ParamMarker`,
-`ParamKind`, `CHQuery`, `CHUnionQuery`, `CHInsert`, `CHInsertStart`, `CHUpdate`, `CHUpdateStart`, `CHDelete`, `CHWrite`, `UpdateSet`, `UpdateSetOf`, `InsertRow`, `InsertRowOf`, `SelectRowOf`, `InsertValue`, `InsertSelectMisfits`, `InsertSelectMissing`, `InsertSettingValue`, `ConflictTarget`, `ConflictSet`, `OnConflictDoNothing`, `OnConflictDoUpdate`, `ColumnAccessor`, `JoinedColumnAccessor`,
-`JoinOnCallback`, `CompiledQuery`, `CompiledQueryInput`, `CompiledQueryRowSchema`, `RowSchemaMismatch`, `TenantScope`, `Dialect`, `DialectClauses`, `DialectTransactions`, `IsolationLevel`, `TransactionSettings`, `ParamStyle`, `FnResult`,
-`WindowFunnelMode`, `WindowSpec`, `WindowRowsFrame`, `WindowFrameBound`,
-`WindowOrderDirection`, `CompiledWindowSpec`.
+| Export                  | Signature                                                                          |
+| ----------------------- | ---------------------------------------------------------------------------------- |
+| `table`                 | `(name, TableDefinition) => PgSchemaTable`, or `(name, ExternalTableDefinition) => Table` |
+| `column`                | `(type, ColumnOptions) => ColumnSpec`                                              |
+| `index`                 | `(name, on, IndexOptions?) => IndexSpec`: columns, or a callback building expressions |
+| `uniqueIndex`           | The same, `UNIQUE`; with `where`, a partial unique index                           |
+| `foreignKey`            | `({ columns, references, foreignColumns, onDelete?, onUpdate?, name? }) => ForeignKeySpec`; `references` is a `Table` (its columns are checked) or a name |
+| `defaultForeignKeyName` | `(table, columns, foreignTable, foreignColumns) => string`: the name drizzle-kit gives, shortened past 63 characters as drizzle-kit does |
 
-## Errors
+**`TableDefinition`** — `columns` (required), `primaryKey` (column names, or
+`{ columns, name? }`), `indexes`, `foreignKeys`, `tenantColumn`.
 
-These errors are Effect `Schema.TaggedError` classes. Expected failures can be caught by
-their full namespaced tag; `QueryBuilderDefect` remains a defect rather than a typed failure.
+**`ExternalTableDefinition`** — `{ external: true, columns, tenantColumn? }`, as on
+`/clickhouse`: a view, a catalog table, one another tool migrates. No DDL.
 
-### `QueryBuilderError`
+**`ColumnOptions`** — one of `default`, `defaultExpr`, `identity` (`"always"` or
+`"by default"`); any of them lets an insert leave the column out (`DefaultedColumnsOf`).
 
-Tag `"@maple-dev/effect-orm/QueryBuilderError"`. Raised while compiling, and surfaced in
-`compile`'s error channel (thrown by `compileUnsafe`).
+**`IndexOptions`** — `where` (a `DdlPredicate`: SQL text or a callback returning a condition),
+`using` (the access method; default `btree`).
 
-| `code`             | Cause                                                                    |
-| ------------------ | ------------------------------------------------------------------------ |
-| `UnresolvedParam`  | A param the params bag has no value for                                  |
-| `InvalidLiteral`   | A param value, or a comparison operand, the column's codec rejects       |
-| `InvalidArguments` | Arguments a function cannot use — an empty condition list, a bad pattern, an insert with no rows or an unknown column, more bound values than the dialect allows |
+**Types** — `ColumnInput`, `ColumnSpec`, `ColumnsOf`, `IndexSpec`, `ForeignKeySpec`,
+`ReferentialAction` (drizzle's lowercase spelling or the catalog's), `TableDdl`, `PgSchemaTable`,
+`DdlExpr`, `DdlKey`. A definition that cannot render throws `SchemaDefinitionDefect`.
 
-### `QueryBuilderDefect`
+### Column types
 
-Tag `"@maple-dev/effect-orm/QueryBuilderDefect"`. A DSL misuse no runtime value can cause
-— a query with no `select()`, an `orderBy` entry that is not a tuple, a bad param name, a
-comparison called on a param marker. Always
-a defect: `compile` maps only `QueryBuilderError` into the error channel. See
-[Failures and defects](./params-and-compilation.md#failures-and-defects).
+`text`, `uuid`, `bool`, `int2`, `int4`, `int8`, `float4`, `float8`, `numeric`, `timestamptz`,
+`jsonb(schema?)`, `array(type)`, `nullable(type)`, `custom(sql, schema, literalSchema?)`,
+`brand(type, schema)`. See [Postgres column types](./postgres.md#column-types).
 
-### `CompiledQueryEncodeError`
+Types: `PgType` (a Postgres column type; a `CHType`), `PgArray`, `PgNullable`. Codecs:
+`PgNumber` (a number, numeric string or `bigint`), `PgTimestampLiteral` (an instant written as
+ISO-8601), `timestampLiteral(format)` (the same with another format), and `pgTimestampToIso`,
+which normalizes Postgres timestamp text to ISO-8601.
 
-Tag `"@maple-dev/effect-orm/CompiledQueryEncodeError"`. Fails the `encodeRows` Effect
-when a decoded row cannot be written back to its wire shape. Fields: `message`, `rowIndex`,
-`cause`.
+### Functions
 
-### `CompiledQueryDecodeError`
+`count()`, `countDistinct(x)`, `countIf(c)`, `sum(x)`, `sumIf(x, c)`, `avg(x)`, `min(x)`,
+`max(x)`, `percentileCont(f, x)`, `arrayAgg(x)`, `dateTrunc(unit, ts)` (`DateTruncUnit` is the
+unit union), `dateBin(seconds, ts)`, `now()`, `lower(x)`, `upper(x)`, `length(x)`,
+`coalesce(x, fallback)`, `nullIf(x, value)`, `jsonText(x, key)`. See
+[Postgres functions](./postgres.md#functions) for the SQL each writes.
 
-Tag `"@maple-dev/effect-orm/CompiledQueryDecodeError"`. Fails the `decodeRows` /
-`decodeFirstRow` Effect. Fields: `message`, `rowIndex`, `cause`.
+### Dialect
+
+`compile` and the other compile functions default to `postgresDialect`: numbered `$n`
+placeholders, double-quoted identifiers.
+
+---
+
+## Other subpaths
+
+| Symbol                                                                                           | Subpath           |
+| ------------------------------------------------------------------------------------------------ | ----------------- |
+| The ClickHouse functions under their raw underscored names, the expression helpers and function factories, and `toFragment` — value → `SqlFragment`, for hand-rolled function wrappers | `/expr`           |
+| `raw`, `str`, `ident`, `int`, `join`, `as_`, `lazy`, `when`, `compile`, `escapeClickHouseString` | `/sql`            |
+| `SqlQuery`, `compileQuery`                                                                       | `/sql`            |
+| `ClickHouseStatement`, `parseStatement`, `renderStatement`, `withSettings`, `withFormat`         | `/sql`            |
+| `ClickHouseStatementFromString`, `splitTerminalClauses`, `maskLiteralsAndComments`               | `/sql`            |
+| Schema tooling: `isSchemaObject`, `makeSnapshot`, `renderSchema`, `diffSchemas`, `diffPgSchemas`, `fromDrizzleSnapshot`, snapshot and entity schemas | `/schema`         |
+| `run`, `status`, `verify`, `baseline`, `MigrationDriver` and the migrate errors                  | `/migrate`        |
+| `Database`, `run`, `sql`, `query`, `execute`, `transaction`, `requireTransaction`, `retryContention`, `Transaction` | `/database` |
+| `DatabaseError`, `TransactionCommitFailed`, `TransactionRollbackFailed` and the other transaction errors | `/database` |
+| `defineConfig`, `generate`, `check`, `loadSchema`, `readMigrations`, `analyze`, `KitError`       | `/kit`            |
+| `defineSuite`, `query`, `caseFromCompiled`, `runSuite`, `compareRuns`, `compareBudgets`          | `/benchmark`      |
+| `Suite`, `RunOutput`, `BenchmarkError` and benchmark contracts                                   | `/benchmark`      |
+| `makeHttpClient`, `makeHttpTransport`, `httpConfigFromEnv`                                       | `/benchmark/http` |
+| `runCli`                                                                                         | `/benchmark/cli`  |
+
+`/schema` reads tables; it does not declare them. Declare tables with `table` from `/clickhouse`
+or `/postgres`. See [Schema and migrations](./migrations.md), [Database](./database.md),
+[Running a query](./running-queries.md) for what the `/sql` statement helpers are for, and
+[Benchmarking](./benchmarking.md) for the complete benchmark API, command workflow, result
+verification, and JSON protocol.
+
+Note `/sql` exports a `compile` (fragment → string) distinct from the dialect entries' `compile`
+(query → `CompiledQuery`), and a `when` distinct from the query builder's `when` (optional
+conditions).

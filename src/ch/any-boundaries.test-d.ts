@@ -1,6 +1,6 @@
 import { Schema, type DateTime } from "effect"
 import { expectTypeOf } from "expect-type"
-import * as CH from "../index"
+import * as CH from "./index"
 
 const values = CH.arrayFilter("x -> x > 0", CH.arrayOf(CH.lit(1)))
 expectTypeOf(values).toEqualTypeOf<CH.Expr<ReadonlyArray<number>>>()

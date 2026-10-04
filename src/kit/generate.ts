@@ -30,7 +30,7 @@ import { analyze, type GraphProblem } from "./graph"
 export interface KitConfig {
 	/** The database this folder migrates. Default `clickhouse`. */
 	readonly dialect?: SchemaDialect
-	/** Modules whose exports include `defineTable` / `materializedView` (or `S.pg.table`) values. */
+	/** Modules whose exports include `table` / `materializedView` values from `/clickhouse` or `/postgres`. */
 	readonly schema: string | ReadonlyArray<string>
 	/** The migrations folder. */
 	readonly out: string

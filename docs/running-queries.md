@@ -14,15 +14,14 @@ release as your `effect` dependency; this example is checked against `4.0.0`:
 npm install effect@4.0.0 @effect/sql-clickhouse@4.0.0
 ```
 
-This example reads five rows from ClickHouse's built-in `system.numbers` table. It creates no
-schema and writes no data. Set `CLICKHOUSE_URL`, `CLICKHOUSE_USERNAME`, and
+This example reads five rows from ClickHouse's built-in `system.numbers` table, declared
+`external: true` because this schema does not own it. It creates no schema and writes no data. Set `CLICKHOUSE_URL`, `CLICKHOUSE_USERNAME`, and
 `CLICKHOUSE_PASSWORD` for your server; the defaults target a local server.
 
 ```ts title="run-query.ts"
 import { ClickhouseClient } from "@effect/sql-clickhouse"
 import { Config, Effect, Redacted } from "effect"
-import * as CH from "@maple-dev/effect-orm"
-import * as T from "@maple-dev/effect-orm/types"
+import * as CH from "@maple-dev/effect-orm/clickhouse"
 
 const ClickHouseLive = ClickhouseClient.layerConfig({
 	url: Config.String("CLICKHOUSE_URL").pipe(Config.withDefault("http://localhost:8123")),
@@ -35,7 +34,7 @@ const ClickHouseLive = ClickhouseClient.layerConfig({
 
 const program = Effect.gen(function* () {
 	const client = yield* ClickhouseClient.ClickhouseClient
-	const Numbers = CH.table("system.numbers", { number: T.uint64 })
+	const Numbers = CH.table("system.numbers", { external: true, columns: { number: CH.uint64 } })
 	const query = CH.from(Numbers).select("number").limit(5)
 	const compiled = yield* CH.compile(query, {})
 	const wire = yield* client.unsafe<Record<string, unknown>>(compiled.sql).pipe(
@@ -84,7 +83,7 @@ You do not need `output_format_json_quote_64bit_integers: 0` for decoding: the n
 accept both quoted and unquoted numbers. Both decode into JavaScript `number`, so **neither
 choice preserves arbitrary 64-bit integers**. For IDs, hashes, or exact large counters, select
 `CH.toString($.Id)` and keep the result as a string. Do not relabel a numeric database column as
-`T.string` without converting its SELECT expression. See the [lossless ID recipe](./recipes.md#preserve-large-integer-ids).
+`CH.string` without converting its SELECT expression. See the [lossless ID recipe](./recipes.md#preserve-large-integer-ids).
 
 ## Error boundaries
 
