@@ -114,6 +114,21 @@ describe("S.pg.table", () => {
 		expect(Checks.ddl.foreignKeys[0]?.name).toBe("checks_target_id_targets_id_fk")
 	})
 
+	it("shortens a default foreign key name past 63 characters with drizzle-kit's hash", () => {
+		const long = S.pg.table("organization_membership_invitations", {
+			columns: { organization_id: PG.text, invited_by_user_id: PG.text },
+			foreignKeys: [
+				S.pg.foreignKey({ columns: ["organization_id", "invited_by_user_id"], references: "organization_members", foreignColumns: ["organization_id", "user_id"] }),
+			],
+		})
+		const name = long.ddl.foreignKeys[0]!.name
+		expect(name).toMatch(/^organization_membership_invitations_[0-9A-Za-z]{12}_fk$/)
+		expect(name.length).toBeLessThanOrEqual(63)
+		// Deterministic, so a snapshot and the next generate agree.
+		expect(S.pg.defaultForeignKeyName("organization_membership_invitations", ["organization_id", "invited_by_user_id"], "organization_members", ["organization_id", "user_id"])).toBe(name)
+		expect(S.pg.defaultForeignKeyName("t".repeat(60), ["a"], "u", ["b"])).toMatch(/^[0-9A-Za-z]{12}_fk$/)
+	})
+
 	it("rejects definitions Postgres would not take as written", () => {
 		expect(() => S.pg.table("t", { columns: { a: PG.nullable(PG.text) }, primaryKey: ["a"] })).toThrow(/cannot be nullable/)
 		expect(() => S.pg.table("t".repeat(64), { columns: { a: PG.text } })).toThrow(/longer than 63/)

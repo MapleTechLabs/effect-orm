@@ -226,7 +226,8 @@ expression) or an `identity` (`"always"` or `"by default"`); any of them makes t
 optional on insert. `primaryKey` takes column names, or `{ columns, name }`; the default name is
 `<table>_pkey`. Indexes are `S.pg.index` / `S.pg.uniqueIndex` over column names or expressions,
 with `where` for a partial index and `using` for the access method. A foreign key without a
-`name` gets drizzle-kit's, `<table>_<columns>_<foreign table>_<foreign columns>_fk`. Types are
+`name` gets drizzle-orm's, `<table>_<columns>_<foreign table>_<foreign columns>_fk`, shortened
+with drizzle-kit's hash to `<table>_<hash>_fk` when it would pass 63 characters. Types are
 stored as Postgres names them (`int4` is `integer`), so snapshots compare with the catalog and
 with drizzle-kit. Check and unique constraints, enums, views, sequences and other schemas are
 not modeled yet; write them in a `--custom` migration.

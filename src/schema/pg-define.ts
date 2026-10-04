@@ -208,6 +208,43 @@ const assertIdentifier = (object: string, name: string): void => {
 	}
 }
 
+const HASH_DICTIONARY = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+/** drizzle-kit's name hash (`dialects/utils.ts`), so a shortened name matches the one it writes. */
+const drizzleHash = (input: string, length = 12): string => {
+	const base = BigInt(HASH_DICTIONARY.length)
+	const modulus = base ** BigInt(length)
+	let power = 1n
+	let hash = 0n
+	for (const ch of input) {
+		hash = (hash + BigInt(ch.codePointAt(0) ?? 0) * power) % modulus
+		power = (power * 53n) % modulus
+	}
+	const out: Array<string> = []
+	for (let i = 0; i < length; i++) {
+		out.unshift(HASH_DICTIONARY[Number(hash % base)]!)
+		hash /= base
+	}
+	return out.join("")
+}
+
+/**
+ * `<table>_<columns>_<foreign table>_<foreign columns>_fk`, drizzle-orm's name.
+ * Over 63 characters, Postgres would truncate it, so it is shortened the way
+ * drizzle-kit shortens its own: `<table>_<hash>_fk`, or `<hash>_fk` for a
+ * table name of 45 characters or more.
+ */
+export const defaultForeignKeyName = (
+	table: string,
+	columns: ReadonlyArray<string>,
+	foreignTable: string,
+	foreignColumns: ReadonlyArray<string>,
+): string => {
+	const desired = `${table}_${columns.join("_")}_${foreignTable}_${foreignColumns.join("_")}_fk`
+	if (desired.length <= PG_MAX_IDENTIFIER) return desired
+	return table.length < 45 ? `${table}_${drizzleHash(desired)}_fk` : `${drizzleHash(desired)}_fk`
+}
+
 /** `TRUE` is how the dialect writes a literal; the catalog and drizzle-kit write `true`. */
 const lowerKeywords = (sql: string): string => (/^(TRUE|FALSE|NULL)$/.test(sql) ? sql.toLowerCase() : sql)
 
@@ -309,7 +346,7 @@ export function table<const Name extends string, const Columns extends Record<st
 	})
 
 	const foreignKeyEntities = (definition.foreignKeys ?? []).map((spec): PgForeignKeyEntity => {
-		const fkName = spec.name ?? `${name}_${spec.columns.join("_")}_${spec.references}_${spec.foreignColumns.join("_")}_fk`
+		const fkName = spec.name ?? defaultForeignKeyName(name, spec.columns, spec.references, spec.foreignColumns)
 		assertIdentifier(`${name} foreign key`, fkName)
 		for (const column of spec.columns) {
 			if (!has(column)) throw new SchemaDefinitionDefect({ object: `${name} foreign key ${fkName}`, message: `${column} is not a column` })
