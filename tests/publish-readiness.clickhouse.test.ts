@@ -1,22 +1,17 @@
 import { DateTime, Effect } from "effect"
 import { FetchHttpClient } from "effect/http"
 import { describe, expect, it } from "@effect/vitest"
-import * as CH from "@maple-dev/effect-orm"
-import * as T from "@maple-dev/effect-orm/types"
+import * as CH from "@maple-dev/effect-orm/clickhouse"
 
 import { endpoint, execute } from "./clickhouse-support"
 
-const One = CH.table("system.one", {})
+const One = CH.table("system.one", { external: true, columns: {} })
 
 it.layer(FetchHttpClient.layer)("publishing regressions against ClickHouse", (it) => {
 	describe.skipIf(!endpoint)("live", () => {
 		it.effect("classifies scalar counts across tenants and preserves same-tenant counts", () =>
 			Effect.gen(function* () {
-				const events = CH.table(
-					"(SELECT arrayJoin(['a', 'b']) AS OrgId)",
-					{ OrgId: T.string },
-					{ tenantColumn: "OrgId" },
-				)
+				const events = CH.table("(SELECT arrayJoin(['a', 'b']) AS OrgId)", { external: true, columns: { OrgId: CH.string }, tenantColumn: "OrgId" })
 				const all = CH.from(events).select(() => ({ total: CH.count() }))
 				const own = all.where(($) => [$.OrgId.eq("a")])
 				for (const [inner, expectedScope, total] of [
@@ -26,7 +21,7 @@ it.layer(FetchHttpClient.layer)("publishing regressions against ClickHouse", (it
 					const compiled = CH.compileUnsafe(
 						CH.from(events).select(($) => ({
 							org: $.OrgId,
-							total: CH.subqueryExpr(inner, T.uint64),
+							total: CH.subqueryExpr(inner, CH.uint64),
 						})).where(($) => [$.OrgId.eq("a")]),
 						{},
 					)
@@ -50,8 +45,8 @@ it.layer(FetchHttpClient.layer)("publishing regressions against ClickHouse", (it
 
 		it.effect("labels a join that exposes another tenant as cross-tenant", () =>
 			Effect.gen(function* () {
-				const a = CH.table("a", { OrgId: T.string, Id: T.uint8 }, { tenantColumn: "OrgId" })
-				const b = CH.table("b", { ...a.columns, Secret: T.string }, { tenantColumn: "OrgId" })
+				const a = CH.table("a", { external: true, columns: { OrgId: CH.string, Id: CH.uint8 }, tenantColumn: "OrgId" })
+				const b = CH.table("b", { external: true, columns: { ...a.columns, Secret: CH.string }, tenantColumn: "OrgId" })
 				const compiled = CH.compileUnsafe(
 					CH.from(a, "a")
 						.innerJoin(b, "b", (a, b) => a.Id.eq(b.Id))
@@ -83,7 +78,7 @@ it.layer(FetchHttpClient.layer)("publishing regressions against ClickHouse", (it
 				const union = CH.unionAll(
 					CH.from(One).select(() => ({ value: CH.lit("ok") })),
 					CH.from(One).select(() => ({
-						value: CH.rawExpr("CAST(NULL AS Nullable(String))", T.nullable(T.string)),
+						value: CH.rawExpr("CAST(NULL AS Nullable(String))", CH.nullable(CH.string)),
 					})),
 				)
 				const compiled = CH.compileUnsafe(CH.fromUnion(union, "u").select("value"), {})
@@ -101,8 +96,8 @@ it.layer(FetchHttpClient.layer)("publishing regressions against ClickHouse", (it
 					const derived = CH.fromQuery(a, "a")
 						.leftJoinQuery(b, "b", (a, b) => a.id.eq(b.id))
 						.select(($) => ({ name: $.b.name }))
-					const A = CH.table("a", { id: T.uint8 })
-					const B = CH.table("b", { id: T.uint8, name: T.string })
+					const A = CH.table("a", { external: true, columns: { id: CH.uint8 } })
+					const B = CH.table("b", { external: true, columns: { id: CH.uint8, name: CH.string } })
 					const direct = CH.from(A)
 						.leftJoin(B, "b", (a, b) => a.id.eq(b.id))
 						.select(($) => ({ name: $.b.name }))
@@ -169,7 +164,7 @@ it.layer(FetchHttpClient.layer)("publishing regressions against ClickHouse", (it
 
 		it.effect("preserves DateTime64 bounds and round trips milliseconds", () =>
 			Effect.gen(function* () {
-				const ticks = CH.table("ticks", { ts: T.dateTime64 })
+				const ticks = CH.table("ticks", { external: true, columns: { ts: CH.dateTime64 } })
 				const instant = DateTime.makeUnsafe("2026-09-07T00:00:00.789Z")
 				const base = CH.from(ticks).withCTE(
 					"ticks",
@@ -179,7 +174,7 @@ it.layer(FetchHttpClient.layer)("publishing regressions against ClickHouse", (it
 					instant,
 					new Date("2026-09-07T00:00:00.789Z"),
 					CH.param.dateTime("start"),
-					CH.param.of(T.dateTime64, "start"),
+					CH.param.of(CH.dateTime64, "start"),
 				]) {
 					const compiled = CH.compileUnsafe(
 						base.select(() => ({ count: CH.count() })).where(($) => [$.ts.gte(bound)]),

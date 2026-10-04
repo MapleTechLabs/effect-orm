@@ -48,14 +48,14 @@ export interface TableOptions<
 	/**
 	 * Columns the database fills when an insert leaves them out: a Postgres
 	 * `serial` or `DEFAULT now()`, a ClickHouse `DEFAULT`. Nullable columns are
-	 * optional in an insert without being listed. `defineTable` works this out
+	 * optional in an insert without being listed. each dialect's `table` works this out
 	 * from its column options.
 	 */
 	readonly defaults?: ReadonlyArray<Defaulted>
 	/**
 	 * Columns the database computes and an insert may not write: a Postgres
 	 * `GENERATED ALWAYS` column, a ClickHouse `MATERIALIZED` or `ALIAS` one.
-	 * They stay readable. `defineTable` works this out from its column options.
+	 * They stay readable. Each dialect's `table` works this out from its column options.
 	 */
 	readonly computed?: ReadonlyArray<Computed>
 }

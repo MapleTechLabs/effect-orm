@@ -1,7 +1,7 @@
-// Postgres schema definitions: `S.pg.table` and its column, index and foreign
+// Postgres schema definitions: `table` from `/postgres` and its column, index and foreign
 // key helpers.
 //
-// The Postgres counterpart of `defineTable`: the value IS a `Table`, so every
+// The Postgres counterpart of the ClickHouse `table`: the value IS a `Table`, so every
 // query API accepts it, and its DDL rides beside it on `ddl` as Postgres
 // entities. Expressions are written with the query DSL (or as SQL strings) and
 // rendered once, here, with the Postgres dialect. A definition that cannot
@@ -15,7 +15,7 @@ import { createColumnAccessor, type ColumnAccessor } from "../ch/query"
 import type { Table } from "../ch/table"
 import type { CHType, ColumnDefs, InferTS } from "../ch/types"
 import { postgresDialect } from "../pg/dialect"
-import { SchemaDefinitionDefect, type DdlExpr, type DdlKey } from "./define"
+import { externalTable, SchemaDefinitionDefect, type DdlExpr, type DdlKey } from "./define"
 import {
 	canonicalPgType,
 	PG_MAX_IDENTIFIER,
@@ -173,7 +173,14 @@ export interface TableDefinition<Columns extends Record<string, ColumnInput>> {
 		| { readonly columns: ReadonlyArray<keyof Columns & string>; readonly name?: string }
 	readonly indexes?: ReadonlyArray<IndexSpec<ColumnsOf<Columns>>>
 	readonly foreignKeys?: ReadonlyArray<ForeignKeySpec<keyof Columns & string>>
-	/** As for `table()`: the column carrying row-level tenancy. */
+	/** The column carrying row-level tenancy; see docs/tenant-scoping.md. */
+	readonly tenantColumn?: keyof Columns & string
+}
+
+/** A table this schema does not own: a view, a catalog table, one another tool migrates. No DDL. */
+export interface ExternalTableDefinition<Columns extends Record<string, ColumnInput>> {
+	readonly external: true
+	readonly columns: Columns
 	readonly tenantColumn?: keyof Columns & string
 }
 
@@ -266,15 +273,26 @@ const columnDefault = (
 }
 
 /**
- * A Postgres table with its DDL. Usable everywhere a `table()` is; `generate`
+ * A Postgres table with its DDL. The value IS a query `Table`; `generate`
  * reads its `ddl` when the config's dialect is `postgres`.
  *
  * A column is `NOT NULL` unless its type is `PG.nullable(...)`.
  */
 export function table<const Name extends string, const Columns extends Record<string, ColumnInput>>(
 	name: Name,
+	definition: ExternalTableDefinition<Columns>,
+): Table<Name, ColumnsOf<Columns>, DefaultedColumnsOf<Columns>, never>
+export function table<const Name extends string, const Columns extends Record<string, ColumnInput>>(
+	name: Name,
 	definition: TableDefinition<Columns>,
-): PgSchemaTable<Name, ColumnsOf<Columns>, DefaultedColumnsOf<Columns>> {
+): PgSchemaTable<Name, ColumnsOf<Columns>, DefaultedColumnsOf<Columns>>
+export function table<const Name extends string, const Columns extends Record<string, ColumnInput>>(
+	name: Name,
+	definition: TableDefinition<Columns> | ExternalTableDefinition<Columns>,
+): PgSchemaTable<Name, ColumnsOf<Columns>, DefaultedColumnsOf<Columns>> | Table<Name, any, any, any> {
+	if ("external" in definition) {
+		return externalTable(name, definition, (input): input is ColumnSpec<CHType<string, any, any>> => isColumnSpec(input as ColumnInput), [])
+	}
 	assertIdentifier(name, name)
 	const inputs = Object.entries(definition.columns)
 	if (inputs.length === 0) throw new SchemaDefinitionDefect({ object: name, message: "a table needs columns" })

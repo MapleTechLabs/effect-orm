@@ -1,6 +1,6 @@
 import { Effect } from "effect"
 import { describe, expect, it } from "@effect/vitest"
-import * as CH from "../index"
+import * as CH from "./index"
 
 describe("typed arrayFilter", () => {
 	it.effect("preserves element decoding and encoding in selected rows", () => Effect.gen(function* () {

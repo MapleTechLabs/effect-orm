@@ -2,7 +2,7 @@ import { describe, expect, it } from "@effect/vitest"
 import { DateTime, Effect, Exit } from "effect"
 import * as CH from "./index"
 import * as PG from "../postgres"
-import * as S from "../schema"
+import * as CHD from "../clickhouse"
 import { QueryBuilderDefect, QueryBuilderError } from "./errors"
 
 const Events = CH.table(
@@ -387,15 +387,15 @@ describe("insertInto", () => {
 	)
 
 	describe("defineTable", () => {
-		const Spans = S.defineTable("spans", {
+		const Spans = CHD.table("spans", {
 			columns: {
 				OrgId: CH.string,
-				Duration: S.column(CH.uint64, { default: 0 }),
-				Started: S.column(CH.dateTime, { defaultExpr: "now()" }),
-				Day: S.column(CH.string, { materialized: "toString(toDate(Started))" }),
-				Label: S.column(CH.string, { comment: "shown in the UI" }),
+				Duration: CHD.column(CH.uint64, { default: 0 }),
+				Started: CHD.column(CH.dateTime, { defaultExpr: "now()" }),
+				Day: CHD.column(CH.string, { materialized: "toString(toDate(Started))" }),
+				Label: CHD.column(CH.string, { comment: "shown in the UI" }),
 			},
-			engine: S.engine.mergeTree(),
+			engine: CHD.engine.mergeTree(),
 			orderBy: ["OrgId"],
 		})
 

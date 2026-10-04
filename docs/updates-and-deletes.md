@@ -5,21 +5,20 @@ like [`insertInto`](./inserts.md). They are immutable values; `Database.run` com
 its database's dialect and runs them.
 
 ```ts
-import * as CH from "@maple-dev/effect-orm"
 import * as PG from "@maple-dev/effect-orm/postgres"
 
-const Tickets = CH.table(
-	"tickets",
-	{ id: PG.int4, org: PG.text, seats: PG.int4, tags: PG.array(PG.text) },
-	{ tenantColumn: "org" },
-)
+const Tickets = PG.table("tickets", {
+	columns: { id: PG.int4, org: PG.text, seats: PG.int4, tags: PG.array(PG.text) },
+	primaryKey: ["id"],
+	tenantColumn: "org",
+})
 
-const bump = CH.update(Tickets)
+const bump = PG.update(Tickets)
 	.set(($) => ({ seats: $.seats.add(1) }))
-	.where(($) => [$.org.eq(CH.param.string("org")), $.seats.lt(5)])
+	.where(($) => [$.org.eq(PG.param.string("org")), $.seats.lt(5)])
 	.returning("id", "seats")
 
-const revoke = CH.deleteFrom(Tickets).where(($) => [$.id.eq(CH.param.int("id"))])
+const revoke = PG.deleteFrom(Tickets).where(($) => [$.id.eq(PG.param.int("id"))])
 
 // yield* Db.run(bump, { org })   // [{ id, seats }]
 // yield* Db.run(revoke, { id })  // []
@@ -29,8 +28,9 @@ const revoke = CH.deleteFrom(Tickets).where(($) => [$.id.eq(CH.param.int("id"))]
 
 `set` takes a record of values, params or expressions, or a callback that gets the row's
 columns as `$`. A key left out (or `undefined`) keeps the existing value. Values are encoded
-through the column's codec and bound on Postgres, as in an insert. A computed column (see
-[`computed`](./inserts.md#which-columns-have-defaults)) cannot be set. `UpdateSetOf<typeof T>`
+through the column's codec and bound on Postgres, as in an insert. A column that is not
+writable (a ClickHouse `materialized` or `alias` column, see
+[the row type](./inserts.md#which-columns-have-defaults)) cannot be set. `UpdateSetOf<typeof T>`
 names the record type.
 
 `update(table)` offers only `set` until it has one (its type is `CHUpdateStart`).

@@ -7,26 +7,26 @@ import * as Migrate from "../migrate"
 import * as PG from "../postgres"
 import * as S from "../schema"
 
-const Dashboards = S.pg.table("dashboards", {
+const Dashboards = PG.table("dashboards", {
 	columns: {
 		org_id: PG.text,
 		id: PG.text,
-		status: S.pg.column(PG.text, { default: "open" }),
-		tags: S.pg.column(PG.array(PG.text), { default: [] }),
-		layout: S.pg.column(PG.jsonb(), { default: {} }),
-		archived: S.pg.column(PG.bool, { default: false }),
-		created_at: S.pg.column(PG.timestamptz, { defaultExpr: "now()" }),
+		status: PG.column(PG.text, { default: "open" }),
+		tags: PG.column(PG.array(PG.text), { default: [] }),
+		layout: PG.column(PG.jsonb(), { default: {} }),
+		archived: PG.column(PG.bool, { default: false }),
+		created_at: PG.column(PG.timestamptz, { defaultExpr: "now()" }),
 		archived_at: PG.nullable(PG.timestamptz),
 		embedding: PG.nullable(PG.array(PG.float4)),
 	},
 	primaryKey: { columns: ["org_id", "id"], name: "dashboards_org_id_id_pk" },
 	indexes: [
-		S.pg.index("dashboards_open_idx", ["org_id"], { where: ($) => $.status.in_("open", "waiting") }),
-		S.pg.index("dashboards_created_idx", ($) => [$.org_id, `"created_at" DESC`]),
+		PG.index("dashboards_open_idx", ["org_id"], { where: ($) => $.status.in_("open", "waiting") }),
+		PG.index("dashboards_created_idx", ($) => [$.org_id, `"created_at" DESC`]),
 	],
 })
 
-const Shares = S.pg.table("dashboard_shares", {
+const Shares = PG.table("dashboard_shares", {
 	columns: {
 		org_id: PG.text,
 		id: PG.text,
@@ -36,12 +36,12 @@ const Shares = S.pg.table("dashboard_shares", {
 	},
 	primaryKey: ["org_id", "id"],
 	indexes: [
-		S.pg.uniqueIndex("dashboard_shares_live_unq", ($) => [$.org_id, $.dashboard_id, CH.coalesce($.widget_id, CH.lit(""))], {
+		PG.uniqueIndex("dashboard_shares_live_unq", ($) => [$.org_id, $.dashboard_id, CH.coalesce($.widget_id, CH.lit(""))], {
 			where: "revoked_at is null",
 		}),
 	],
 	foreignKeys: [
-		S.pg.foreignKey({ columns: ["org_id", "dashboard_id"], references: Dashboards, foreignColumns: ["org_id", "id"], onDelete: "cascade" }),
+		PG.foreignKey({ columns: ["org_id", "dashboard_id"], references: Dashboards, foreignColumns: ["org_id", "id"], onDelete: "cascade" }),
 	],
 })
 
@@ -166,7 +166,7 @@ describe("Postgres migrations", () => {
 			const sql = yield* SqlClient.SqlClient
 			// What drizzle-kit (or a deploy pipeline) already applied.
 			yield* sql.unsafe(`CREATE TABLE legacy (id text PRIMARY KEY)`)
-			const base = yield* S.makeSnapshot(S.pgEntitiesOf([S.pg.table("legacy", { columns: { id: PG.text }, primaryKey: ["id"] })]), [S.ORIGIN_ID], "postgres")
+			const base = yield* S.makeSnapshot(S.pgEntitiesOf([PG.table("legacy", { columns: { id: PG.text }, primaryKey: ["id"] })]), [S.ORIGIN_ID], "postgres")
 			const migrations = yield* Migrate.fromRecord({
 				"20260101000000_drizzle_init": {
 					kind: "sql",

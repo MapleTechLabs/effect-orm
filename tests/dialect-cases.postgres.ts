@@ -3,7 +3,7 @@
 // builder behaviour lives in core-cases.ts and runs on every dialect.
 import { DateTime, Effect, Schema } from "effect"
 import { expect } from "vitest"
-import * as CH from "@maple-dev/effect-orm"
+import * as CH from "@maple-dev/effect-orm/clickhouse"
 import * as PG from "@maple-dev/effect-orm/postgres"
 import { postgresContext as ctx } from "./core-cases"
 
@@ -22,7 +22,9 @@ const utc = (iso: string) => DateTime.makeUnsafe(iso)
 // One row of every column type, read back through the declared codecs. The
 // `*Text` columns are text on the server, so they decode from the string wire
 // form a driver without type parsers sends.
-const typed = CH.table("typed", {
+const typed = PG.table("typed", {
+	external: true,
+	columns: {
 	Text: PG.text,
 	Uuid: PG.uuid,
 	Bool: PG.bool,
@@ -43,6 +45,7 @@ const typed = CH.table("typed", {
 	Missing: PG.nullable(PG.int4),
 	// A brand over int8, read from text: the base codec still parses the string.
 	Branded: PG.brand(PG.int8, Schema.Number.pipe(Schema.brand("Count"))),
+},
 })
 const typedRow = `SELECT
 	'a''b'::text AS "Text",

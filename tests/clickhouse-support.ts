@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { Effect, Schema } from "effect"
 import { HttpClient, HttpClientRequest } from "effect/http"
-import type * as CH from "@maple-dev/effect-orm"
+import type * as CH from "@maple-dev/effect-orm/clickhouse"
 
 // Opt in with EFFECT_ORM_CLICKHOUSE_URL, plus _USER and _PASSWORD if needed.
 // All fixtures are SELECTs/CTEs; this suite creates no tables and writes no data.

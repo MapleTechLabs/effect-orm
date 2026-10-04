@@ -4,7 +4,7 @@ import { Schema, type DateTime } from "effect"
 import { expectTypeOf } from "expect-type"
 import * as CH from "./index"
 import * as PG from "../postgres"
-import * as S from "../schema"
+import * as CHD from "../clickhouse"
 import type { RowOf } from "../database"
 
 const Events = CH.table(
@@ -51,15 +51,15 @@ CH.insertInto(Branded).values({ OrgId: CH.param.string("org") })
 CH.insertInto(Branded).values({ OrgId: "o" })
 
 // defineTable: defaults are optional, computed columns are not in the row.
-const Spans = S.defineTable("spans", {
+const Spans = CHD.table("spans", {
 	columns: {
 		OrgId: CH.string,
-		Duration: S.column(CH.uint64, { default: 0 }),
-		Started: S.column(CH.dateTime, { defaultExpr: ($) => CH.rawExpr("now()", CH.dateTime) }),
-		Day: S.column(CH.string, { materialized: "toString(toDate(Started))" }),
-		Label: S.column(CH.string, { comment: "shown" }),
+		Duration: CHD.column(CH.uint64, { default: 0 }),
+		Started: CHD.column(CH.dateTime, { defaultExpr: ($) => CH.rawExpr("now()", CH.dateTime) }),
+		Day: CHD.column(CH.string, { materialized: "toString(toDate(Started))" }),
+		Label: CHD.column(CH.string, { comment: "shown" }),
 	},
-	engine: S.engine.mergeTree(),
+	engine: CHD.engine.mergeTree(),
 	orderBy: ["OrgId"],
 })
 expectTypeOf<CH.InsertRowOf<typeof Spans>>().toEqualTypeOf<{
@@ -72,7 +72,7 @@ expectTypeOf<CH.InsertRowOf<typeof Spans>>().toEqualTypeOf<{
 CH.insertInto(Spans).values({ OrgId: "o", Label: "l", Day: "x" })
 // A table with defaults still goes everywhere a table does.
 CH.from(Spans).select("OrgId", "Day")
-expectTypeOf(S.column(CH.string)).toEqualTypeOf<S.ColumnSpec<CH.CHString, never>>()
+expectTypeOf(CHD.column(CH.string)).toEqualTypeOf<CHD.ColumnSpec<CH.CHString, never>>()
 
 // A table typed without insert metadata reads as "no defaults, nothing computed".
 declare const Loose: CH.Table<"loose", { A: CH.CHString; B: CH.CHNullable<CH.CHString> }>

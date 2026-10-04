@@ -12,7 +12,7 @@ const Cents = Schema.Number.check(Schema.isGreaterThanOrEqualTo(0)).pipe(Schema.
 
 const orgId = PG.brand(PG.text, OrgId)
 
-const Accounts = S.pg.table("accounts", {
+const Accounts = PG.table("accounts", {
 	columns: {
 		org_id: orgId,
 		id: PG.text,

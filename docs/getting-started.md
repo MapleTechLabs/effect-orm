@@ -41,6 +41,20 @@ Keep the Effect 4 range explicit when installing. Use an ESM project
 and a TypeScript runner such as Bun for the `.ts` files below. A database client is a
 separate dependency, needed only when you execute SQL.
 
+## Pick your database
+
+Each database has one entry that holds everything for it: the query builder, its column types,
+its functions, table definitions, and a `compile` that writes its dialect.
+
+```ts
+import * as CH from "@maple-dev/effect-orm/clickhouse"
+import * as PG from "@maple-dev/effect-orm/postgres"
+```
+
+The builder (`from`, `param`, `and`, `insertInto`, …) is the same in both. Import the one for the
+database you query; the examples below use ClickHouse, and [Postgres](./postgres.md) shows the
+same flow with `PG`.
+
 ## A complete first example
 
 Save this as `quick-start.ts` and run `bun quick-start.ts`. It builds SQL and decodes a sample
@@ -48,12 +62,15 @@ wire response; it does not need a server, credentials, or an existing table.
 
 ```ts title="quick-start.ts"
 import { Effect } from "effect"
-import * as CH from "@maple-dev/effect-orm"
-import * as T from "@maple-dev/effect-orm/types"
+import * as CH from "@maple-dev/effect-orm/clickhouse"
 
 const Events = CH.table("events", {
-	Name: T.string,
-	DurationMs: T.uint64,
+	columns: {
+		Name: CH.string,
+		DurationMs: CH.uint64,
+	},
+	engine: CH.engine.mergeTree(),
+	orderBy: ["Name"],
 })
 
 const query = CH.from(Events)
@@ -78,15 +95,20 @@ console.log(rows) // [{ name: "checkout", p95: 420, count: 3 }]
 The generated SQL is:
 
 ```sql
-SELECT Name AS name, quantile(0.95)(DurationMs) AS p95, count() AS count
+SELECT events.Name AS name, quantile(0.95)(events.DurationMs) AS p95, count() AS count
 FROM events
-WHERE DurationMs >= 100
+WHERE events.DurationMs >= 100
 GROUP BY name
 ORDER BY count DESC, name ASC
 LIMIT 50
 ```
 
-`table()` describes a table; it does not create it or check that the database has those columns.
+`table()` describes a table; compiling a query does not create it or check that the database has
+those columns. The `engine` and `orderBy` are what [migrations](./migrations.md) turn into
+`CREATE TABLE`; the query builder only reads the name and `columns`. A MergeTree table must
+declare `orderBy` (`[]` for `ORDER BY tuple()`), so a definition that could not become DDL fails
+when the module loads, not at deploy time.
+
 The keys returned by `select` become both SQL aliases and result properties. This query infers
 `{ name: string; p95: number | null; count: number }`: ClickHouse can return JSON `null` for an
 aggregate with a non-finite result.
@@ -101,35 +123,36 @@ The result schema is derived from the typed SELECT, so you do not need to write 
 
 ## Shared tables used by the guides
 
-The later guides use `CH`, `T`, `Effect`, and these illustrative tables. Save this as `schema.ts`
+The later guides use `CH`, `Effect`, and these illustrative tables. Save this as `schema.ts`
 when trying their query snippets. Their table and column names are case-sensitive contracts
 with your own database. Replace them with your real schema before executing.
 
 ```ts title="schema.ts"
-import * as CH from "@maple-dev/effect-orm"
-import * as T from "@maple-dev/effect-orm/types"
+import * as CH from "@maple-dev/effect-orm/clickhouse"
 
-export const Events = CH.table(
-	"events",
-	{
-		OrgId: T.string,
-		Name: T.string,
-		Timestamp: T.dateTime,
-		DurationMs: T.uint64,
-		Attributes: T.map(T.string, T.string),
+export const Events = CH.table("events", {
+	columns: {
+		OrgId: CH.string,
+		Name: CH.string,
+		Timestamp: CH.dateTime,
+		DurationMs: CH.uint64,
+		Attributes: CH.map(CH.string, CH.string),
 	},
-	{ tenantColumn: "OrgId" },
-)
+	engine: CH.engine.mergeTree(),
+	orderBy: ["OrgId", "Timestamp"],
+	tenantColumn: "OrgId",
+})
 
-export const Services = CH.table(
-	"services",
-	{
-		OrgId: T.string,
-		Name: T.string,
-		Team: T.string,
+export const Services = CH.table("services", {
+	columns: {
+		OrgId: CH.string,
+		Name: CH.string,
+		Team: CH.string,
 	},
-	{ tenantColumn: "OrgId" },
-)
+	engine: CH.engine.replacingMergeTree(),
+	orderBy: ["OrgId", "Name"],
+	tenantColumn: "OrgId",
+})
 ```
 
 Tenant scoping is optional. The first example has no tenant column; the shared tables do.
@@ -141,4 +164,5 @@ Always supply the tenant from your trusted application context. See [Tenant scop
 - [Running a query](./running-queries.md): a complete client example using `system.numbers`, with no table setup.
 - [Recipes](./recipes.md): time buckets, optional filters, aggregate filters, pagination, and lossless IDs.
 - [Tables and column types](./tables-and-types.md): model your actual schema and wire formats.
+- [Postgres](./postgres.md): the same builder against Postgres, from `@maple-dev/effect-orm/postgres`.
 - [Troubleshooting](./troubleshooting.md): installation, compilation, decoding, and unexpected results.

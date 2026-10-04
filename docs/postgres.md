@@ -1,30 +1,37 @@
 # Postgres
 
 The same builder writes Postgres SQL. Queries, params, tenant scoping and row decoding work
-as they do for ClickHouse; the `/postgres` entry point supplies the parts that differ: column
-types whose codecs read what Postgres drivers send, functions spelled the Postgres way, and a
-`compile` that defaults to the Postgres dialect.
+as they do for ClickHouse. `@maple-dev/effect-orm/postgres` is the one import for it: the
+builder, column types whose codecs read what Postgres drivers send, functions spelled the
+Postgres way, `table` with its keys, indexes and foreign keys, and a `compile` that defaults to
+the Postgres dialect. Nothing from `/clickhouse` is needed.
 
 ```ts title="postgres-quickstart.ts"
 import { PGlite } from "@electric-sql/pglite"
 import { Effect } from "effect"
-import * as CH from "@maple-dev/effect-orm"
 import * as PG from "@maple-dev/effect-orm/postgres"
+import * as S from "@maple-dev/effect-orm/schema"
 
-const Requests = CH.table(
-	"requests",
-	{ OrgId: PG.text, Route: PG.text, DurationMs: PG.int8, At: PG.timestamptz },
-	{ tenantColumn: "OrgId" },
-)
+const Requests = PG.table("requests", {
+	columns: {
+		Id: PG.column(PG.int8, { identity: "always" }),
+		OrgId: PG.text,
+		Route: PG.text,
+		DurationMs: PG.int8,
+		At: PG.timestamptz,
+	},
+	primaryKey: ["Id"],
+	tenantColumn: "OrgId",
+})
 
-const query = CH.from(Requests)
+const query = PG.from(Requests)
 	.select(($) => ({
 		route: $.Route,
 		count: PG.count(),
 		slow: PG.countIf($.DurationMs.gte(500)),
 		p50: PG.percentileCont(0.5, $.DurationMs),
 	}))
-	.where(($) => [$.OrgId.eq(CH.param.string("orgId")), $.At.gte(CH.param.dateTime("since"))])
+	.where(($) => [$.OrgId.eq(PG.param.string("orgId")), $.At.gte(PG.param.dateTime("since"))])
 	.groupBy("route")
 	.orderBy(["count", "desc"])
 
@@ -33,9 +40,10 @@ export const compiled = PG.compileUnsafe(query, { orgId: "org_1", since: new Dat
 // compiled.parameters: ["org_1", "2026-01-01T00:00:00.000Z"]
 
 const db = new PGlite()
+// The CREATE TABLE comes from the definition itself; migrations.md shows the managed way.
+for (const statement of S.renderPgSchema(S.pgEntitiesOf([Requests]))) await db.exec(statement)
 await db.exec(`
-	CREATE TABLE requests ("OrgId" text, "Route" text, "DurationMs" int8, "At" timestamptz);
-	INSERT INTO requests VALUES
+	INSERT INTO requests ("OrgId", "Route", "DurationMs", "At") VALUES
 		('org_1', '/checkout', 120, '2026-01-01T10:00:00Z'),
 		('org_1', '/checkout', 900, '2026-01-01T10:01:00Z'),
 		('org_1', '/search', 40, '2026-01-01T10:02:00Z');
@@ -47,7 +55,10 @@ await db.close()
 ```
 
 `PGlite` stands in for any driver that takes `(sql, values)`: node-postgres, postgres.js, or
-`@effect/sql-pg`'s `unsafe`. The builder never runs the query.
+`@effect/sql-pg`'s `unsafe`. The builder never runs the query. `Id` is an identity column, so an
+insert may leave it out: `PG.InsertRowOf<typeof Requests>` makes it optional. See
+[Tables and column types](./tables-and-types.md) for column options and external tables, and
+[Schema and migrations](./migrations.md#postgres) for indexes, foreign keys, and `generate`.
 
 ## What the dialect changes
 
@@ -82,6 +93,7 @@ literal that still contained it would fail the compile with `InvalidLiteral`.
 | `array(type)` | `type[]` | `ReadonlyArray` | array |
 | `nullable(type)` | the same type | `T \| null` | the same, or `null` |
 | `custom(sql, schema, literalSchema?)` | anything | the schema's type | whatever the schema reads |
+| `brand(type, schema)` | the base type | the schema's type | what the base type reads |
 
 `int8` and `numeric` decode to `number`, so values beyond 2^53 or a double's precision lose
 digits. Where exact digits matter, declare
@@ -108,12 +120,12 @@ which no session time zone can reinterpret; a zoneless string is read as UTC.
 | `jsonText(x, key)` | `(x ->> key)` | `null` when absent |
 
 The shared operators (`eq`, `in_`, `like`, `ilike`, `and`, `or`, `not`, arithmetic, `lit`) work
-unchanged. The ClickHouse function catalog on the root entry (`quantile`, `toStartOfInterval`,
-`count()`, …) writes ClickHouse SQL, so compiling a query that uses one for Postgres is a
+unchanged. `/postgres` exports only functions Postgres has, plus `nullIf`, which renders the
+same on both. The ClickHouse catalog on `/clickhouse` (`quantile`, `toStartOfInterval`, its
+`count()`, …) writes ClickHouse SQL, so a query that uses one and is compiled for Postgres is a
 `QueryBuilderDefect` naming the function; the Postgres functions above fail the same way on
-ClickHouse. `coalesce`, `nullIf` and `lower` from the root entry render the same on both and
-are allowed on either. A custom `Dialect` opts in with `functions: "clickhouse"` or
-`"postgres"`; without it, nothing is checked.
+ClickHouse. A custom `Dialect` opts in with `functions: "clickhouse"` or `"postgres"`; without
+it, nothing is checked.
 
 ## Known differences
 

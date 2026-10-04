@@ -2,7 +2,7 @@
 // and the snapshot envelope both dialects share (Postgres entities live in
 // `pg-entities.ts`).
 //
-// A `defineTable` value is code; a snapshot is data. Everything downstream of
+// A `table` value is code; a snapshot is data. Everything downstream of
 // the definitions (DDL rendering, diffing, the migrator's drift check) reads
 // these entities, never the definitions, so a snapshot taken months ago renders
 // and diffs exactly as it did when it was written.

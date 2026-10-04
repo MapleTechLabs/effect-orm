@@ -34,7 +34,7 @@ The user defaults to `default` and the password to an empty string.
 
 `bun run test:package` builds and packs the package, installs the tarball outside the
 workspace with its Effect peer, typechecks a consumer with strict declarations, and
-executes imports from all seven public entry points under Node. This needs npm registry
+executes imports from the public entry points under Node. This needs npm registry
 access. It uses the installed Effect and TypeScript versions, with explicit Node, DOM,
 and disposable type libraries required by the Effect declarations.
 
@@ -86,7 +86,8 @@ with a reason. The core manifest in `tests/dialect-coverage.test.ts` requires ev
 and union method, expression and condition operator, and param kind to have a core case.
 
 Postgres functions and types have their own manifest: every export of the `./postgres`
-entry is run by a case in `tests/dialect-cases.postgres.ts` (`tests/dialect.postgres.test.ts`)
+entry that is its own (not the shared query builder, which the ClickHouse manifest covers) is
+run by a case in `tests/dialect-cases.postgres.ts` (`tests/dialect.postgres.test.ts`)
 or exempted with a reason.
 
 Tests preserve documented behavior: arithmetic chains follow SQL precedence, not call

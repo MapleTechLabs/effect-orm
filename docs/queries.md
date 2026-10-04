@@ -98,7 +98,7 @@ const query = CH.from(Events)
 	.select(($) => ({ name: $.Name, count: CH.count() }))
 	.where(($) => [$.OrgId.eq(CH.param.string("orgId"))])
 	.groupBy("name")
-	.having(() => [CH.dynamicColumn("count", T.uint64).gte(CH.param.int("minimumCount"))])
+	.having(() => [CH.dynamicColumn("count", CH.uint64).gte(CH.param.int("minimumCount"))])
 ```
 
 Compile with `{ orgId: "org_123", minimumCount: 10 }` to emit `HAVING count >= 10`.
@@ -161,7 +161,7 @@ On Postgres, `forUpdate`, `forNoKeyUpdate`, `forShare` and `forKeyShare` add a l
 after LIMIT. Each takes `{ skipLocked?, noWait?, of? }`. The usual job-queue claim:
 
 ```ts
-CH.from(Jobs)
+PG.from(Jobs)
 	.select("id")
 	.where(($) => [$.state.eq("queued")])
 	.orderBy(["id", "asc"])
@@ -191,5 +191,6 @@ changing the SQL. Both are covered in [Tenant scoping](./tenant-scoping.md).
 const compiled = CH.compileUnsafe(query, params)
 ```
 
-`compile` is an alias of `compileCH`; both are exported. Unions compile with `compileUnion`.
+`compile` writes its entry's dialect: ClickHouse from `/clickhouse`, Postgres from `/postgres`.
+Unions compile with `compileUnion`.
 See [Params and compilation](./params-and-compilation.md).

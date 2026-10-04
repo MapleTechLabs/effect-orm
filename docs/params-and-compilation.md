@@ -10,7 +10,7 @@ CH.param.bool("includeDrafts")
 CH.param.dateTime("startTime")
 CH.param.dateTimeString("stringTimestamp")
 CH.param.dateTimeSeconds("secondPrecisionTimestamp")
-CH.param.of(T.uint64, "customNumber")
+CH.param.of(CH.uint64, "customNumber")
 ```
 
 A param is an `Expr` placeholder usable anywhere an expression
@@ -73,7 +73,7 @@ directions cannot drift, because there is only one of them.
 
 `param.dateTime` and `param.dateTimeString` preserve milliseconds in `Date` and `DateTime.Utc`
 values, as well as fractions already present in strings. Use `param.dateTimeSeconds` for a
-whole-second DateTime bound, or `param.of(T.dateTime, name)` for the parsed UTC flavour.
+whole-second DateTime bound, or `param.of(CH.dateTime, name)` for the parsed UTC flavour.
 `param.dateTimeSeconds` converts zoned strings to UTC before flooring: for example,
 `2026-01-02T00:00:00.500+02:00` becomes `2026-01-01 22:00:00`.
 
@@ -81,11 +81,11 @@ whole-second DateTime bound, or `param.of(T.dateTime, name)` for the parsed UTC 
 Reuse type definitions across queries when practical.
 
 `param.of(type, name)` takes it further: any column type, including one you declared with
-`T.custom`, works as a param.
+`CH.custom`, works as a param.
 
 ```ts
-const Level = T.custom("Enum8('warn' = 1, 'error' = 2)", Schema.Literals(["warn", "error"]))
-const Logs = CH.table("logs", { Level })
+const Level = CH.custom("Enum8('warn' = 1, 'error' = 2)", Schema.Literals(["warn", "error"]))
+const Logs = CH.table("logs", { columns: { Level }, engine: CH.engine.mergeTree(), orderBy: ["Level"] })
 const query = CH.from(Logs)
 	.select("Level")
 	.where(($) => [$.Level.eq(CH.param.of(Level, "level"))])
@@ -172,9 +172,9 @@ CH.compileUnsafe(query, params, options?)  // CompiledQuery, throws
 | `options.rowSchema`   | Effect `Schema` used by `decodeRows` / `decodeFirstRow`              |
 | `options.skipFormat`  | Omit a trailing `FORMAT` clause (used internally for subqueries)     |
 | `options.deferParams` | Leave placeholders unresolved, for SQL spliced into an outer compile |
-| `options.dialect`     | How params reach the server; `clickhouseDialect` when omitted        |
+| `options.dialect`     | Overrides the entry's dialect (`clickhouseDialect` from `/clickhouse`, `postgresDialect` from `/postgres`) |
 
-`compileCH` is the internal name; the package exports it as `compile`. Unions use
+Each dialect entry exports its own `compile`, defaulting to that dialect. Unions use
 `compileUnion(union, params)`.
 
 ## The `CompiledQuery`
@@ -217,9 +217,9 @@ Use `decodeRows` to validate wire values against the row schema.
 A `Dialect` is the database a query is compiled for: how identifiers and literals are written,
 how resolved params reach the server, and which clauses exist. It is installed for the length of
 the compile, so every column reference, string fragment, compared value and inline param goes
-through it. The default, `clickhouseDialect`, writes names bare and each param value into the SQL
-as a ClickHouse literal, and leaves `parameters` empty. `postgresDialect`, from the `/postgres`
-entry point, is the other built-in one; see [Postgres](./postgres.md).
+through it. `clickhouseDialect`, the default of the `/clickhouse` entry's `compile`, writes names bare and each param value into the SQL
+as a ClickHouse literal, and leaves `parameters` empty. `postgresDialect`, the default of the `/postgres`
+entry's `compile`, is the other built-in one; see [Postgres](./postgres.md).
 
 A dialect whose `params` style is `bind` leaves a placeholder instead and returns the encoded
 values in `parameters`, numbered once across the whole statement, unions and subqueries
@@ -296,10 +296,9 @@ a required parameter and recovers only that typed builder failure; defects are n
 
 ```ts title="compile-errors.ts"
 import { Effect } from "effect"
-import * as CH from "@maple-dev/effect-orm"
-import * as T from "@maple-dev/effect-orm/types"
+import * as CH from "@maple-dev/effect-orm/clickhouse"
 
-const Events = CH.table("events", { Name: T.string })
+const Events = CH.table("events", { columns: { Name: CH.string }, engine: CH.engine.mergeTree(), orderBy: ["Name"] })
 const query = CH.from(Events)
 	.select("Name")
 	.where(($) => [$.Name.eq(CH.param.string("name"))])

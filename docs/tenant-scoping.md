@@ -20,7 +20,12 @@ Row-per-tenant is the usual ClickHouse multi-tenancy shape, but whether a table 
 what the column is called — is a schema decision, so it is declared on the table:
 
 ```ts
-const Events = CH.table("events", { OrgId: T.string, Name: T.string }, { tenantColumn: "OrgId" })
+const Events = CH.table("events", {
+	columns: { OrgId: CH.string, Name: CH.string },
+	engine: CH.engine.mergeTree(),
+	orderBy: ["OrgId"],
+	tenantColumn: "OrgId",
+})
 ```
 
 The option is checked against the column names you just declared, so a typo is a type error
@@ -28,7 +33,11 @@ rather than a query that silently never scopes. A table with **no** `tenantColum
 pin, and compiles to the third scope:
 
 ```ts
-const Untenanted = CH.table("untenanted", { tenant_id: T.string, Name: T.string })
+const Untenanted = CH.table("untenanted", {
+	columns: { tenant_id: CH.string, Name: CH.string },
+	engine: CH.engine.mergeTree(),
+	orderBy: [],
+})
 
 CH.from(Untenanted)
 	.select(($) => ({ name: $.Name }))

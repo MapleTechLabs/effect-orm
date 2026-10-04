@@ -7,7 +7,7 @@ import { PGlite } from "@electric-sql/pglite"
 import { afterAll, beforeAll, describe, expect, it } from "@effect/vitest"
 import { DateTime, Effect } from "effect"
 import type { CompiledQuery } from "../ch/compile"
-import * as CH from "../index"
+import * as CH from "../ch/index"
 import * as PG from "../postgres"
 
 // PGlite 0.5 takes the session time zone from the host; the fixtures assume UTC.

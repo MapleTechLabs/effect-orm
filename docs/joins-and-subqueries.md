@@ -145,7 +145,7 @@ That is what `subqueryExpr` is for. It takes the inner query, the column type it
 as, and a `wrap` function that receives the inner SQL and returns the expression text:
 
 ```ts
-import { subqueryCond, subqueryExpr } from "@maple-dev/effect-orm"
+import { subqueryCond, subqueryExpr } from "@maple-dev/effect-orm/clickhouse"
 
 // Stage 1: a cheap scan reading only the sort column.
 const cheapScan = CH.from(Events)
@@ -154,7 +154,7 @@ const cheapScan = CH.from(Events)
 	.orderBy(["ts", "desc"])
 	.limit(100)
 
-const cutoff = subqueryExpr(cheapScan, T.dateTime, (sql) => `(SELECT min(ts) FROM (${sql}))`)
+const cutoff = subqueryExpr(cheapScan, CH.dateTime, (sql) => `(SELECT min(ts) FROM (${sql}))`)
 
 // Stage 2: the heavy columns, read only for rows at or after the cutoff.
 const query = CH.from(Events)
@@ -198,7 +198,7 @@ _(Backed by `docs/joins-and-subqueries.md > subqueryExpr splices an inner query,
 
 - `inList(expr, values)` — `expr IN ('a', 'b')` for a string list
 - `inExprList(expr, exprs)` — same, for expression lists
-- `notInList(expr, values)` — available from the root and `/expr` subpath
+- `notInList(expr, values)` — available from both dialect entries and the `/expr` subpath
 
 These predate `.in_()` and remain useful when you have an array in hand rather than varargs.
 

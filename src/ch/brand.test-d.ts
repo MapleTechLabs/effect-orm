@@ -20,14 +20,14 @@ const Status = Schema.Literals(["open", "closed"])
 const orgId = PG.brand(PG.text, OrgId)
 const userId = PG.brand(PG.text, UserId)
 
-const Dashboards = S.pg.table("dashboards", {
+const Dashboards = PG.table("dashboards", {
 	columns: {
 		org_id: orgId,
 		id: PG.text,
 		owner: PG.nullable(userId),
 		editors: PG.array(userId),
 		budget: PG.brand(PG.int8, Cents),
-		status: S.pg.column(PG.brand(PG.text, Status), { default: "open" }),
+		status: PG.column(PG.brand(PG.text, Status), { default: "open" }),
 		created_at: PG.timestamptz,
 	},
 	primaryKey: ["org_id", "id"],

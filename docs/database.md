@@ -25,11 +25,10 @@ This runs on PGlite, Postgres compiled to WASM, so it needs no server. Swap
 ```ts title="database-transaction.ts"
 import { PgliteClient } from "@effect/sql-pglite"
 import { Effect, Layer, Schema } from "effect"
-import * as CH from "@maple-dev/effect-orm"
 import * as Db from "@maple-dev/effect-orm/database"
 import * as PG from "@maple-dev/effect-orm/postgres"
 
-const Accounts = CH.table("accounts", { id: PG.int4, balance: PG.int8 })
+const Accounts = PG.table("accounts", { columns: { id: PG.int4, balance: PG.int8 }, primaryKey: ["id"] })
 
 class InsufficientFunds extends Schema.TaggedError<InsufficientFunds>()("InsufficientFunds", {
 	account: Schema.Number,
@@ -37,7 +36,7 @@ class InsufficientFunds extends Schema.TaggedError<InsufficientFunds>()("Insuffi
 
 const balanceOf = (id: number) =>
 	Db.run(
-		CH.from(Accounts)
+		PG.from(Accounts)
 			.select("balance")
 			.where(($) => [$.id.eq(id)]),
 	).pipe(Effect.map((rows) => rows[0]?.balance ?? 0))
@@ -103,7 +102,8 @@ Calling `withdraw(1, 30)` outside `transfer` does not compile: `requireTransacti
 query compiled elsewhere. It compiles with
 the database's dialect, so you never pick a `compile`; `params` fills the query's `param.*`
 markers, and a missing one fails with `QueryBuilderError`. A query compiled elsewhere must
-have been compiled for the same dialect, or `run` dies: the root `compile` is ClickHouse's.
+have been compiled for the same dialect, or `run` dies: `CH.compile` from `/clickhouse` writes
+ClickHouse, `PG.compile` from `/postgres` writes Postgres.
 
 `sql` writes the statements the builder does not have yet (DDL, bulk `UPDATE ... FROM`, advisory
 locks). Each `${value}` is bound, as `$1, $2, ...` on Postgres and as an escaped literal on
@@ -146,7 +146,7 @@ For SQL inside a builder query rather than a whole statement, use
 | `observe` | Called with every statement before it runs, including the `SET TRANSACTION` a transaction's settings become |
 
 `run` refuses a query compiled for another dialect (`CompiledQuery.dialect`), as a defect: a
-query built with the root `compile`, which is ClickHouse's, can run on Postgres with the wrong
+query compiled with the `/clickhouse` entry's `compile` would run on Postgres with the wrong
 quoting and inlined params. Rows come back without the client's name transforms, because the
 decoder reads the aliases the compiler wrote.
 

@@ -17,6 +17,7 @@ import { describe, expect, it } from "@effect/vitest"
 import { Effect, Exit, Option, Schema } from "effect"
 import * as CH from "./ch/index"
 import * as T from "./ch/types"
+import * as CHE from "./clickhouse"
 import { parseStatement, renderStatement, withSettings } from "./sql/statement"
 import { compileCHUnsafe, compileUnionUnsafe } from "./ch/compile"
 import { raw as rawFragment, compile as compileFragment } from "./sql/sql-fragment"
@@ -173,15 +174,15 @@ describe("docs/tables-and-types.md", () => {
 		)
 	})
 
-	it("Column types come from /types as a namespace", () => {
-		// The docs tell you to `import * as T from ".../types"`. Every constructor
-		// is on the root barrel too — this asserts the namespace form the docs
-		// actually show, which is the one that has to keep working.
-		const Counters = CH.table(
-			"counters",
-			{ OrgId: T.string, Hits: T.uint16, Live: T.bool },
-			{ tenantColumn: "OrgId" },
-		)
+	it("Column types come from the dialect entry", () => {
+		// One import per database: types, the table and the builder all come
+		// from `/clickhouse`, the way the docs show them.
+		const Counters = CHE.table("counters", {
+			columns: { OrgId: CHE.string, Hits: CHE.uint16, Live: CHE.bool },
+			engine: CHE.engine.mergeTree(),
+			orderBy: ["OrgId"],
+			tenantColumn: "OrgId",
+		})
 
 		const query = CH.from(Counters)
 			.select(($) => ({ hits: $.Hits }))

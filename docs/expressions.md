@@ -25,10 +25,13 @@ compilation with a `QueryBuilderError`. Use `.isNull()` (or `.isNotNull()` for p
 values), which write `IS NULL` and work on every dialect:
 
 ```ts title="null-filter.ts"
-import * as CH from "@maple-dev/effect-orm"
-import * as T from "@maple-dev/effect-orm/types"
+import * as CH from "@maple-dev/effect-orm/clickhouse"
 
-const Notes = CH.table("notes", { Note: T.nullable(T.string) })
+const Notes = CH.table("notes", {
+	columns: { Note: CH.nullable(CH.string) },
+	engine: CH.engine.mergeTree(),
+	orderBy: [],
+})
 export const compiled = CH.compileUnsafe(CH.from(Notes).select("Note").where(($) => [$.Note.isNull()]))
 console.log(compiled.sql) // SELECT Note AS Note FROM notes WHERE Note IS NULL
 ```
@@ -84,7 +87,7 @@ list is written as the constant it means, `1 = 0` for `in_()` and `1 = 1` for `n
 ```
 
 `.and()` / `.or()` parenthesise their result, so precedence is explicit. `CH.not(condition)` wraps
-in `NOT (…)` and is available from the root and `/expr` subpath.
+in `NOT (…)` and is available from both dialect entries and the `/expr` subpath.
 
 `CH.and(...)` and `CH.or(...)` take any number of conditions, skip `undefined` ones, and write
 one flat group. With none left they return `undefined`, which `where` skips, so optional

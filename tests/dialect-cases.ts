@@ -1,9 +1,8 @@
 // Fixtures use only public entry points, resolved through the package's built dist.
 // Raw SQL supplies deterministic input rows; the operation under test uses the DSL.
 import { DateTime, Schema } from "effect"
-import * as CH from "@maple-dev/effect-orm"
+import * as CH from "@maple-dev/effect-orm/clickhouse"
 import * as F from "@maple-dev/effect-orm/expr"
-import * as T from "@maple-dev/effect-orm/types"
 
 export interface DialectCase {
 	readonly metadata?: { readonly route: string; readonly tenantScope: CH.TenantScope }
@@ -13,8 +12,8 @@ export interface DialectCase {
 	readonly build: () => CH.CompiledQuery<any>
 	readonly expected: readonly unknown[]
 }
-const one = CH.table("system.one", {})
-const n = CH.table("input", { n: T.uint8 })
+const one = CH.table("system.one", { external: true, columns: {} })
+const n = CH.table("input", { external: true, columns: { n: CH.uint8 } })
 const numbers = () => CH.from(n).withCTE("input", "SELECT arrayJoin([toUInt8(1), 2, 3]) AS n")
 const l = CH.lit
 const scalar = (
@@ -350,7 +349,7 @@ export const dialectCases: readonly DialectCase[] = [
 		id: "aggregate-state-merge",
 		covers: [...fn("argMaxMerge"), "type:aggregateState"],
 		build: () => {
-			const states = CH.table("states", { state: T.aggregateState("argMax", "String", "UInt8") })
+			const states = CH.table("states", { external: true, columns: { state: CH.aggregateState("argMax", "String", "UInt8") } })
 			return CH.compileUnsafe(
 				CH.from(states)
 					.withCTE(
@@ -400,7 +399,7 @@ export const dialectCases: readonly DialectCase[] = [
 				hourNumber: CH.toHour(time),
 				seconds: CH.toUnixTimestamp(CH.toDateTime(l(42))),
 				nanos: CH.toUnixTimestamp64Nano(
-					CH.rawExpr("toDateTime64('1970-01-01 00:00:01.123', 3, 'UTC')", T.dateTime64),
+					CH.rawExpr("toDateTime64('1970-01-01 00:00:01.123', 3, 'UTC')", CH.dateTime64),
 				),
 				added: CH.intervalAdd(time, 60),
 				subtracted: CH.intervalSub(time, 60),
@@ -511,8 +510,8 @@ export const dialectCases: readonly DialectCase[] = [
 			id: `direct-${method}`,
 			covers: [`query:${method}`],
 			build: () => {
-				const a = CH.table("a", { id: T.uint8 }),
-					b = CH.table("b", { id: T.uint8, name: T.string })
+				const a = CH.table("a", { external: true, columns: { id: CH.uint8 } }),
+					b = CH.table("b", { external: true, columns: { id: CH.uint8, name: CH.string } })
 				const base = CH.from(a)
 					.withCTE("a", "SELECT toUInt8(1) AS id")
 					.withCTE("b", "SELECT toUInt8(1) AS id, 'match' AS name")
@@ -630,9 +629,12 @@ export const dialectCases: readonly DialectCase[] = [
 		covers: [],
 		build: () => {
 			const rows = CH.table("structured", {
-				tags: T.array(T.string),
-				attrs: T.map(T.string, T.string),
-				enabled: T.bool,
+				external: true,
+				columns: {
+				tags: CH.array(CH.string),
+				attrs: CH.map(CH.string, CH.string),
+				enabled: CH.bool,
+			},
 			})
 			return CH.compileUnsafe(
 				CH.from(rows)
@@ -642,7 +644,7 @@ export const dialectCases: readonly DialectCase[] = [
 					)
 					.select("tags", "attrs", "enabled")
 					.where(($) => [
-						$.tags.eq(CH.param.of(T.array(T.string), "tags")),
+						$.tags.eq(CH.param.of(CH.array(CH.string), "tags")),
 						$.attrs.eq({ key: "value" }),
 						$.enabled.eq(CH.param.bool("enabled")),
 					]),
@@ -676,7 +678,7 @@ export const dialectCases: readonly DialectCase[] = [
 			array: CH.arrayFilter("x -> x > 9", CH.arrayOf(l(1))),
 			map: CH.mapLiteral(),
 			missing: CH.arrayElement(
-				CH.rawExpr("CAST([] AS Array(Nullable(UInt8)))", T.array(T.nullable(T.uint8))),
+				CH.rawExpr("CAST([] AS Array(Nullable(UInt8)))", CH.array(CH.nullable(CH.uint8))),
 				1,
 			),
 		}),
@@ -699,39 +701,39 @@ export const dialectCases: readonly DialectCase[] = [
 
 // Each descriptor is exercised on a real typed column, including compound wire values.
 const typeFixtures = [
-	["string", T.string, "'hello'", "hello"],
-	["uint8", T.uint8, "toUInt8(255)", 255],
-	["uint16", T.uint16, "toUInt16(65535)", 65535],
-	["uint32", T.uint32, "toUInt32(4294967295)", 4294967295],
-	["uint64", T.uint64, "toUInt64(9007199254740991)", 9007199254740991],
-	["int32", T.int32, "toInt32(-2147483648)", -2147483648],
-	["int64", T.int64, "toInt64(-9007199254740991)", -9007199254740991],
-	["float64", T.float64, "toFloat64(1.25)", 1.25],
-	["bool", T.bool, "true", true],
+	["string", CH.string, "'hello'", "hello"],
+	["uint8", CH.uint8, "toUInt8(255)", 255],
+	["uint16", CH.uint16, "toUInt16(65535)", 65535],
+	["uint32", CH.uint32, "toUInt32(4294967295)", 4294967295],
+	["uint64", CH.uint64, "toUInt64(9007199254740991)", 9007199254740991],
+	["int32", CH.int32, "toInt32(-2147483648)", -2147483648],
+	["int64", CH.int64, "toInt64(-9007199254740991)", -9007199254740991],
+	["float64", CH.float64, "toFloat64(1.25)", 1.25],
+	["bool", CH.bool, "true", true],
 	[
 		"dateTime",
-		T.dateTime,
+		CH.dateTime,
 		"toDateTime('2026-01-01 00:00:00', 'UTC')",
 		DateTime.makeUnsafe("2026-01-01T00:00:00Z"),
 	],
 	[
 		"dateTime64",
-		T.dateTime64,
+		CH.dateTime64,
 		"toDateTime64('2026-01-01 00:00:00.123', 3, 'UTC')",
 		DateTime.makeUnsafe("2026-01-01T00:00:00.123Z"),
 	],
-	["dateTimeString", T.dateTimeString, "toDateTime('2026-01-01 00:00:00', 'UTC')", "2026-01-01 00:00:00"],
+	["dateTimeString", CH.dateTimeString, "toDateTime('2026-01-01 00:00:00', 'UTC')", "2026-01-01 00:00:00"],
 	[
 		"dateTime64String",
-		T.dateTime64String,
+		CH.dateTime64String,
 		"toDateTime64('2026-01-01 00:00:00.123', 3, 'UTC')",
 		"2026-01-01 00:00:00.123",
 	],
-	["array", T.array(T.nullable(T.int64)), "[toNullable(toInt64(42)), NULL]", [42, null]],
-	["map", T.map(T.string, T.array(T.uint64)), "map('key', [toUInt64(42)])", { key: [42] }],
-	["nullable", T.nullable(T.string), "CAST(NULL AS Nullable(String))", null],
+	["array", CH.array(CH.nullable(CH.int64)), "[toNullable(toInt64(42)), NULL]", [42, null]],
+	["map", CH.map(CH.string, CH.array(CH.uint64)), "map('key', [toUInt64(42)])", { key: [42] }],
+	["nullable", CH.nullable(CH.string), "CAST(NULL AS Nullable(String))", null],
 	// A brand over UInt64 keeps the base codec, so a quoted 64-bit value still decodes.
-	["brand", T.brand(T.uint64, Schema.Number.pipe(Schema.brand("Count"))), "toUInt64(42)", 42],
+	["brand", CH.brand(CH.uint64, Schema.Number.pipe(Schema.brand("Count"))), "toUInt64(42)", 42],
 ] as const
 
 export const typeCases: readonly DialectCase[] = typeFixtures.map(([name, type, sql, expected]) => ({
@@ -739,7 +741,7 @@ export const typeCases: readonly DialectCase[] = typeFixtures.map(([name, type, 
 	covers: [`type:${name}`],
 	build: () =>
 		CH.compileUnsafe(
-			CH.from(CH.table("typed", { value: type }))
+			CH.from(CH.table("typed", { external: true, columns: { value: type } }))
 				.withCTE("typed", `SELECT ${sql} AS value`)
 				.select("value"),
 			{},

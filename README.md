@@ -40,24 +40,27 @@ prereleases are incompatible.
 
 ## Quick start
 
-```ts
-import * as CH from "@maple-dev/effect-orm"
-import * as T from "@maple-dev/effect-orm/types"
+One import per database. Each holds the whole query builder plus that database's column
+types, functions, table definitions, and `compile`:
 
-// 1. Describe a table
-const Events = CH.table(
-	"events",
-	{
-		OrgId: T.string,
-		Name: T.string,
-		Timestamp: T.dateTime,
-		DurationMs: T.uint64,
-		Attributes: T.map(T.string, T.string),
+```ts
+import * as CH from "@maple-dev/effect-orm/clickhouse"
+
+// 1. Describe a table. The engine and sorting key are its DDL, for migrations.
+const Events = CH.table("events", {
+	columns: {
+		OrgId: CH.string,
+		Name: CH.string,
+		Timestamp: CH.dateTime,
+		DurationMs: CH.uint64,
+		Attributes: CH.map(CH.string, CH.string),
 	},
+	engine: CH.engine.mergeTree(),
+	orderBy: ["OrgId", "Timestamp"],
 	// Optional: name the column carrying row-level tenancy and every compiled
 	// query reports whether it pinned it. See docs/tenant-scoping.md.
-	{ tenantColumn: "OrgId" },
-)
+	tenantColumn: "OrgId",
+})
 
 // 2. Build a query
 const query = CH.from(Events)
@@ -81,8 +84,38 @@ const compiled = CH.compileUnsafe(query, {
 	startTime: "2026-01-01 00:00:00",
 })
 
-compiled.sql // -> SELECT Name AS name, quantile(0.95)(DurationMs) AS p95, ...
+compiled.sql // -> SELECT events.Name AS name, quantile(0.95)(events.DurationMs) AS p95, ...
 ```
+
+The same query against Postgres imports only `PG`. Params become `$1`, `$2`, and the functions
+are Postgres's own:
+
+```ts
+import * as PG from "@maple-dev/effect-orm/postgres"
+
+const Requests = PG.table("requests", {
+	columns: {
+		id: PG.column(PG.int8, { identity: "always" }),
+		org_id: PG.text,
+		route: PG.text,
+		duration_ms: PG.int8,
+		at: PG.column(PG.timestamptz, { defaultExpr: "now()" }),
+	},
+	primaryKey: ["id"],
+	tenantColumn: "org_id",
+})
+
+const byRoute = PG.from(Requests)
+	.select(($) => ({ route: $.route, count: PG.count(), p50: PG.percentileCont(0.5, $.duration_ms) }))
+	.where(($) => [$.org_id.eq(PG.param.string("orgId"))])
+	.groupBy("route")
+
+PG.compileUnsafe(byRoute, { orgId: "org_123" }).parameters // -> ["org_123"]
+```
+
+A table that this schema does not own (a system table, a table function, a view) is declared
+with `external: true` and no DDL: `CH.table("system.one", { external: true, columns: {} })`.
+See [Tables and column types](./docs/tables-and-types.md).
 
 ## Decoding results
 
@@ -144,7 +177,7 @@ Full guides live in [`docs/`](./docs/README.md):
 | Guide                                                      | What it covers                                                  |
 | ---------------------------------------------------------- | --------------------------------------------------------------- |
 | [Getting started](./docs/getting-started.md)               | Install, define a table, build → compile → decode               |
-| [Tables and column types](./docs/tables-and-types.md)      | `table()`, column-type constructors, `Map`/`Array`/`Nullable`   |
+| [Tables and column types](./docs/tables-and-types.md)      | `table()`, column options, external tables, column types        |
 | [Building queries](./docs/queries.md)                      | `select`, `where`, `groupBy`, `orderBy`, `limit`, immutability  |
 | [Expressions and conditions](./docs/expressions.md)        | Comparisons, arithmetic, optional predicates, aggregates        |
 | [Joins and subqueries](./docs/joins-and-subqueries.md)     | The join family, `fromQuery`, correlated subqueries             |
@@ -156,6 +189,7 @@ Full guides live in [`docs/`](./docs/README.md):
 | [Running a query](./docs/running-queries.md)               | Executing the SQL with a real client, wire settings, `SETTINGS` |
 | [Tenant scoping](./docs/tenant-scoping.md)                 | `tenantColumn`, what marks a query scoped, `crossTenant()`      |
 | [Postgres](./docs/postgres.md)                             | The Postgres dialect, its column types and functions            |
+| [Schema and migrations](./docs/migrations.md)              | DDL from `table`, `effect-orm generate`, applying migrations    |
 | [Extending the DSL](./docs/extending.md)                   | `defineFn`, raw escape hatches, handwritten SQL                 |
 | [API reference](./docs/reference.md)                       | Full export catalog by module, plus error types                 |
 
@@ -165,29 +199,31 @@ regressions live in [`src/docs-examples.test.ts`](./src/docs-examples.test.ts).
 
 ## Entry points
 
-| Import                               | Contents                                                                                                                                                                                        |
-| ------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `@maple-dev/effect-orm`       | Curated public API: `from`, `compile`, `param`, expression helpers, and ClickHouse functions under friendly names (`min`, `max`, `count`, `quantile`, …).                                       |
-| `@maple-dev/effect-orm/types` | Column-type constructors (`string`, `uint64`, `dateTime`, `map`, `array`, `nullable`, …) and the `CH*` type descriptors.                                                                        |
-| `@maple-dev/effect-orm/expr`  | Kitchen-sink namespace: every expression helper plus all ClickHouse functions under their raw names (`min_`, `toString_`, `toStartOfInterval`, `dynamicColumn`, …). Handy for `import * as CH`. |
-| `@maple-dev/effect-orm/sql`   | The low-level `SqlFragment` AST (`raw`, `ident`, `compile`, …) for hand-rolling fragments.                                                                                                      |
-| `@maple-dev/effect-orm/postgres` | The Postgres dialect: `postgresDialect`, Postgres column types and functions, and a `compile` that defaults to Postgres.                                                                     |
+| Import                              | Contents                                                                                                                                                       |
+| ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `@maple-dev/effect-orm/clickhouse`  | Everything for ClickHouse: the query builder (`from`, `param`, `insertInto`, …), column types (`string`, `uint64`, `map`, …), functions (`count`, `quantile`, …), `table` with its DDL, and `compile`. |
+| `@maple-dev/effect-orm/postgres`    | The same for Postgres: the builder, Postgres column types (`text`, `int8`, `timestamptz`, …) and functions, `table` with keys, indexes and foreign keys, and a `compile` for Postgres. |
+| `@maple-dev/effect-orm/expr`        | Kitchen-sink namespace: every expression helper plus all ClickHouse functions under their raw names (`min_`, `toString_`, `toStartOfInterval`, `dynamicColumn`, …). |
+| `@maple-dev/effect-orm/sql`         | The low-level `SqlFragment` AST (`raw`, `ident`, `compile`, …) for hand-rolling fragments.                                                                    |
+| `@maple-dev/effect-orm/schema`      | Migration tooling over `table` values: DDL rendering, snapshots, the schema diff. Pure.                                                                       |
+| `@maple-dev/effect-orm/kit`, `/migrate` | `effect-orm generate` and `check`; applying migrations through a driver you provide. See [Schema and migrations](./docs/migrations.md).                  |
+| `@maple-dev/effect-orm/database`    | `Database` over your `SqlClient`: `run`, `execute`, `transaction` with retry.                                                                                  |
 
 ## Extending with custom functions
 
 ```ts
 import type { DateTime } from "effect"
-import { defineFn, sameAs } from "@maple-dev/effect-orm"
+import * as CH from "@maple-dev/effect-orm/clickhouse"
 
 // Declare any ClickHouse function not already wrapped. The second argument is
 // the ClickHouse type it returns — required, because that is what lets a query
 // using it still derive its row schema.
-const toStartOfFiveMinute = defineFn<[CH.Expr<DateTime.Utc>], DateTime.Utc>("toStartOfFiveMinute", T.dateTime)
+const toStartOfFiveMinute = CH.defineFn<[CH.Expr<DateTime.Utc>], DateTime.Utc>("toStartOfFiveMinute", CH.dateTime)
 
 // When the result type depends on the arguments — `min`, `argMax`, `coalesce`,
 // `arrayJoin` all hand back one of their inputs — pass a rule instead:
 // `sameAs(i)`, `firstTyped()`, `elementOf(i)`, `arrayOfArg(i)`.
-const anyLast = defineFn<[CH.Expr<string>], string>("anyLast", sameAs(0))
+const anyLast = CH.defineFn<[CH.Expr<string>], string>("anyLast", CH.sameAs(0))
 ```
 
 ## Validation
@@ -216,4 +252,4 @@ MIT
 The optional `@maple-dev/effect-orm/benchmark` entry point and bundled
 `ch-bench` CLI measure real queries, compare fixed workloads, and save evidence.
 See [Benchmarking](docs/benchmarking.md) and the
-[agent playbook](docs/benchmark-agent.md). The root SQL builder remains driver-free.
+[agent playbook](docs/benchmark-agent.md). The `/clickhouse` and `/postgres` builders remain driver-free.

@@ -1,6 +1,6 @@
 // Schema definitions: tables and materialized views that carry their DDL.
 //
-// `defineTable` returns a value that IS a `Table`, so every query API accepts it
+// `table` (`defineTable` here) returns a value that IS a `Table`, so every query API accepts it
 // unchanged; the DDL rides beside it on `ddl`, already normalized into
 // entities. Expressions (keys, TTL, defaults, index and view bodies) are
 // written with the query DSL and rendered once, here, with the ClickHouse
@@ -14,7 +14,7 @@ import { clickhouseDialect, withDialect } from "../ch/dialect"
 import type { Expr } from "../ch/expr"
 import { encodeColumnLiteral } from "../ch/literal"
 import { createColumnAccessor, type CHQuery, type ColumnAccessor, type NeedsSelect } from "../ch/query"
-import type { Table } from "../ch/table"
+import { table, type Table } from "../ch/table"
 import type { CHType, ColumnDefs, InferTS } from "../ch/types"
 import { compile as compileFragment } from "../sql/sql-fragment"
 import type {
@@ -191,11 +191,50 @@ export interface TableDefinition<Columns extends Record<string, ColumnInput>> {
 	readonly settings?: Readonly<Record<string, string | number>>
 	readonly indexes?: ReadonlyArray<IndexSpec<ColumnsOf<Columns>>>
 	readonly comment?: string
-	/** As for `table()`: the column carrying row-level tenancy. */
+	/** The column carrying row-level tenancy; see docs/tenant-scoping.md. */
 	readonly tenantColumn?: keyof Columns & string
 }
 
-/** The DDL a `defineTable` value carries, as entities. */
+/**
+ * A table this schema does not own: a system table (`system.one`), a table
+ * function (`numbers(10)`), a subquery, or a table another tool migrates. It
+ * queries like any table but carries no DDL, so `generate` never touches it,
+ * and its name is written verbatim as the FROM target.
+ */
+export interface ExternalTableDefinition<Columns extends Record<string, ColumnInput>> {
+	readonly external: true
+	readonly columns: Columns
+	readonly tenantColumn?: keyof Columns & string
+}
+
+/**
+ * The query-side `Table` of an external definition. Column options still say
+ * which columns an insert may leave out or may not write; nothing is rendered.
+ */
+export const externalTable = <const Name extends string>(
+	name: Name,
+	definition: { readonly columns: Record<string, unknown>; readonly tenantColumn?: string },
+	isSpec: (input: unknown) => input is { readonly type: CHType<string, any, any>; readonly options: object },
+	computedOptions: ReadonlyArray<string>,
+): Table<Name, any, any, any> => {
+	const inputs = Object.entries(definition.columns)
+	const specs = inputs.filter((entry): entry is [string, { readonly type: CHType<string, any, any>; readonly options: object }] =>
+		isSpec(entry[1]),
+	)
+	const isComputed = (options: object) => computedOptions.some((key) => (options as Record<string, unknown>)[key] !== undefined)
+	const given = (options: object) => Object.values(options).some((value) => value !== undefined)
+	return table(
+		name,
+		Object.fromEntries(inputs.map(([column, input]) => [column, isSpec(input) ? input.type : input])) as ColumnDefs,
+		{
+			...(definition.tenantColumn !== undefined ? { tenantColumn: definition.tenantColumn } : undefined),
+			defaults: specs.filter(([, spec]) => given(spec.options) && !isComputed(spec.options)).map(([column]) => column),
+			computed: specs.filter(([, spec]) => isComputed(spec.options)).map(([column]) => column),
+		},
+	)
+}
+
+/** The DDL a ClickHouse `table` value carries, as entities. */
 export interface TableDdl {
 	readonly table: TableEntity
 	readonly columns: ReadonlyArray<ColumnEntity>
@@ -256,13 +295,28 @@ const columnDefault = (
 }
 
 /**
- * A table with its DDL. Usable everywhere a `table()` is; `generate` reads its
+ * A table with its DDL, published as `table` from `/clickhouse`. The value IS a
+ * query `Table`, so every query API accepts it; `generate` reads its
  * `ddl` to produce migrations.
  */
 export function defineTable<const Name extends string, const Columns extends Record<string, ColumnInput>>(
 	name: Name,
+	definition: ExternalTableDefinition<Columns>,
+): Table<Name, ColumnsOf<Columns>, DefaultedColumnsOf<Columns>, ComputedColumnsOf<Columns>>
+export function defineTable<const Name extends string, const Columns extends Record<string, ColumnInput>>(
+	name: Name,
 	definition: TableDefinition<Columns>,
-): SchemaTable<Name, ColumnsOf<Columns>, DefaultedColumnsOf<Columns>, ComputedColumnsOf<Columns>> {
+): SchemaTable<Name, ColumnsOf<Columns>, DefaultedColumnsOf<Columns>, ComputedColumnsOf<Columns>>
+export function defineTable<const Name extends string, const Columns extends Record<string, ColumnInput>>(
+	name: Name,
+	definition: TableDefinition<Columns> | ExternalTableDefinition<Columns>,
+): SchemaTable<Name, ColumnsOf<Columns>, DefaultedColumnsOf<Columns>, ComputedColumnsOf<Columns>> | Table<Name, any, any, any> {
+	if ("external" in definition) {
+		return externalTable(name, definition, (input): input is ColumnSpec<CHType<string, any, any>> => isColumnSpec(input as ColumnInput), [
+			"materialized",
+			"alias",
+		])
+	}
 	assertIdentifier(name, name)
 	const inputs = Object.entries(definition.columns)
 	if (inputs.length === 0) throw new SchemaDefinitionDefect({ object: name, message: "a table needs columns" })

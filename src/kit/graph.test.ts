@@ -1,12 +1,12 @@
 import { Effect } from "effect"
 import { describe, expect, it } from "vitest"
-import * as CH from "../ch/index"
+import * as CH from "../clickhouse"
 import { fromRecord, type MigrationInput } from "../migrate/source"
 import * as S from "../schema"
 import { analyze } from "./graph"
 
-const table = (name: string, extra: Record<string, S.ColumnInput> = {}) =>
-	S.defineTable(name, { columns: { Id: CH.string, ...extra }, engine: S.engine.mergeTree(), orderBy: ["Id"] })
+const table = (name: string, extra: Record<string, CH.ColumnInput> = {}) =>
+	CH.table(name, { columns: { Id: CH.string, ...extra }, engine: CH.engine.mergeTree(), orderBy: ["Id"] })
 
 const input = (objects: ReadonlyArray<S.SchemaObject>, prevIds: ReadonlyArray<string>) =>
 	Effect.map(S.makeSnapshot(S.entitiesOf(objects), prevIds), (snapshot) => ({

@@ -145,7 +145,7 @@ export interface Dialect extends SqlSyntax {
 	readonly transactions?: DialectTransactions
 	/**
 	 * Which built-in function set renders correctly here: `clickhouse` (the
-	 * root entry's functions) or `postgres` (`@maple-dev/effect-orm/postgres`).
+	 * `/clickhouse` entry's functions) or `postgres` (`@maple-dev/effect-orm/postgres`).
 	 * A built-in function from another set fails to compile. Absent means
 	 * unchecked: a custom dialect says which set it renders, if either.
 	 */

@@ -7,17 +7,17 @@ import { runCli } from "../kit"
 const src = resolve(import.meta.dirname, "..")
 
 const schemaModule = (extra: { column?: boolean; dropName?: boolean } = {}) => `
-import * as CH from "${src}/ch/index"
+import * as CH from "${src}/clickhouse"
 import * as S from "${src}/schema"
 
-export const Events = S.defineTable("events", {
+export const Events = CH.table("events", {
 	columns: {
 		OrgId: CH.string,
 		Timestamp: CH.dateTime64,
 		${extra.dropName === true ? "" : "Name: CH.string,"}
-		${extra.column === true ? 'Env: S.column(CH.string, { default: "" }),' : ""}
+		${extra.column === true ? 'Env: CH.column(CH.string, { default: "" }),' : ""}
 	},
-	engine: S.engine.mergeTree(),
+	engine: CH.engine.mergeTree(),
 	orderBy: ["OrgId", "Timestamp"],
 })
 `
@@ -104,15 +104,15 @@ describe("effect-orm CLI", () => {
 import * as PG from "${src}/postgres"
 import * as S from "${src}/schema"
 
-export const Dashboards = S.pg.table("dashboards", {
+export const Dashboards = PG.table("dashboards", {
 	columns: {
 		org_id: PG.text,
 		id: PG.text,
-		status: S.pg.column(PG.text, { default: "open" }),
+		status: PG.column(PG.text, { default: "open" }),
 		${extra.owner === true ? "owner: PG.nullable(PG.text)," : ""}
 	},
 	primaryKey: { columns: ["org_id", "id"], name: "dashboards_org_id_id_pk" },
-	indexes: [S.pg.index("dashboards_open_idx", ["org_id"], { where: "status = 'open'" })],
+	indexes: [PG.index("dashboards_open_idx", ["org_id"], { where: "status = 'open'" })],
 })
 `
 		const pgConfig = (schema: string, name = "effect-orm.config.ts") =>
