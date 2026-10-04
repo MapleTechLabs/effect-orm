@@ -96,3 +96,64 @@ run(CH.update(Orders).set({ Amount: 1 }).where(($) => [$.Id.eq("a")]))
 run(CH.deleteFrom(Orders).allRows())
 // @ts-expect-error -- INSERT ... SELECT from a query with no SELECT list
 CH.insertInto(CH.table("t", { a: CH.nullable(CH.string) })).select(CH.from(Users))
+
+// Params: a query's `param.*` placeholders are in its type, and compile / run
+// require them, with values of their types.
+const byId = CH.from(Users)
+	.select("Id")
+	.where(($) => [$.Id.eq(CH.param.string("id"))])
+	.where(($) => [$.Age.between(CH.param.int("minAge"), 99)])
+CH.compileUnsafe(byId, { id: "a", minAge: 1 })
+CH.compileUnsafe(byId, { id: "a", minAge: 1, unrelated: true })
+// @ts-expect-error -- `minAge` is missing
+CH.compileUnsafe(byId, { id: "a" })
+// @ts-expect-error -- `id` is a string param
+CH.compileUnsafe(byId, { id: 1, minAge: 1 })
+// @ts-expect-error -- no params at all
+CH.compileUnsafe(byId)
+// @ts-expect-error -- run checks them too
+run(byId, {})
+run(byId, { id: "a", minAge: 1 })
+CH.compileUnsafe(CH.from(Users).select("Id"))
+
+// Through and/or/not, select, having, joins, subqueries in FROM, unions
+const combined = CH.from(Users)
+	.innerJoin(Orders, "o", (u, o) => u.Id.eq(o.UserId).and(o.Amount.gt(CH.param.int("minAmount"))))
+	.select(($) => ({ Id: $.Id, scaled: $.Age.mul(CH.param.float("scale")) }))
+	.where(($) => [CH.or($.Name.eq(CH.param.string("name")), CH.not($.Nick.isNull()))])
+// @ts-expect-error -- needs minAmount, scale and name
+CH.compileUnsafe(combined, { minAmount: 1, scale: 2 })
+CH.compileUnsafe(combined, { minAmount: 1, scale: 2, name: "n" })
+const outer = CH.fromQuery(byId, "b").select("Id")
+// @ts-expect-error -- the subquery's params are the outer query's
+CH.compileUnsafe(outer, {})
+const both = CH.unionAll(byId, CH.from(Users).select("Id").where(($) => [$.Name.eq(CH.param.string("name"))]))
+// @ts-expect-error -- every branch's params
+CH.compileUnionUnsafe(both, { id: "a", minAge: 1 })
+CH.compileUnionUnsafe(both, { id: "a", minAge: 1, name: "n" })
+
+// A DateTime param takes a Date or a string as well
+const Events = CH.table("events", { At: CH.dateTime64 })
+CH.compileUnsafe(CH.from(Events).select("At").where(($) => [$.At.gte(CH.param.dateTime("since"))]), {
+	since: new Date(),
+})
+
+// Writes
+const ins = CH.insertInto(Orders).values({ Id: CH.param.string("id"), UserId: "u", Amount: 1 })
+// @ts-expect-error -- `id` is missing
+CH.compileUnsafe(ins, {})
+CH.compileUnsafe(ins, { id: "x" })
+// @ts-expect-error -- not a column of the table
+CH.insertInto(Orders).values({ Id: "a", UserId: "u", Amount: 1, Bogus: 1 })
+const upd = CH.update(Orders)
+	.set({ Amount: CH.param.int("amount") })
+	.where(($) => [$.Id.eq(CH.param.string("id"))])
+// @ts-expect-error -- `amount` is missing
+run(upd, { id: "a" })
+run(upd, { id: "a", amount: 1 })
+// @ts-expect-error -- not a column of the table
+CH.update(Orders).set({ Bogus: 1 }).allRows()
+const del = CH.deleteFrom(Orders).where(($) => [$.Id.eq(CH.param.string("id"))])
+// @ts-expect-error -- `id` is missing
+run(del)
+run(del, { id: "a" })

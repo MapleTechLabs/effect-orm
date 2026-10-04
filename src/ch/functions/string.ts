@@ -2,7 +2,7 @@ import { acceptsSqlNull } from "../define-fn"
 import { Schema } from "effect"
 import { makeCond } from "../expr"
 import { compile, str } from "../../sql/sql-fragment"
-import type { Condition, Expr } from "../expr"
+import type { Condition, Expr, ParamsIn } from "../expr"
 import * as T from "../types"
 import { builtins } from "./builtin"
 
@@ -11,12 +11,12 @@ const portable = builtins("portable", "scalar")
 
 // Standard string functions (defineFn one-liners)
 
-const stringResult = <A>(name: string, expr: Expr<A>): Expr<string | Extract<A, null>> =>
+const stringResult = <A, Q>(name: string, expr: Expr<A, Q>): Expr<string | Extract<A, null>, Q> =>
 	compileTypedFnCall(name,
 		(expr.schema && acceptsSqlNull(expr.schema) ? Schema.NullOr(T.string.schema) : T.string.schema) as Schema.Codec<string | Extract<A, null>, any>,
 		expr)
 
-export const toString_ = <A>(expr: Expr<A>): Expr<string | Extract<A, null>> => stringResult("toString", expr)
+export const toString_ = <A, Q = never>(expr: Expr<A, Q>): Expr<string | Extract<A, null>, Q> => stringResult("toString", expr)
 export const length_ = defineFn<[Expr<string>], number>("length", T.uint64)
 export const lower_ = portable.defineFn<[Expr<string>], string>("lower", T.string)
 export const positionCaseInsensitive = defineFn<[Expr<string>, Expr<string>], number>(
@@ -36,7 +36,7 @@ export const left_ = defineFn<[Expr<string>, Expr<number>], string>("left", T.st
 
 /** `hex(x)` — the hex rendering of any value's bytes, as a String. The usual
  *  reason to reach for it is making a hash printable. */
-export const hex = <A>(expr: Expr<A>): Expr<string | Extract<A, null>> => stringResult("hex", expr)
+export const hex = <A, Q = never>(expr: Expr<A, Q>): Expr<string | Extract<A, null>, Q> => stringResult("hex", expr)
 
 export const domain_ = defineFn<[Expr<string>], string>("domain", T.string)
 export const path_ = defineFn<[Expr<string>], string>("path", T.string)
@@ -44,15 +44,15 @@ export const cutQueryString = defineFn<[Expr<string>], string>("cutQueryString",
 
 // Mixed Expr + literal args (compileFnCall wrappers)
 
-export function position_(haystack: Expr<string>, needle: string): Expr<number> {
+export function position_<Q = never>(haystack: Expr<string, Q>, needle: string): Expr<number, Q> {
 	return compileTypedFnCall<number>("position", T.uint64.schema, haystack, needle)
 }
 
-export function extract_(expr: Expr<string>, pattern: string): Expr<string> {
+export function extract_<Q = never>(expr: Expr<string, Q>, pattern: string): Expr<string, Q> {
 	return compileTypedFnCall<string>("extract", T.string.schema, expr, pattern)
 }
 
-export function replaceOne(haystack: Expr<string>, pattern: string, replacement: string): Expr<string> {
+export function replaceOne<Q = never>(haystack: Expr<string, Q>, pattern: string, replacement: string): Expr<string, Q> {
 	return compileTypedFnCall<string>("replaceOne", T.string.schema, haystack, pattern, replacement)
 }
 
@@ -64,18 +64,18 @@ export function replaceOne(haystack: Expr<string>, pattern: string, replacement:
  * where a predicate is wanted, so the SQL reads as a condition rather than
  * `match(…) = 1`.
  */
-export function match_(haystack: Expr<string>, pattern: string): Expr<number> {
+export function match_<Q = never>(haystack: Expr<string, Q>, pattern: string): Expr<number, Q> {
 	return compileTypedFnCall<number>("match", T.uint8.schema, haystack, pattern)
 }
 
 /** `match(haystack, pattern)` as a predicate — see {@link match_}. */
-export function matchCond(haystack: Expr<string>, pattern: string): Condition {
+export function matchCond<Q = never>(haystack: Expr<string, Q>, pattern: string): Condition<Q> {
 	return makeCond(lazy(() => `match(${compile(haystack.toFragment())}, ${compile(str(pattern))})`))
 }
 
 // Variadic string functions
 
-export function concat(...exprs: Array<Expr<string> | string>): Expr<string> {
+export function concat<const Args extends Array<Expr<string> | string>>(...exprs: Args): Expr<string, ParamsIn<Args[number]>> {
 	return compileTypedFnCall<string>("concat", T.string.schema, ...exprs)
 }
 
@@ -92,17 +92,17 @@ export function concat(...exprs: Array<Expr<string> | string>): Expr<string> {
  * Needles are literals by design — the multi-search family requires a constant
  * array, so there is no expression-valued overload to offer.
  */
-export function multiSearchAnyCaseInsensitive(haystack: Expr<string>, needles: readonly string[]): Condition {
+export function multiSearchAnyCaseInsensitive<Q = never>(haystack: Expr<string, Q>, needles: readonly string[]): Condition<Q> {
 	const array = needles.map((needle) => compile(str(needle))).join(", ")
 	return makeCond(lazy(() => `multiSearchAnyCaseInsensitive(${compile(haystack.toFragment())}, [${array}])`))
 }
 
-export function hasToken(haystack: Expr<string>, token: Expr<string> | string): Condition {
+export function hasToken<Q1 = never, Q2 = never>(haystack: Expr<string, Q1>, token: Expr<string, Q2> | string): Condition<Q1 | Q2> {
 	const call = compileFnCall<boolean>("hasToken", haystack, token)
 	return makeCond(call.toFragment())
 }
 
-export function hasAllTokens(haystack: Expr<string>, tokens: Expr<string> | string): Condition {
+export function hasAllTokens<Q1 = never, Q2 = never>(haystack: Expr<string, Q1>, tokens: Expr<string, Q2> | string): Condition<Q1 | Q2> {
 	const call = compileFnCall<boolean>("hasAllTokens", haystack, tokens)
 	return makeCond(call.toFragment())
 }

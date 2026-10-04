@@ -513,6 +513,7 @@ describe("compile puts failures in the error channel", () => {
 	// than a typed failure anyone could map to a 400.
 	it.effect("a missing param value is a typed failure", () =>
 		Effect.gen(function* () {
+			// @ts-expect-error -- a missing param is a type error too
 			const error = yield* Effect.flip(CH.compile(query, {}))
 			expect(error._tag).toBe("@maple-dev/effect-orm/QueryBuilderError")
 			expect(error.code).toBe("UnresolvedParam")

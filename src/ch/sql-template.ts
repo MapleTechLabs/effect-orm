@@ -24,9 +24,10 @@
 import { DateTime } from "effect"
 import { currentDialect } from "./dialect"
 import { QueryBuilderError } from "./errors"
-import { type Condition, type Expr, isExprLike, makeCond, makeExpr, makeUntypedExpr, toFragment } from "./expr"
+import { type Condition, type Expr, isExprLike, makeCond, makeExpr, makeUntypedExpr, type ParamsIn, toFragment } from "./expr"
 import { compileCHUnsafe } from "./compile"
 import type { CHQuery } from "./query"
+import type { QueryParams } from "./union"
 import { renderSubquery } from "./subquery-context"
 import type { CHType } from "./types"
 import { compile, lazy, quoteIdentPath, type SqlFragment } from "../sql/sql-fragment"
@@ -153,21 +154,30 @@ const renderValueRaw = (value: unknown): string => {
 const fragmentOf = (strings: ReadonlyArray<string>, values: ReadonlyArray<unknown>): SqlFragment =>
 	lazy(() => `(${strings.reduce((text, part, index) => (index === 0 ? part : text + renderValue(values[index - 1]) + part), "")})`)
 
-type Tag<A> = (strings: TemplateStringsArray, ...values: ReadonlyArray<SqlTemplateValue>) => A
+/** The params of interpolated values: an expression's, a condition's, or a subquery's. */
+type ValueParams<V> = ParamsIn<V> | QueryParams<V>
+
+type Tag<Kind extends "expr" | "cond", T = unknown> = <const V extends ReadonlyArray<SqlTemplateValue>>(
+	strings: TemplateStringsArray,
+	...values: V
+) => Kind extends "cond" ? Condition<ValueParams<V[number]>> : Expr<T, ValueParams<V[number]>>
 
 export interface SqlTag {
 	/**
 	 * An expression of `type`: `CH.sql(PG.text)\`...\``. The type decodes the
 	 * value when it is selected, so the query keeps its row schema.
 	 */
-	<T>(type: CHType<string, T, any>): Tag<Expr<T>>
+	<T>(type: CHType<string, T, any>): Tag<"expr", T>
 	/**
 	 * An expression with no declared type. Selecting one costs the query its row
 	 * schema, as `untypedExpr` does; give a type where the value is selected.
 	 */
-	(strings: TemplateStringsArray, ...values: ReadonlyArray<SqlTemplateValue>): Expr<unknown>
+	<const V extends ReadonlyArray<SqlTemplateValue>>(
+		strings: TemplateStringsArray,
+		...values: V
+	): Expr<unknown, ValueParams<V[number]>>
 	/** A condition, for `where`, `having`, a join's ON, or `CH.and` / `CH.or`. */
-	readonly cond: Tag<Condition>
+	readonly cond: Tag<"cond">
 	/** SQL text spliced as-is. Only for text under your control, never for input. */
 	readonly raw: (sql: string) => SqlRaw
 	/** A table or column name, quoted by the dialect. Plain names only, dotted for `schema.table`. */
@@ -177,7 +187,10 @@ export interface SqlTag {
 	 * interpolation is. Not parenthesized, so it fits a list: `IN (${sql.join(xs)})`.
 	 * An empty list fails the compile, since `IN ()` is not SQL.
 	 */
-	readonly join: (values: ReadonlyArray<SqlTemplateValue>, separator?: string) => Expr<unknown>
+	readonly join: <const V extends ReadonlyArray<SqlTemplateValue>>(
+		values: V,
+		separator?: string,
+	) => Expr<unknown, ValueParams<V[number]>>
 }
 
 const isTemplateStrings = (value: unknown): value is TemplateStringsArray =>
@@ -195,11 +208,11 @@ export const sql: SqlTag = Object.assign(
 			makeExpr(fragmentOf(strings, inner), type.schema)
 	},
 	{
-		cond: (strings: TemplateStringsArray, ...values: ReadonlyArray<SqlTemplateValue>): Condition =>
+		cond: (strings: TemplateStringsArray, ...values: ReadonlyArray<SqlTemplateValue>): Condition<any> =>
 			makeCond(fragmentOf(strings, values)),
 		raw: (text: string): SqlRaw => mint({ _tag: RawTag, sql: text }),
 		ident: (name: string): SqlIdent => mint({ _tag: IdentTag, name }),
-		join: (values: ReadonlyArray<SqlTemplateValue>, separator = ", "): Expr<unknown> =>
+		join: (values: ReadonlyArray<SqlTemplateValue>, separator = ", "): Expr<unknown, any> =>
 			makeUntypedExpr(
 				lazy(() => {
 					if (values.length === 0) {

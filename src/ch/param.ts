@@ -7,7 +7,7 @@
 import { type DateTime, Schema } from "effect"
 import type { SqlFragment } from "../sql/sql-fragment"
 import { raw } from "../sql/sql-fragment"
-import type { Expr } from "./expr"
+import type { Comparable, Expr, ParamEntry } from "./expr"
 import { QueryBuilderDefect } from "./errors"
 import * as T from "./types"
 import type { CHType } from "./types"
@@ -63,7 +63,13 @@ function assertValidParamName(name: string): void {
 
 // Param marker — used during query definition (before compilation)
 
-export interface ParamMarker<N extends string, T> extends Expr<T> {
+/**
+ * What a param named in a query is filled with: a value of its type, and for a
+ * DateTime param a `Date` or a `'YYYY-MM-DD hh:mm:ss'` string as well.
+ */
+export type ParamValue<T> = Comparable<T>
+
+export interface ParamMarker<N extends string, T> extends Expr<T, ParamEntry<N, ParamValue<T>>> {
 	readonly _paramName: N
 	readonly _paramType?: T
 }

@@ -82,6 +82,7 @@ describe("subquery source scope", () => {
 	it.effect("keeps deferred failures typed and restores compilation context", () => Effect.gen(function* () {
 		const predicate = CH.subqueryExpr(scopedCount, T.uint64).gt(0)
 		const query = outer.select("Id").having(() => [predicate])
+		// @ts-expect-error -- a missing param is a type error too
 		const result = yield* CH.compile(query, { outer: "a" }).pipe(Effect.result)
 		expect(result._tag).toBe("Failure")
 		if (result._tag === "Failure") expect(result.failure.code).toBe("UnresolvedParam")

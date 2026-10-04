@@ -17,7 +17,7 @@ import { compile, known, type SqlFragment } from "../../sql/sql-fragment"
 import { hidden, inAggregate } from "../../sql/render-tracker"
 import { activeDialect } from "../dialect"
 import { QueryBuilderDefect } from "../errors"
-import { type Condition, type Expr, makeCond, makeExpr, makeUntypedExpr, toFragment } from "../expr"
+import { type Condition, type Expr, makeCond, makeExpr, makeUntypedExpr, type ParamsIn, toFragment } from "../expr"
 import type { FnResult } from "../define-fn"
 
 export type FunctionSet = "clickhouse" | "postgres"
@@ -54,20 +54,27 @@ export function builtins(set: FunctionSet | "portable", kind: BuiltinKind) {
 	const call = (name: string, args: ReadonlyArray<unknown>): SqlFragment =>
 		lazy(() => `${name}(${args.map((a) => compile(toFragment(a))).join(", ")})`, name)
 
-	function compileTypedFnCall<R>(name: string, schema: Schema.Codec<R, unknown> | undefined, ...args: unknown[]): Expr<R> {
+	// The call helpers leave params to the signature of the function that uses
+	// them (`any` here); `defineFn` and `defineCondFn` carry their arguments'
+	// params on to their result.
+
+	function compileTypedFnCall<R>(name: string, schema: Schema.Codec<R, unknown> | undefined, ...args: unknown[]): Expr<R, any> {
 		return makeExpr<R>(call(name, args), schema)
 	}
 
-	function compileFnCall<R>(name: string, ...args: unknown[]): Expr<R> {
+	function compileFnCall<R>(name: string, ...args: unknown[]): Expr<R, any> {
 		return makeUntypedExpr<R>(call(name, args))
 	}
 
-	function compileFnCallCond(name: string, ...args: unknown[]): Condition {
+	function compileFnCallCond(name: string, ...args: unknown[]): Condition<any> {
 		return makeCond(call(name, args))
 	}
 
-	function defineFn<Args extends unknown[], R>(name: string, result: FnResult<Args, R>): (...args: Args) => Expr<R> {
-		return (...args: Args): Expr<R> =>
+	function defineFn<Args extends unknown[], R>(
+		name: string,
+		result: FnResult<Args, R>,
+	): <A extends Args>(...args: A) => Expr<R, ParamsIn<A[number]>> {
+		return <A extends Args>(...args: A) =>
 			compileTypedFnCall<R>(
 				name,
 				typeof result === "function" ? result(...args) : (result.schema as Schema.Codec<R, unknown>),
@@ -75,8 +82,8 @@ export function builtins(set: FunctionSet | "portable", kind: BuiltinKind) {
 			)
 	}
 
-	function defineCondFn<Args extends unknown[]>(name: string): (...args: Args) => Condition {
-		return (...args: Args): Condition => compileFnCallCond(name, ...args)
+	function defineCondFn<Args extends unknown[]>(name: string): <A extends Args>(...args: A) => Condition<ParamsIn<A[number]>> {
+		return <A extends Args>(...args: A) => compileFnCallCond(name, ...args)
 	}
 
 	return { lazy, compileTypedFnCall, compileFnCall, compileFnCallCond, defineFn, defineCondFn }

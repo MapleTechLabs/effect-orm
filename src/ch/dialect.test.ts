@@ -120,9 +120,11 @@ describe("dialect params", () => {
 	})
 
 	it("still fails a missing or ill-typed param at compile time", () => {
+		// @ts-expect-error -- a missing param is a type error too
 		expect(() => compileCHUnsafe(byService, { orgId: "org_1" }, { dialect: numbered })).toThrow(
 			/no value given for param 'service'/,
 		)
+		// @ts-expect-error -- a mistyped param is a type error too
 		expect(() => compileCHUnsafe(byService, { orgId: 1, service: "api" }, { dialect: numbered })).toThrow(
 			/param 'orgId'/,
 		)

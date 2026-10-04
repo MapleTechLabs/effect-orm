@@ -443,6 +443,7 @@ describe("param resolution", () => {
 		const q = CH.from(TestTable)
 			.select(($) => ({ id: $.Id }))
 			.where(($) => [$.Id.eq(CH.param.string("orgId"))])
+		// @ts-expect-error -- a missing param is a type error too
 		expect(() => compileCHUnsafe(q, {})).toThrow(/no value given for param 'orgId'/)
 	})
 
@@ -450,6 +451,7 @@ describe("param resolution", () => {
 		const q = CH.from(TestTable)
 			.select(($) => ({ id: $.Id }))
 			.where(($) => [$.Id.eq(CH.param.string("orgId"))])
+		// @ts-expect-error -- a mistyped param is a type error too
 		expect(() => compileCHUnsafe(q, { orgId: 42 })).toThrow(/param 'orgId' \(string\).*Expected string/)
 	})
 
@@ -464,6 +466,7 @@ describe("param resolution", () => {
 		const q = CH.from(TestTable)
 			.select(($) => ({ id: $.Id }))
 			.where(($) => [$.Id.eq(CH.param.string("orgId"))])
+		// @ts-expect-error -- a mistyped param is a type error too
 		expect(() => compileCHUnsafe(q, { orgId: undefined })).toThrow(/undefined is not a valid value/)
 	})
 

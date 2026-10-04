@@ -13,10 +13,10 @@
 //   })
 //   yield* Database.run(insert, { id, orgId })
 
-import type { Comparable, Condition, Expr, Widen } from "./expr"
+import type { Comparable, Condition, Expr, ParamsIn, Widen } from "./expr"
 import type { CHQuery, ColumnAccessor, InferOutput, NeedsSelect } from "./query"
 import type { Table } from "./table"
-import type { CHUnionQuery } from "./union"
+import type { CHUnionQuery, QueryParams } from "./union"
 import type { CHType, ColumnDefs, InferTS } from "./types"
 
 /**
@@ -134,7 +134,29 @@ export interface OnConflictDoNothing<Cols extends ColumnDefs> {
 	readonly targetWhere?: ($: ColumnAccessor<Cols>) => Condition
 }
 
-export interface OnConflictDoUpdate<Cols extends ColumnDefs, Computed extends string = never> {
+/**
+ * `unknown` when a row or SET record names only columns of the table;
+ * otherwise a property naming the others. Needed where the record's type is
+ * inferred (to read its params), since inference lets extra keys through.
+ */
+export type OnlyColumns<R, Allowed extends PropertyKey> = [R] extends [never]
+	? { readonly atLeastOneRow: "values() needs a row" }
+	: [Exclude<keyof R, Allowed>] extends [never]
+		? unknown
+		: { readonly notWritableColumns: Exclude<keyof R, Allowed> }
+
+/** The columns an insert or update may write: every column but the computed ones. */
+export type WritableColumns<Cols extends ColumnDefs, Computed extends string> = Exclude<keyof Cols & string, Known<Computed>>
+
+/** The params of the values in a record (a row, a SET), or an array of them. */
+export type RecordParams<R> = R extends ReadonlyArray<infer E> ? ParamsIn<E[keyof E]> : ParamsIn<R[keyof R]>
+
+export interface OnConflictDoUpdate<
+	Cols extends ColumnDefs,
+	Computed extends string = never,
+	S extends ConflictSet<Cols, Computed> = ConflictSet<Cols, Computed>,
+	W = never,
+> {
 	/** Required: Postgres must know which index the update is for. */
 	readonly target: ConflictTarget<Cols>
 	readonly targetWhere?: ($: ColumnAccessor<Cols>) => Condition
@@ -144,16 +166,16 @@ export interface OnConflictDoUpdate<Cols extends ColumnDefs, Computed extends st
 	 * `(($, excluded) => ({ count: $.count.add(excluded.count) }))`.
 	 */
 	readonly set:
-		| ConflictSet<Cols, Computed>
-		| (($: ColumnAccessor<Cols>, excluded: ColumnAccessor<Cols>) => ConflictSet<Cols, Computed>)
+		| (S & OnlyColumns<S, WritableColumns<Cols, Computed>>)
+		| (($: ColumnAccessor<Cols>, excluded: ColumnAccessor<Cols>) => S & OnlyColumns<S, WritableColumns<Cols, Computed>>)
 	/** Update only the existing rows this holds for; the others are skipped. */
-	readonly where?: ($: ColumnAccessor<Cols>, excluded: ColumnAccessor<Cols>) => Condition
+	readonly where?: ($: ColumnAccessor<Cols>, excluded: ColumnAccessor<Cols>) => Condition<W>
 }
 
 /** @internal — what an insert does on conflict. */
 export type ConflictClause =
 	| ({ readonly action: "nothing" } & OnConflictDoNothing<any>)
-	| ({ readonly action: "update" } & OnConflictDoUpdate<any, any>)
+	| ({ readonly action: "update" } & OnConflictDoUpdate<any, any, any, any>)
 
 /** @internal — runtime insert state */
 export interface CHInsertState {
@@ -175,21 +197,22 @@ export interface CHInsert<
 	Defaulted extends string = never,
 	Computed extends string = never,
 	Output = never,
+	Params = never,
 > {
 	readonly _tag: "CHInsert"
 	/** @internal — runtime insert state */
 	readonly _state: CHInsertState
 	/** phantom. `output` is the row `Database.run` returns: none without RETURNING. */
-	readonly _phantom?: { readonly cols: Cols; readonly output: Output }
+	readonly _phantom?: { readonly cols: Cols; readonly output: Output; readonly params: (entries: Params) => void }
 
 	/**
 	 * The rows to insert: one row or an array. Calling it again replaces the
 	 * rows. Columns are written in table order whatever the key order, and a
 	 * column some rows leave out is written as `DEFAULT` in those rows.
 	 */
-	values(
-		rows: InsertRow<Cols, Defaulted, Computed> | ReadonlyArray<InsertRow<Cols, Defaulted, Computed>>,
-	): CHInsert<Cols, Defaulted, Computed, Output>
+	values<const R extends InsertRow<Cols, Defaulted, Computed>>(
+		rows: (R | ReadonlyArray<R>) & OnlyColumns<R, WritableColumns<Cols, Computed>>,
+	): CHInsert<Cols, Defaulted, Computed, Output, Params | ParamsIn<R[keyof R]>>
 
 	/**
 	 * `INSERT ... SELECT`: insert the rows a query (or union) selects. Each
@@ -199,7 +222,7 @@ export interface CHInsert<
 	 */
 	select<Q extends CHQuery<any, any, any, any> | CHUnionQuery<any>>(
 		query: Q & SelectFits<SelectedRow<Q>, Cols, Defaulted, Computed> & NeedsSelect<SelectedRow<Q>>,
-	): CHInsert<Cols, Defaulted, Computed, Output>
+	): CHInsert<Cols, Defaulted, Computed, Output, Params | QueryParams<Q>>
 
 	/**
 	 * ClickHouse `SETTINGS` for this insert, such as
@@ -207,7 +230,7 @@ export interface CHInsert<
 	 * identifiers; values are written as literals. Calling it again replaces
 	 * them. On a dialect without insert settings (Postgres) compiling is a defect.
 	 */
-	settings(settings: Readonly<Record<string, InsertSettingValue>>): CHInsert<Cols, Defaulted, Computed, Output>
+	settings(settings: Readonly<Record<string, InsertSettingValue>>): CHInsert<Cols, Defaulted, Computed, Output, Params>
 
 	/**
 	 * Return the inserted rows: every column with no arguments (Drizzle's bare
@@ -216,34 +239,36 @@ export interface CHInsert<
 	 * derived row schema. Postgres only; on a dialect without RETURNING
 	 * (ClickHouse) compiling is a defect. Calling it again replaces the list.
 	 */
-	returning(): CHInsert<Cols, Defaulted, Computed, { readonly [P in keyof Cols & string]: InferTS<Cols[P]> }>
+	returning(): CHInsert<Cols, Defaulted, Computed, { readonly [P in keyof Cols & string]: InferTS<Cols[P]> }, Params>
 	returning<K extends keyof Cols & string>(
 		...columns: [K, ...Array<K>]
-	): CHInsert<Cols, Defaulted, Computed, { readonly [P in K]: InferTS<Cols[P]> }>
+	): CHInsert<Cols, Defaulted, Computed, { readonly [P in K]: InferTS<Cols[P]> }, Params>
 	returning<S extends Record<string, Expr<any>>>(
 		fn: ($: ColumnAccessor<Cols>) => S,
-	): CHInsert<Cols, Defaulted, Computed, InferOutput<S>>
+	): CHInsert<Cols, Defaulted, Computed, InferOutput<S>, Params | ParamsIn<S[keyof S]>>
 
 	/**
 	 * `ON CONFLICT DO NOTHING`: skip a row that conflicts. With `returning`, a
 	 * skipped row returns nothing. Postgres only; replaces any earlier
 	 * `onConflict*`.
 	 */
-	onConflictDoNothing(options?: OnConflictDoNothing<Cols>): CHInsert<Cols, Defaulted, Computed, Output>
+	onConflictDoNothing(options?: OnConflictDoNothing<Cols>): CHInsert<Cols, Defaulted, Computed, Output, Params>
 
 	/**
 	 * `ON CONFLICT (target) DO UPDATE SET ...`: an upsert. Postgres only;
 	 * replaces any earlier `onConflict*`.
 	 */
-	onConflictDoUpdate(options: OnConflictDoUpdate<Cols, Computed>): CHInsert<Cols, Defaulted, Computed, Output>
+	onConflictDoUpdate<S extends ConflictSet<Cols, Computed>, W = never>(
+		options: OnConflictDoUpdate<Cols, Computed, S, W>,
+	): CHInsert<Cols, Defaulted, Computed, Output, Params | ParamsIn<S[keyof S]> | W>
 }
 
 const makeInsert = <Cols extends ColumnDefs, Defaulted extends string, Computed extends string, Output>(
 	state: CHInsertState,
-): CHInsert<Cols, Defaulted, Computed, Output> => ({
+): CHInsert<Cols, Defaulted, Computed, Output, any> => ({
 	_tag: "CHInsert",
 	_state: state,
-	values: (rows) =>
+	values: (rows: unknown) =>
 		makeInsert({
 			...state,
 			selectQuery: undefined,
@@ -260,9 +285,10 @@ const makeInsert = <Cols extends ColumnDefs, Defaulted extends string, Computed 
 				? (first as ($: any) => Record<string, Expr<any>>)
 				: ($: any) => Object.fromEntries(columns.map((column) => [column, $[column]]))
 		return makeInsert({ ...state, returningFn })
-	}) as CHInsert<Cols, Defaulted, Computed, Output>["returning"],
+	}) as CHInsert<Cols, Defaulted, Computed, Output, any>["returning"],
 	onConflictDoNothing: (options = {}) => makeInsert({ ...state, conflict: { action: "nothing", ...options } }),
-	onConflictDoUpdate: (options) => makeInsert({ ...state, conflict: { action: "update", ...options } }),
+	onConflictDoUpdate: (options: OnConflictDoUpdate<any, any, any, any>) =>
+		makeInsert({ ...state, conflict: { action: "update", ...options } }),
 })
 
 /**
@@ -282,5 +308,5 @@ export function insertInto<Name extends string, Cols extends ColumnDefs, Default
 	return makeInsert<Cols, Defaulted, Computed, never>({ table: table as Table<string, ColumnDefs> })
 }
 
-export const isInsert = (value: unknown): value is CHInsert<any, any, any, any> =>
+export const isInsert = (value: unknown): value is CHInsert<any, any, any, any, any> =>
 	typeof value === "object" && value !== null && (value as { readonly _tag?: unknown })._tag === "CHInsert"

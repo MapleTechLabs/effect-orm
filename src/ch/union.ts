@@ -19,20 +19,20 @@ interface CHUnionState {
 
 // CHUnionQuery interface
 
-export interface CHUnionQuery<Output extends Record<string, any> = {}> {
+export interface CHUnionQuery<Output extends Record<string, any> = {}, Params = never> {
 	readonly _tag: "CHUnionQuery"
 	/** @internal — runtime union state */
 	readonly _state: CHUnionState
 	/** phantom */
-	readonly _phantom?: { output: Output }
+	readonly _phantom?: { output: Output; params: (entries: Params) => void }
 
-	orderBy(...specs: Array<[keyof Output & string, "asc" | "desc"]>): CHUnionQuery<Output>
+	orderBy(...specs: Array<[keyof Output & string, "asc" | "desc"]>): CHUnionQuery<Output, Params>
 
-	limit<N extends number>(n: RowCount<N>): CHUnionQuery<Output>
+	limit<N extends number>(n: RowCount<N>): CHUnionQuery<Output, Params>
 
-	offset<N extends number>(n: RowCount<N>): CHUnionQuery<Output>
+	offset<N extends number>(n: RowCount<N>): CHUnionQuery<Output, Params>
 
-	format(fmt: "JSON" | "JSONEachRow"): CHUnionQuery<Output>
+	format(fmt: "JSON" | "JSONEachRow"): CHUnionQuery<Output, Params>
 }
 
 /** Extract the Output type from a CHUnionQuery. */
@@ -40,7 +40,7 @@ export type InferUnionOutput<Q> = Q extends CHUnionQuery<infer O> ? O : never
 
 // Implementation
 
-function makeUnionQuery<Output extends Record<string, any>>(state: CHUnionState): CHUnionQuery<Output> {
+function makeUnionQuery<Output extends Record<string, any>>(state: CHUnionState): CHUnionQuery<Output, any> {
 	return {
 		_tag: "CHUnionQuery" as const,
 		_state: state,
@@ -93,6 +93,13 @@ export type UnionBranchesFit<Q extends ReadonlyArray<AnyQuery>> = [keyof OutputO
 		? unknown
 		: { readonly unionColumnsDiffer: { [I in keyof Q]: BranchMisfits<OutputOf<Q[0]>, OutputOf<Q[I]>> }[number] }
 
+/** The `ParamEntry`s of a query, union or write; `never` when it has none. */
+export type QueryParams<Q> = Q extends { readonly _phantom?: { readonly params: (entries: infer P) => void } }
+	? 0 extends 1 & P
+		? never
+		: P
+	: never
+
 /** The union's row: the first branch's aliases, each typed as any branch's. */
 export type UnionOutput<Q extends ReadonlyArray<AnyQuery>> = {
 	readonly [K in keyof OutputOf<Q[0]>]: OutputOf<Q[number]>[K]
@@ -100,7 +107,7 @@ export type UnionOutput<Q extends ReadonlyArray<AnyQuery>> = {
 
 export function unionAll<const Q extends readonly [AnyQuery, ...Array<AnyQuery>]>(
 	...queries: Q & UnionBranchesFit<Q>
-): CHUnionQuery<UnionOutput<Q>> {
+): CHUnionQuery<UnionOutput<Q>, QueryParams<Q[number]>> {
 	return makeUnionQuery({
 		queries: queries as ReadonlyArray<AnyQuery>,
 		outerOrderBySpecs: [],

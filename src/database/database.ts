@@ -17,7 +17,8 @@ import type { QueryBuilderError } from "../ch/errors"
 import type { CHInsert } from "../ch/insert"
 import type { CHDelete, CHUpdate } from "../ch/update"
 import type { CHQuery, NeedsSelect } from "../ch/query"
-import type { CHUnionQuery } from "../ch/union"
+import type { CHUnionQuery, QueryParams } from "../ch/union"
+import type { ParamsSatisfied } from "../ch/expr"
 import {
 	DatabaseError,
 	TransactionClosed,
@@ -102,9 +103,9 @@ export interface DatabaseApi {
 	 * `params` fills the query's `param.*` markers. A query compiled elsewhere
 	 * runs as it is, if it was compiled for this dialect.
 	 */
-	readonly run: <Q extends Runnable>(
-		query: Q & RunCheck<Q>,
-		params?: Record<string, unknown>,
+	readonly run: <Q extends Runnable, const Given extends Record<string, unknown> = {}>(
+		query: Q & RunCheck<Q> & ParamsSatisfied<QueryParams<Q>, Given>,
+		params?: Given,
 	) => Effect.Effect<ReadonlyArray<RowOf<Q>>, DatabaseError | QueryBuilderError | CompiledQueryDecodeError>
 	/** Run a statement and return its rows, decoded through `schema` when given. */
 	readonly query: {
@@ -281,8 +282,8 @@ export const fromSqlClient = (sql: SqlClient.SqlClient, options: FromSqlClientOp
 	// A write without RETURNING sends back no rows, so it runs the way `execute`
 	// does: through `command`, which a ClickHouse client needs for a statement
 	// with no result set.
-	const run: DatabaseApi["run"] = (runnable, params = {}) =>
-		Effect.flatMap(compileFor(runnable, params), (compiled) =>
+	const run: DatabaseApi["run"] = (runnable, params) =>
+		Effect.flatMap(compileFor(runnable, params ?? {}), (compiled) =>
 			compiled.kind !== "select" && compiled.returning === undefined
 				? Effect.as(execute(compiled), [])
 				: Effect.flatMap(rows(compiled), (wire) => compiled.decodeRows(wire)),
@@ -448,9 +449,9 @@ export const layerSqlClient = (options: FromSqlClientOptions): Layer.Layer<Datab
 	)
 
 /** `run` on the `Database` in context. */
-export const run = <Q extends Runnable>(
-	query: Q & RunCheck<Q>,
-	params?: Record<string, unknown>,
+export const run = <Q extends Runnable, const Given extends Record<string, unknown> = {}>(
+	query: Q & RunCheck<Q> & ParamsSatisfied<QueryParams<Q>, Given>,
+	params?: Given,
 ): Effect.Effect<ReadonlyArray<RowOf<Q>>, DatabaseError | QueryBuilderError | CompiledQueryDecodeError, Database> =>
 	Effect.flatMap(Effect.service(Database), (db) => db.run(query, params))
 

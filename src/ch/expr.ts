@@ -39,9 +39,73 @@ export type Comparable<TSType> = TSType extends DateTime.Utc ? DateTime.Utc | Da
  */
 export type Widen<TSType> = TSType extends string ? string : TSType extends number ? number : TSType
 
-export interface Expr<TSType> {
+// Params in the type
+//
+// An expression remembers the `param.*` placeholders it contains, so a query
+// can say which params it needs and `compile` / `Database.run` can require
+// them. Each one is a `ParamEntry`; an expression's are a union of them, `never`
+// when it has none.
+//
+// The entries ride on a phantom *function parameter*, which makes them
+// contravariant: an `Expr<T, Entries>` is assignable to a plain `Expr<T>`, so
+// every function written against `Expr<T>` still accepts one. A function that
+// does not pass its arguments' entries on to its result drops them from the
+// type; the param is then still checked when compiling, just not by the type.
+
+/** One `param.*` placeholder: its name and the value it is filled with. */
+export interface ParamEntry<Name extends string = string, Value = unknown> {
+	readonly name: Name
+	readonly value: Value
+}
+
+/** The params of an expression, condition, or a union or array of them. */
+export type ParamsIn<X> = 0 extends 1 & X
+	? never
+	: X extends { readonly _params?: (entries: infer P) => void }
+		? 0 extends 1 & P
+			? never
+			: [P] extends [ParamEntry]
+				? P
+				: never
+		: never
+
+/** The value a param needs: every entry's type for that name, intersected
+ *  per entry (a `boolean` entry stays `boolean`, not `true & false`). */
+type ValueOf<P, N> =
+	UnionToIntersection<P extends { readonly name: N; readonly value: infer V } ? { readonly v: V } : never> extends {
+		readonly v: infer V
+	}
+		? V
+		: never
+
+type UnionToIntersection<U> = (U extends unknown ? (u: U) => void : never) extends (i: infer I) => void ? I : never
+
+/**
+ * The params object a set of entries asks for: one key per name. A name used
+ * with two value types needs a value of both.
+ */
+export type ParamsRecord<P> = [P] extends [never]
+	? {}
+	: [P] extends [ParamEntry]
+		? { readonly [N in P["name"]]: ValueOf<P, N> }
+		: {}
+
+/**
+ * `unknown` when `Given` fills every param in `P` with a value of its type;
+ * otherwise a property spelling out the params object that is needed. Extra
+ * keys are allowed, so one params object can serve several queries.
+ */
+export type ParamsSatisfied<P, Given> = [P] extends [never]
+	? unknown
+	: Given extends ParamsRecord<P>
+		? unknown
+		: { readonly paramsRequired: ParamsRecord<P> }
+
+export interface Expr<TSType, P = never> {
 	readonly _brand: "Expr"
 	readonly _phantom?: TSType
+	/** phantom: the `param.*` placeholders inside this expression. */
+	readonly _params?: (entries: P) => void
 	/**
 	 * How this expression's wire value decodes, when the builder knows it.
 	 *
@@ -63,59 +127,59 @@ export interface Expr<TSType> {
 	//
 	// A plain value is never `null`: `x = NULL` is never true in SQL, so it is
 	// refused here and at compile time. Use `isNull()` / `isNotNull()`.
-	eq(other: Operand<TSType>): Condition
-	neq(other: Operand<TSType>): Condition
-	gt(other: Operand<TSType>): Condition
-	gte(other: Operand<TSType>): Condition
-	lt(other: Operand<TSType>): Condition
-	lte(other: Operand<TSType>): Condition
+	eq<Q = never>(other: Operand<TSType, Q>): Condition<P | Q>
+	neq<Q = never>(other: Operand<TSType, Q>): Condition<P | Q>
+	gt<Q = never>(other: Operand<TSType, Q>): Condition<P | Q>
+	gte<Q = never>(other: Operand<TSType, Q>): Condition<P | Q>
+	lt<Q = never>(other: Operand<TSType, Q>): Condition<P | Q>
+	lte<Q = never>(other: Operand<TSType, Q>): Condition<P | Q>
 
 	// String operations. A `Nullable(String)` matches like a `String`.
-	like(this: Expr<string | null>, pattern: string): Condition
-	notLike(this: Expr<string | null>, pattern: string): Condition
-	ilike(this: Expr<string | null>, pattern: string): Condition
+	like(this: Expr<string | null>, pattern: string): Condition<P>
+	notLike(this: Expr<string | null>, pattern: string): Condition<P>
+	ilike(this: Expr<string | null>, pattern: string): Condition<P>
 
 	// NULL and ranges
 	/** `expr IS NULL`. */
-	isNull(): Condition
+	isNull(): Condition<P>
 	/** `expr IS NOT NULL`. */
-	isNotNull(): Condition
+	isNotNull(): Condition<P>
 	/** `expr BETWEEN low AND high`, both ends included. */
-	between(low: Operand<TSType>, high: Operand<TSType>): Condition
+	between<Q1 = never, Q2 = never>(low: Operand<TSType, Q1>, high: Operand<TSType, Q2>): Condition<P | Q1 | Q2>
 	/** `expr NOT BETWEEN low AND high`. */
-	notBetween(low: Operand<TSType>, high: Operand<TSType>): Condition
+	notBetween<Q1 = never, Q2 = never>(low: Operand<TSType, Q1>, high: Operand<TSType, Q2>): Condition<P | Q1 | Q2>
 
 	// IN / NOT IN. An empty list is false (`IN`) or true (`NOT IN`), written
 	// `1 = 0` / `1 = 1`, rather than the `IN ()` no database accepts.
-	in_(...values: Array<Comparable<Widen<NonNullable<TSType>>>>): Condition
-	notIn(...values: Array<Comparable<Widen<NonNullable<TSType>>>>): Condition
+	in_(...values: Array<Comparable<Widen<NonNullable<TSType>>>>): Condition<P>
+	notIn(...values: Array<Comparable<Widen<NonNullable<TSType>>>>): Condition<P>
 
 	// JSON represents non-finite division results as null. Other arithmetic
 	// propagates SQL NULL from either operand.
-	div<R extends number | null>(this: Expr<number | null>, n: R | Expr<R>): Expr<Quotient<TSType, R>>
-	mul<R extends number | null>(
+	div<R extends number | null, Q = never>(this: Expr<number | null>, n: R | Expr<R, Q>): Expr<Quotient<TSType, R>, P | Q>
+	mul<R extends number | null, Q = never>(
 		this: Expr<number | null>,
-		n: R | Expr<R>,
-	): Expr<number | Extract<TSType | R, null>>
-	add<R extends number | null>(
+		n: R | Expr<R, Q>,
+	): Expr<number | Extract<TSType | R, null>, P | Q>
+	add<R extends number | null, Q = never>(
 		this: Expr<number | null>,
-		n: R | Expr<R>,
-	): Expr<number | Extract<TSType | R, null>>
-	sub<R extends number | null>(
+		n: R | Expr<R, Q>,
+	): Expr<number | Extract<TSType | R, null>, P | Q>
+	sub<R extends number | null, Q = never>(
 		this: Expr<number | null>,
-		n: R | Expr<R>,
-	): Expr<number | Extract<TSType | R, null>>
-	mod<R extends number | null>(this: Expr<number | null>, n: R | Expr<R>): Expr<Quotient<TSType, R>>
+		n: R | Expr<R, Q>,
+	): Expr<number | Extract<TSType | R, null>, P | Q>
+	mod<R extends number | null, Q = never>(this: Expr<number | null>, n: R | Expr<R, Q>): Expr<Quotient<TSType, R>, P | Q>
 }
 
 /**
  * What a comparison takes on its right: a value of the column's type (never
  * `null`), or an expression of it.
  */
-export type Operand<TSType> =
+export type Operand<TSType, Q = never> =
 	| Comparable<Widen<NonNullable<TSType>>>
-	| Expr<TSType>
-	| Expr<Widen<TSType>>
+	| Expr<TSType, Q>
+	| Expr<Widen<TSType>, Q>
 
 /**
  * What `/` and `%` decode to. A numeric literal divisor of magnitude >= 1
@@ -157,11 +221,13 @@ export interface ColumnRef<Name extends string, ColType extends CHType<string, a
  */
 export type MapValueOf<ColType> = [ColType] extends [CHType<"Map", Record<string, infer V>, any>] ? V : string
 
-export interface Condition {
+export interface Condition<P = never> {
 	readonly _brand: "Condition"
+	/** phantom: the `param.*` placeholders inside this condition. */
+	readonly _params?: (entries: P) => void
 	toFragment(): SqlFragment
-	and(other: Condition): Condition
-	or(other: Condition): Condition
+	and<Q = never>(other: Condition<Q>): Condition<P | Q>
+	or<Q = never>(other: Condition<Q>): Condition<P | Q>
 }
 
 // Core helpers (exported for define-fn.ts and consumer extensibility)
@@ -220,7 +286,7 @@ const inCond = (
 	fragment: SqlFragment,
 	op: "IN" | "NOT IN",
 	values: ReadonlyArray<() => SqlFragment>,
-): Condition =>
+): Condition<any> =>
 	makeCond(
 		known(() =>
 			values.length === 0
@@ -243,7 +309,7 @@ const arith = <Result>(
 	op: string,
 	rhs: number | null | Expr<number | null>,
 	lhsSchema?: Schema.Codec<any, any>,
-): Expr<Result> => {
+): Expr<Result, any> => {
 	const rhsSchema = typeof rhs === "number" || rhs === null ? undefined : rhs.schema
 	// `x / 1000000` is finite whenever `x` is. A literal below 1 in magnitude
 	// can overflow a large dividend (`1 / 5e-324` is `inf`), so only |d| >= 1
@@ -259,7 +325,7 @@ const arith = <Result>(
 	return makeExpr(
 		known(() => `${compile(lhs)} ${op} ${compile(toFragment(rhs))}`),
 		(nullable ? Schema.NullOr(CHNumber) : overflows ? CHFloatResult : CHNumber) as Schema.Codec<Result, any>,
-	)
+	) as Expr<Result, any>
 }
 
 /**
@@ -284,7 +350,7 @@ export function makeExpr<T>(
 	 * no type to read fall back to guessing from the JS value.
 	 */
 	literal?: (value: unknown) => SqlFragment,
-): Expr<T> {
+): Expr<T, any> {
 	/** An operand: another expression as-is, a plain value through the codec. */
 	function operand(value: unknown): SqlFragment {
 		if (value === null || value === undefined) return refusedNull(value)
@@ -292,7 +358,9 @@ export function makeExpr<T>(
 	}
 
 	// Keep operand rendering lazy so nested subqueries reach the owning compiler.
-	const self: Expr<T> = {
+	// `any` params: the phantom is a type-level fact, and every method's result
+	// carries what its signature says.
+	const self: Expr<T, any> = {
 		_brand: "Expr" as const,
 		...(schema !== undefined ? { schema } : undefined),
 		toFragment: () => fragment,
@@ -350,7 +418,7 @@ export function makeExpr<T>(
 export function makeUntypedExpr<T = unknown>(
 	fragment: SqlFragment,
 	literal?: (value: unknown) => SqlFragment,
-): Expr<T> {
+): Expr<T, any> {
 	return makeExpr<T>(fragment, undefined, literal)
 }
 
@@ -445,7 +513,7 @@ export function makeColumnRef<Name extends string, ColType extends CHType<string
 
 // Condition implementation
 
-export function makeCond(fragment: SqlFragment): Condition {
+export function makeCond(fragment: SqlFragment): Condition<any> {
 	return {
 		_brand: "Condition" as const,
 		toFragment: () => fragment,
@@ -502,8 +570,10 @@ export function notInList(expr: Expr<string>, values: readonly string[]): Condit
  * With none left it is `undefined`, which a `where` list skips in turn. Tenant
  * evidence carries through, as with `.and`.
  */
-export function and(...conditions: ReadonlyArray<Condition>): Condition
-export function and(...conditions: ReadonlyArray<Condition | undefined>): Condition | undefined
+export function and<const C extends ReadonlyArray<Condition>>(...conditions: C): Condition<ParamsIn<C[number]>>
+export function and<const C extends ReadonlyArray<Condition | undefined>>(
+	...conditions: C
+): Condition<ParamsIn<C[number]>> | undefined
 export function and(...conditions: ReadonlyArray<Condition | undefined>): Condition | undefined {
 	const present = conditions.filter((c): c is Condition => c !== undefined)
 	if (present.length <= 1) return present[0]
@@ -517,8 +587,10 @@ export function and(...conditions: ReadonlyArray<Condition | undefined>): Condit
  * Conditions OR-joined, an `undefined` one skipped. With none left it is
  * `undefined`. An OR proves no tenant, so it carries no tenant evidence.
  */
-export function or(...conditions: ReadonlyArray<Condition>): Condition
-export function or(...conditions: ReadonlyArray<Condition | undefined>): Condition | undefined
+export function or<const C extends ReadonlyArray<Condition>>(...conditions: C): Condition<ParamsIn<C[number]>>
+export function or<const C extends ReadonlyArray<Condition | undefined>>(
+	...conditions: C
+): Condition<ParamsIn<C[number]>> | undefined
 export function or(...conditions: ReadonlyArray<Condition | undefined>): Condition | undefined {
 	const present = conditions.filter((c): c is Condition => c !== undefined)
 	if (present.length <= 1) return present[0]
@@ -526,7 +598,7 @@ export function or(...conditions: ReadonlyArray<Condition | undefined>): Conditi
 }
 
 /** Wrap a condition in NOT (...). */
-export function not(condition: Condition): Condition {
+export function not<P = never>(condition: Condition<P>): Condition<P> {
 	return makeCond(known(() => `NOT (${compile(condition.toFragment())})`))
 }
 
@@ -588,12 +660,15 @@ export function aliased<T>(expr: Expr<T>, alias: string): SqlFragment {
 
 // Conditional helpers (for optional WHERE clauses)
 
-export function when<T>(value: T | undefined | false | null, fn: (v: T) => Condition): Condition | undefined {
+export function when<T, P = never>(
+	value: T | undefined | false | null,
+	fn: (v: T) => Condition<P>,
+): Condition<P> | undefined {
 	if (value === undefined || value === null || value === false) return undefined
 	return fn(value)
 }
 
-export function whenTrue(value: boolean | undefined, fn: () => Condition): Condition | undefined {
+export function whenTrue<P = never>(value: boolean | undefined, fn: () => Condition<P>): Condition<P> | undefined {
 	if (!value) return undefined
 	return fn()
 }

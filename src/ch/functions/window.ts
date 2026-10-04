@@ -1,6 +1,6 @@
 import { makeExpr, toFragment } from "../expr"
 import { compile } from "../../sql/sql-fragment"
-import type { Expr } from "../expr"
+import type { Expr, ParamsIn } from "../expr"
 import { schemaOf } from "../define-fn"
 import { QueryBuilderError } from "../errors"
 import { builtins } from "./builtin"
@@ -10,17 +10,19 @@ const window = builtins("clickhouse", "window")
 
 export type WindowOrderDirection = "asc" | "desc"
 
-export type WindowFrameBound =
+export type WindowFrameBound<P = never> =
 	| { readonly type: "CurrentRow" }
 	| { readonly type: "UnboundedPreceding" }
 	| { readonly type: "UnboundedFollowing" }
-	| { readonly type: "Preceding"; readonly value: number | Expr<number> }
-	| { readonly type: "Following"; readonly value: number | Expr<number> }
+	| { readonly type: "Preceding"; readonly value: number | Expr<number, P> }
+	| { readonly type: "Following"; readonly value: number | Expr<number, P> }
 
-export interface WindowRowsFrame {
+export interface WindowRowsFrame<P = never> {
 	readonly type: "RowsBetween"
 	readonly start: WindowFrameBound
 	readonly end: WindowFrameBound
+	/** phantom: the `param.*` placeholders in the bounds. */
+	readonly _params?: (entries: P) => void
 }
 
 export interface WindowSpec {
@@ -29,28 +31,39 @@ export interface WindowSpec {
 	readonly frame?: WindowRowsFrame
 }
 
-export interface CompiledWindowSpec {
+export interface CompiledWindowSpec<P = never> {
 	readonly _brand: "WindowSpec"
 	readonly sql: string
+	/** phantom: the `param.*` placeholders in the spec. */
+	readonly _params?: (entries: P) => void
 }
+
+/** The params of a window spec's partition, order and frame expressions. */
+type SpecParams<S extends WindowSpec> =
+	| ParamsIn<NonNullable<S["partitionBy"]>[number]>
+	| ParamsIn<NonNullable<S["orderBy"]>[number][0]>
+	| ParamsIn<S["frame"]>
 
 export const currentRow: WindowFrameBound = { type: "CurrentRow" }
 export const unboundedPreceding: WindowFrameBound = { type: "UnboundedPreceding" }
 export const unboundedFollowing: WindowFrameBound = { type: "UnboundedFollowing" }
 
-export function preceding(value: number | Expr<number>): WindowFrameBound {
+export function preceding<Q = never>(value: number | Expr<number, Q>): WindowFrameBound<Q> {
 	return { type: "Preceding", value }
 }
 
-export function following(value: number | Expr<number>): WindowFrameBound {
+export function following<Q = never>(value: number | Expr<number, Q>): WindowFrameBound<Q> {
 	return { type: "Following", value }
 }
 
-export function rowsBetween(start: WindowFrameBound, end: WindowFrameBound): WindowRowsFrame {
+export function rowsBetween<Q1 = never, Q2 = never>(
+	start: WindowFrameBound<Q1>,
+	end: WindowFrameBound<Q2>,
+): WindowRowsFrame<Q1 | Q2> {
 	return { type: "RowsBetween", start, end }
 }
 
-export function windowSpec(spec: WindowSpec): CompiledWindowSpec {
+export function windowSpec<const S extends WindowSpec>(spec: S): CompiledWindowSpec<SpecParams<S>> {
 	if (!spec.partitionBy?.length && !spec.orderBy?.length && !spec.frame) {
 		throw new QueryBuilderError({
 			code: "InvalidArguments",
@@ -84,16 +97,16 @@ function renderWindowSpec(spec: WindowSpec): string {
 	return parts.join(" ")
 }
 
-export function over<T>(expr: Expr<T>, spec: CompiledWindowSpec): Expr<T> {
+export function over<T, Q1 = never, Q2 = never>(expr: Expr<T, Q1>, spec: CompiledWindowSpec<Q2>): Expr<T, Q1 | Q2> {
 	// A window changes which rows feed the value, never how the value decodes.
 	return makeExpr(window.lazy(() => `${compile(expr.toFragment())} OVER (${spec.sql})`), schemaOf<T>(expr))
 }
 
-export function lagInFrame<T>(
-	expr: Expr<T>,
-	offset: number | Expr<number>,
-	defaultValue: T | Expr<T>,
-): Expr<T> {
+export function lagInFrame<T, Q1 = never, Q2 = never, Q3 = never>(
+	expr: Expr<T, Q1>,
+	offset: number | Expr<number, Q2>,
+	defaultValue: T | Expr<T, Q3>,
+): Expr<T, Q1 | Q2 | Q3> {
 	return makeExpr(
 		lazy(() =>
 			`lagInFrame(${compile(expr.toFragment())}, ${compile(toFragment(offset))}, ${compile(toFragment(defaultValue))})`,

@@ -337,10 +337,12 @@ describe("insertInto", () => {
 				const Plain = CH.table("plain", { A: CH.uint32, B: CH.nullable(CH.string) })
 				const errors = yield* Effect.all(
 					[
+						// @ts-expect-error -- no rows is a type error too
 						CH.compile(CH.insertInto(Plain).values([])),
 						CH.compile(CH.insertInto(Plain).values({ A: 1, C: 2 } as any)),
 						CH.compile(CH.insertInto(Plain).values([{ B: undefined } as any])),
 						CH.compile(CH.insertInto(Plain).values({ A: null as any })),
+						// @ts-expect-error -- a missing param is a type error too
 						CH.compile(CH.insertInto(Plain).values({ A: CH.param.int("a") })),
 					].map(Effect.flip),
 				)

@@ -197,6 +197,7 @@ describe("postgres dialect", () => {
 			.select(($) => ({ count: $.Count }))
 			.where(($) => [$.OrgId.eq(CH.param.string("orgId"))])
 		expect(() => PG.compileUnsafe(query.format("JSON"), { orgId: "o" })).toThrow(/no FORMAT clause/)
+		// @ts-expect-error -- a missing param is a type error too
 		expect(() => PG.compileUnsafe(query, {})).toThrow(/no value given for param 'orgId'/)
 	})
 })

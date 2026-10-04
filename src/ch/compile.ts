@@ -14,7 +14,7 @@ import { isInsert, type CHInsert } from "./insert"
 import { isDelete, isUpdate, type CHDelete, type CHUpdate } from "./update"
 import type { Table } from "./table"
 import { createColumnAccessor, createQualifiedColumnAccessor, createJoinedColumnAccessor, sourceAlias } from "./query"
-import { aliased, columnTypeOf, isExprLike, type Condition, type Expr } from "./expr"
+import { aliased, columnTypeOf, isExprLike, type Condition, type Expr, type ParamsSatisfied } from "./expr"
 import { raw, identPath, quoteIdent, quoteIdentPath, compile as compileSqlFragment, type SqlFragment } from "../sql/sql-fragment"
 import { splitTerminalClauses } from "../sql/terminal-clauses"
 import { compileQuery, type SqlQuery } from "../sql/sql-query"
@@ -573,12 +573,13 @@ export function compileCH<
 	Output extends Record<string, any>,
 	Joins extends Record<string, ColumnDefs>,
 	Route extends string | undefined,
-	Params extends Record<string, any> = {},
+	Params = never,
+	const Given extends Record<string, unknown> = {},
 	Decoded extends Output = Output,
 >(
-	query: CHQuery<Cols, Output, Joins, Route> & NeedsSelect<Output>,
-	/** Values for the query's `param.*` markers. Optional when it has none. */
-	params?: Params,
+	query: CHQuery<Cols, Output, Joins, Route, Params> & NeedsSelect<Output> & ParamsSatisfied<Params, Given>,
+	/** Values for the query's `param.*` markers: required, and typed, when it has any. */
+	params?: Given,
 	options?: {
 		skipFormat?: boolean
 		rowSchema?: CompiledQueryRowSchema<Decoded>
@@ -587,9 +588,9 @@ export function compileCH<
 	},
 ): Effect.Effect<CompiledQuery<Decoded, Route>, QueryBuilderError>
 /** An INSERT, UPDATE or DELETE. `params` fills the `param.*` markers among its values. */
-export function compileCH<Output>(
-	insert: CHWrite<Output>,
-	params?: Record<string, unknown>,
+export function compileCH<Output, Params = never, const Given extends Record<string, unknown> = {}>(
+	insert: CHWrite<Output, Params> & ParamsSatisfied<Params, Given>,
+	params?: Given,
 	options?: InsertCompileOptions,
 ): Effect.Effect<CompiledQuery<Output, undefined>, QueryBuilderError>
 export function compileCH(
@@ -601,7 +602,10 @@ export function compileCH(
 }
 
 /** A write statement: what `compile` takes besides a query. */
-export type CHWrite<Output> = CHInsert<any, any, any, Output> | CHUpdate<any, any, Output> | CHDelete<any, Output>
+export type CHWrite<Output, Params = never> =
+	| CHInsert<any, any, any, Output, Params>
+	| CHUpdate<any, any, Output, "ready", Params>
+	| CHDelete<any, Output, "ready", Params>
 
 /** What compiling a write takes: only the dialect. */
 export interface InsertCompileOptions {
@@ -609,24 +613,29 @@ export interface InsertCompileOptions {
 }
 
 /** {@link compileCH} for a `UNION ALL`. */
-export const compileUnion = <Output extends Record<string, any>, Params extends Record<string, any>>(
-	union: CHUnionQuery<Output>,
-	params: Params,
+export const compileUnion = <
+	Output extends Record<string, any>,
+	Params = never,
+	const Given extends Record<string, unknown> = {},
+>(
+	union: CHUnionQuery<Output, Params> & ParamsSatisfied<Params, Given>,
+	params?: Given,
 	options?: { rowSchema?: CompiledQueryRowSchema<Output>; deferParams?: boolean; dialect?: Dialect },
 ): Effect.Effect<CompiledQuery<Output, undefined>, QueryBuilderError> =>
-	asEffect(() => compileUnionUnsafe(union, params, options))
+	asEffect(() => compileUnionUnsafe(union as CHUnionQuery<Output>, params ?? {}, options))
 
 export function compileCHUnsafe<
 	Cols extends ColumnDefs,
 	Output extends Record<string, any>,
 	Joins extends Record<string, ColumnDefs>,
 	Route extends string | undefined,
-	Params extends Record<string, any> = {},
+	Params = never,
+	const Given extends Record<string, unknown> = {},
 	Decoded extends Output = Output,
 >(
-	query: CHQuery<Cols, Output, Joins, Route> & NeedsSelect<Output>,
-	/** Values for the query's `param.*` markers. Optional when it has none. */
-	params?: Params,
+	query: CHQuery<Cols, Output, Joins, Route, Params> & NeedsSelect<Output> & ParamsSatisfied<Params, Given>,
+	/** Values for the query's `param.*` markers: required, and typed, when it has any. */
+	params?: Given,
 	options?: {
 		skipFormat?: boolean
 		rowSchema?: CompiledQueryRowSchema<Decoded>
@@ -639,9 +648,9 @@ export function compileCHUnsafe<
 	},
 ): CompiledQuery<Decoded, Route>
 /** An INSERT, UPDATE or DELETE. `params` fills the `param.*` markers among its values. */
-export function compileCHUnsafe<Output>(
-	insert: CHWrite<Output>,
-	params?: Record<string, unknown>,
+export function compileCHUnsafe<Output, Params = never, const Given extends Record<string, unknown> = {}>(
+	insert: CHWrite<Output, Params> & ParamsSatisfied<Params, Given>,
+	params?: Given,
 	options?: InsertCompileOptions,
 ): CompiledQuery<Output, undefined>
 export function compileCHUnsafe(
@@ -1281,16 +1290,20 @@ const unionExprsOf = (
 
 // UNION ALL compilation
 
-export function compileUnionUnsafe<Output extends Record<string, any>, Params extends Record<string, any>>(
-	union: CHUnionQuery<Output>,
-	params: Params,
+export function compileUnionUnsafe<
+	Output extends Record<string, any>,
+	Params = never,
+	const Given extends Record<string, unknown> = {},
+>(
+	union: CHUnionQuery<Output, Params> & ParamsSatisfied<Params, Given>,
+	params?: Given,
 	options?: {
 		rowSchema?: CompiledQueryRowSchema<Output>
 		deferParams?: boolean
 		dialect?: Dialect
 	},
 ): CompiledQuery<Output, undefined> {
-	return withDialect(options?.dialect ?? currentDialect(), () => compileUnionInner(union, params, options))
+	return withDialect(options?.dialect ?? currentDialect(), () => compileUnionInner(union as CHUnionQuery<Output>, params ?? {}, options))
 }
 
 /** The recursion behind {@link compileUnionUnsafe}; see {@link compileInner}. */

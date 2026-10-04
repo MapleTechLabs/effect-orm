@@ -128,6 +128,24 @@ console.log(predicate) // Name = 'O\'Reilly'
 Use this for string literals only. Keep SQL structure and identifiers under application
 control, and validate numeric inputs such as the quantile level separately.
 
+### Params and checks on a custom function
+
+`Expr<T, P>` carries the `param.*` placeholders inside an expression, so `compile` can require
+them. `defineFn` and `defineCondFn` pass their arguments' params on by themselves. A wrapper
+built with `makeExpr` says so in its signature, with one type parameter per argument:
+
+```ts
+const quantileExact =
+	(q: number) =>
+	<Q = never>(expr: CH.Expr<number, Q>): CH.Expr<number, Q> =>
+		makeExpr<number>(raw(`quantileExact(${q})(${compile(expr.toFragment())})`), T.float64.schema)
+```
+
+Without it the function still works; a param inside it is then checked when compiling rather
+than by the type. SQL built with `makeExpr`, `defineFn` or `CH.sql` is also opaque to the GROUP
+BY checks (see [Queries](./queries.md#groupby)): a mistake inside it reaches the database, but
+it never makes a valid query fail.
+
 ## A column type of your own
 
 `T.custom(sql, schema)` is the extension point the built-in types are built from — `T.uint64` is
