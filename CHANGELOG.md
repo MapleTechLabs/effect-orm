@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- Add Postgres schema definitions and migrations. `S.pg.table` (with `S.pg.column`, `S.pg.index`,
+  `S.pg.uniqueIndex`, `S.pg.foreignKey`) defines tables with primary keys, partial and expression
+  indexes, foreign keys, defaults and identity columns; `dialect: "postgres"` in the kit config
+  makes `generate`, `check`, `migrate`, `status` and `verify` work on Postgres. Each migration
+  runs in one transaction under an advisory lock, and `verify` compares the catalog with the
+  snapshot built in a rolled-back scratch schema.
+  - Adopt a drizzle-kit folder with `generate --baseline --from-drizzle` (or `--baseline` from
+    the definitions) and record an existing database with `effect-orm baseline <name>` /
+    `Migrate.baseline`. drizzle-kit `snapshot.json` files are recognized; migrations before the
+    first effect-orm snapshot are legacy and run as they are.
+  - `Snapshot` is a union over `dialect` (`ClickHouseSnapshot`, `PgSnapshot`); `MigrationFile`
+    over its generated files (`ClickHouseMigrationFile`, `PgMigrationFile`). `MigrationDriver`
+    gains an optional `transaction`, which `fromSqlClient` provides. `Drift.problem` adds
+    `not_null`, `identity` and `foreign_key`.
+
 - **Breaking:** invalid queries are refused before any SQL is sent: as type errors where the
   type can see them, otherwise as a `QueryBuilderError` / `QueryBuilderDefect` from `compile`.
   - Params are in the query's type. `compile`, `compileUnion` and `Database.run` require every

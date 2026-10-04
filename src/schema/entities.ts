@@ -1,4 +1,6 @@
-// Schema entities: the normalized, serializable form of a ClickHouse schema.
+// Schema entities: the normalized, serializable form of a ClickHouse schema,
+// and the snapshot envelope both dialects share (Postgres entities live in
+// `pg-entities.ts`).
 //
 // A `defineTable` value is code; a snapshot is data. Everything downstream of
 // the definitions (DDL rendering, diffing, the migrator's drift check) reads
@@ -6,6 +8,7 @@
 // and diffs exactly as it did when it was written.
 
 import { Schema } from "effect"
+import { PgSchemaEntity } from "./pg-entities"
 
 /** `DEFAULT`, `MATERIALIZED`, or `ALIAS`, with its SQL expression. */
 export const ColumnDefault = Schema.Struct({
@@ -78,34 +81,51 @@ export const SNAPSHOT_VERSION = "1"
 /** The parent id of a first migration. */
 export const ORIGIN_ID = "0000000000000000000000000000000000000000000000000000000000000000"
 
-export const Snapshot = Schema.Struct({
+const snapshotFields = {
 	version: Schema.Literal(SNAPSHOT_VERSION),
-	dialect: Schema.Literal("clickhouse"),
 	/** sha256 of the canonical entity list; two branches reaching one schema agree. */
 	id: Schema.String,
 	prevIds: Schema.Array(Schema.String),
-	entities: Schema.Array(SchemaEntity),
-})
-export type Snapshot = typeof Snapshot.Type
-
-/** A stable key per entity, unique within a snapshot. */
-export const entityKey = (entity: SchemaEntity): string => {
-	switch (entity.kind) {
-		case "table":
-			return `table:${entity.name}`
-		case "materialized_view":
-			return `materialized_view:${entity.name}`
-		case "column":
-			return `column:${entity.table}.${entity.name}`
-		case "index":
-			return `index:${entity.table}.${entity.name}`
-	}
 }
 
-const kindOrder: Record<SchemaEntity["kind"], number> = { table: 0, column: 1, index: 2, materialized_view: 3 }
+export const ClickHouseSnapshot = Schema.Struct({
+	...snapshotFields,
+	dialect: Schema.Literal("clickhouse"),
+	entities: Schema.Array(SchemaEntity),
+})
+export type ClickHouseSnapshot = typeof ClickHouseSnapshot.Type
 
-/** Tables, then columns in declaration order, then indexes, then views. Deterministic. */
-export const sortEntities = (entities: ReadonlyArray<SchemaEntity>): ReadonlyArray<SchemaEntity> =>
+export const PgSnapshot = Schema.Struct({
+	...snapshotFields,
+	dialect: Schema.Literal("postgres"),
+	entities: Schema.Array(PgSchemaEntity),
+})
+export type PgSnapshot = typeof PgSnapshot.Type
+
+/** The schema at one point in history. `dialect` says which entity set it holds. */
+export const Snapshot = Schema.Union([ClickHouseSnapshot, PgSnapshot])
+export type Snapshot = typeof Snapshot.Type
+
+/** The dialects a schema can be written for. */
+export type SchemaDialect = Snapshot["dialect"]
+
+/** An entity of either dialect. Everything dialect-neutral (keys, ordering, hashing, the branch graph) takes this. */
+export type AnySchemaEntity = SchemaEntity | PgSchemaEntity
+
+/** A stable key per entity, unique within a snapshot: `<kind>:<name>`, or `<kind>:<table>.<name>` for a table's parts. */
+export const entityKey = (entity: AnySchemaEntity): string =>
+	"table" in entity ? `${entity.kind}:${entity.table}.${entity.name}` : `${entity.kind}:${entity.name}`
+
+const kindOrder: Record<AnySchemaEntity["kind"], number> = {
+	table: 0,
+	column: 1,
+	index: 2,
+	foreign_key: 3,
+	materialized_view: 4,
+}
+
+/** Tables, then columns in declaration order, then indexes, foreign keys, views. Deterministic. */
+export const sortEntities = <E extends AnySchemaEntity>(entities: ReadonlyArray<E>): ReadonlyArray<E> =>
 	[...entities].sort((a, b) => {
 		const byKind = kindOrder[a.kind] - kindOrder[b.kind]
 		if (byKind !== 0) return byKind

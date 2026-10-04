@@ -3,11 +3,14 @@
 // A migration is a folder name plus its file: `migration.json` (generated ops,
 // rendered when it runs) or `migration.sql` (hand-written, statements split on
 // `--> statement-breakpoint`, the drizzle-kit separator). Its `snapshot.json`
-// is optional at run time; `verify` needs it, and ordering prefers it.
+// is optional at run time; `verify` needs it, and ordering prefers it. A
+// drizzle-kit `snapshot.json` is recognized and kept aside, so a drizzle folder
+// loads as it is.
 
 import { Effect, FileSystem, Path, Schema } from "effect"
-import { canonicalJson, sha256Hex, Snapshot } from "../schema/entities"
+import { canonicalJson, sha256Hex, Snapshot, type SchemaDialect } from "../schema/entities"
 import { MigrationFile, renderOp } from "../schema/ops"
+import { renderPgOp } from "../schema/pg-ops"
 import type { RenderOptions } from "../schema/render"
 import { MigrateSourceError } from "./errors"
 
@@ -32,6 +35,11 @@ export interface LoadedMigration {
 	readonly file: MigrationFile | undefined
 	readonly sql: ReadonlyArray<string>
 	readonly snapshot: Snapshot | undefined
+	/**
+	 * A `snapshot.json` another tool wrote (drizzle-kit's, in a folder being
+	 * adopted), parsed but not interpreted. `snapshot` is `undefined` then.
+	 */
+	readonly foreignSnapshot: { readonly tool: "drizzle-kit"; readonly json: unknown } | undefined
 }
 
 export interface MigrationStep {
@@ -47,8 +55,9 @@ const load = (name: string, input: MigrationInput): Effect.Effect<LoadedMigratio
 	Effect.gen(function* () {
 		const fail = (message: string) => (cause: unknown) => new MigrateSourceError({ migration: name, message, cause })
 		const file = input.kind === "ops" ? yield* decodeFile(input.migration).pipe(Effect.mapError(fail("migration.json does not decode"))) : undefined
+		const foreignSnapshot = input.snapshot === undefined ? undefined : foreignSnapshotOf(input.snapshot)
 		const snapshot =
-			input.snapshot === undefined
+			input.snapshot === undefined || foreignSnapshot !== undefined
 				? undefined
 				: yield* decodeSnapshot(input.snapshot).pipe(Effect.mapError(fail("snapshot.json does not decode")))
 		// Hash the decoded content for ops, so reformatting the JSON is not an edit.
@@ -61,8 +70,21 @@ const load = (name: string, input: MigrationInput): Effect.Effect<LoadedMigratio
 						.map((statement) => statement.trim())
 						.filter((statement) => statement.replace(/^\s*--.*$/gm, "").trim().length > 0)
 				: []
-		return { name, kind: input.kind, hash, file, sql, snapshot }
+		return { name, kind: input.kind, hash, file, sql, snapshot, foreignSnapshot }
 	})
+
+/** drizzle-kit's snapshot: `ddl` rather than `entities`, and its own `version`. */
+const foreignSnapshotOf = (text: string): LoadedMigration["foreignSnapshot"] => {
+	let json: unknown
+	try {
+		json = JSON.parse(text)
+	} catch {
+		return undefined
+	}
+	return typeof json === "object" && json !== null && "ddl" in json && Array.isArray(json.ddl) && !("entities" in json)
+		? { tool: "drizzle-kit", json }
+		: undefined
+}
 
 /**
  * Each migration's parent migrations, from its snapshot's `prevIds`. A custom
@@ -177,4 +199,20 @@ export const fromFileSystem = (
 export const stepsOf = (migration: LoadedMigration, render: RenderOptions = {}): ReadonlyArray<MigrationStep> =>
 	migration.file === undefined
 		? migration.sql.map((sql, i) => ({ id: String(i), sql }))
-		: migration.file.ops.flatMap((op, i) => renderOp(op, render).map((sql, j) => ({ id: `${i}.${j}`, sql })))
+		: "dialect" in migration.file
+			? migration.file.ops.flatMap((op, i) => renderPgOp(op).map((sql, j) => ({ id: `${i}.${j}`, sql })))
+			: migration.file.ops.flatMap((op, i) => renderOp(op, render).map((sql, j) => ({ id: `${i}.${j}`, sql })))
+
+/**
+ * The dialect a set of migrations is for, read from their snapshots and
+ * generated files. `undefined` for a folder of hand-written SQL alone, which
+ * says nothing about its database.
+ */
+export const dialectOf = (migrations: ReadonlyArray<LoadedMigration>): SchemaDialect | undefined => {
+	for (const m of migrations) {
+		if (m.snapshot !== undefined) return m.snapshot.dialect
+		if (m.file !== undefined) return "dialect" in m.file ? "postgres" : "clickhouse"
+		if (m.foreignSnapshot !== undefined) return "postgres"
+	}
+	return undefined
+}

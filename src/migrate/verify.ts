@@ -12,11 +12,13 @@
 
 import { Effect } from "effect"
 import { quoteClickHouseString } from "../sql/sql-fragment"
-import type { ColumnEntity, IndexEntity, MaterializedViewEntity, Snapshot, TableEntity } from "../schema/entities"
+import type { SchemaDialect, ClickHouseSnapshot, ColumnEntity, IndexEntity, MaterializedViewEntity, TableEntity } from "../schema/entities"
 import { MigrationDriver } from "./driver"
-import type { MigrateSqlError } from "./errors"
+import type { MigrateSourceError, MigrateSqlError } from "./errors"
 import { LEDGER_TABLES, readApplied } from "./ledger"
-import type { LoadedMigration } from "./source"
+import { readPgApplied } from "./pg-ledger"
+import { verifyPg, type PgVerifyOptions } from "./pg-verify"
+import { dialectOf, type LoadedMigration } from "./source"
 
 export interface Drift {
 	readonly entity: string
@@ -28,8 +30,11 @@ export interface Drift {
 		| "partition_key"
 		| "primary_key"
 		| "type"
+		| "not_null"
+		| "identity"
 		| "default"
 		| "index"
+		| "foreign_key"
 		| "view_target"
 		| "view_body"
 	readonly expected?: string
@@ -80,15 +85,34 @@ const canonicalTypes = (driver: typeof MigrationDriver.Service, types: ReadonlyS
 		return out
 	})
 
+export interface VerifyOptions extends PgVerifyOptions {
+	/** Read from the migrations when omitted. */
+	readonly dialect?: SchemaDialect
+}
+
+/**
+ * Compare the database with the snapshot of the last applied migration. The
+ * dialect comes from the snapshots; see `pg-verify.ts` for how Postgres is
+ * compared.
+ */
 export const verify = (
 	migrations: ReadonlyArray<LoadedMigration>,
-): Effect.Effect<VerifyResult, MigrateSqlError, MigrationDriver> =>
+	options: VerifyOptions = {},
+): Effect.Effect<VerifyResult, MigrateSqlError | MigrateSourceError, MigrationDriver> =>
+	Effect.gen(function* () {
+		const postgres = (options.dialect ?? dialectOf(migrations)) === "postgres"
+		const appliedRows = yield* (postgres ? readPgApplied : readApplied).pipe(Effect.orElseSucceed(() => []))
+		const appliedNames = new Set(appliedRows.map((row) => row.name))
+		const against = [...migrations].reverse().find((m) => appliedNames.has(m.name) && m.snapshot !== undefined)
+		const snapshot = against?.snapshot
+		if (against === undefined || snapshot === undefined) return { against: undefined, drift: [] }
+		if (snapshot.dialect === "postgres") return { against: against.name, drift: yield* verifyPg(snapshot, against.name, options) }
+		return { against: against.name, drift: yield* verifyClickHouse(snapshot) }
+	})
+
+const verifyClickHouse = (snapshot: ClickHouseSnapshot): Effect.Effect<ReadonlyArray<Drift>, MigrateSqlError, MigrationDriver> =>
 	Effect.gen(function* () {
 		const driver = yield* MigrationDriver
-		const appliedNames = new Set((yield* readApplied.pipe(Effect.orElseSucceed(() => []))).map((row) => row.name))
-		const against = [...migrations].reverse().find((m) => appliedNames.has(m.name) && m.snapshot !== undefined)
-		const snapshot: Snapshot | undefined = against?.snapshot
-		if (snapshot === undefined) return { against: undefined, drift: [] }
 
 		const db = String((yield* driver.query("SELECT currentDatabase() AS db"))[0]?.db ?? "default")
 		const tables = yield* driver.query(
@@ -204,5 +228,5 @@ export const verify = (
 			}
 		}
 
-		return { against: against?.name, drift }
+		return drift
 	})

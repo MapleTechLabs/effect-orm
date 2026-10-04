@@ -1,6 +1,7 @@
 # Migrations: schema-as-code, snapshots, and a migrator
 
-Status: phases 0 to 3 implemented on 2026-10-03 (branch `feat/migrations`); phases 4 to 7 open.
+Status: phases 0 to 3 implemented on 2026-10-03 (branch `feat/migrations`); phase 6 (Postgres)
+on 2026-10-04, see section 8; phases 4, 5 and 7 open.
 Section 7 lists what was built and where it departs from this plan. User docs:
 [`docs/migrations.md`](../docs/migrations.md).
 
@@ -483,3 +484,40 @@ rendering, diff, snapshots, the CLI in a temp folder, branch analysis).
 additive change with a recreated view checked with real inserts, resume after a failed
 statement, hash mismatch under `strict`, the lease, and drift. Passing on 26.2.19.43 and 26.8.2.7.
 `tests/package-consumer.mts` imports all three entry points from the packed tarball under Node.
+
+---
+
+## 8. Postgres (phase 6)
+
+Open question 1 is answered with full authoring, not runtime-only: Maple's Postgres schema
+(70 tables, 76 drizzle-kit migrations) was the consumer, and keeping drizzle-kit for authoring
+would have meant two definitions per table.
+
+**Where the dialect seam is.** Shared: the snapshot envelope (`Snapshot` is a union over
+`dialect`), `entityKey` / `sortEntities` / hashing, the branch graph (`kit/graph.ts`), folder
+loading, `MigrationDriver`. Per dialect: entities (`pg-entities.ts`), definitions
+(`pg-define.ts`, exported as `S.pg`), the diff (`pg-diff.ts`), ops and DDL (`pg-ops.ts`), the
+ledger (`pg-ledger.ts`), drift (`pg-verify.ts`). `run`, `status`, `verify` and `generate` pick
+the dialect from the config or the snapshots and dispatch; nothing ClickHouse-specific moved.
+
+**Runtime.** One transaction per migration, ledger row included, under
+`pg_advisory_xact_lock`: transaction-scoped, so a pooled connection cannot leak the lock. The
+ledger is a plain table with a primary key. The ClickHouse step journal and lease are not used.
+
+**Drift without normalizing SQL.** The catalog stores `'open'` as `'open'::text` and
+`status in ('a', 'b')` as `(status = ANY (ARRAY[...]))`; any text normalizer would be a
+heuristic. `verify` instead renders the snapshot into a scratch schema inside a transaction it
+always rolls back, and reads both catalogs with the same queries. Checked against Maple: its 76
+migrations replayed on PGlite, baselined from drizzle-kit's last snapshot, verify clean except
+two real orphans (a table and a column the SQL created and no migration dropped, absent from
+drizzle-kit's snapshot).
+
+**Adoption.** A drizzle-kit `snapshot.json` is recognized (it has `ddl`, not `entities`) and
+kept aside as `foreignSnapshot`. Migrations sorting before the first effect-orm snapshot are
+legacy: `check` accepts them, `generate` refuses to diff until `--baseline` (from the
+definitions, or `--from-drizzle` from drizzle-kit's last snapshot) starts the history.
+`Migrate.baseline` records already-applied migrations without running them.
+
+**Not done.** Check and unique constraints, enums, views, sequences beyond identity defaults,
+non-`public` schemas, `CREATE INDEX CONCURRENTLY` (needs a migration outside a transaction),
+rename detection, and `pull` / `push`.

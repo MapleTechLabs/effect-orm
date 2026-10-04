@@ -6,6 +6,7 @@
 
 import { Schema } from "effect"
 import { ColumnEntity, IndexEntity, MaterializedViewEntity, TableEntity } from "./entities"
+import { PgMigrationFile } from "./pg-ops"
 import {
 	ident,
 	renderAlter,
@@ -46,11 +47,18 @@ export const MigrationOp = Schema.Union([
 ])
 export type MigrationOp = typeof MigrationOp.Type
 
-/** The file a generated migration is written to. */
-export const MigrationFile = Schema.Struct({
+/** The file a generated ClickHouse migration is written to. */
+export const ClickHouseMigrationFile = Schema.Struct({
 	version: Schema.Literal("1"),
 	ops: Schema.Array(MigrationOp),
 })
+export type ClickHouseMigrationFile = typeof ClickHouseMigrationFile.Type
+
+/**
+ * A generated `migration.json`, of either dialect. A Postgres file says
+ * `"dialect": "postgres"`; a ClickHouse one predates the field and has none.
+ */
+export const MigrationFile = Schema.Union([PgMigrationFile, ClickHouseMigrationFile])
 export type MigrationFile = typeof MigrationFile.Type
 
 /** Labels the plan prints, so the expensive lines stand out. */

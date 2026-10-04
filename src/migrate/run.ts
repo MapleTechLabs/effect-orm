@@ -1,5 +1,9 @@
 // Running migrations.
 //
+// ClickHouse and Postgres differ here more than anywhere else. Postgres DDL is
+// transactional, so a Postgres migration runs whole or not at all (`runPg`).
+// ClickHouse's is not, which is what the rest of this comment is about.
+//
 // Unlike Drizzle's migrator (one transaction, apply by name) and Effect's
 // (insert the ledger rows first, then run, inside a transaction), this one
 // assumes nothing is atomic. Each statement is journaled after it finishes and
@@ -7,7 +11,7 @@
 // rerun resumes at the statement that failed.
 
 import { Effect, Option } from "effect"
-import { sha256Hex } from "../schema/entities"
+import { sha256Hex, type SchemaDialect } from "../schema/entities"
 import type { RenderOptions } from "../schema/render"
 import { MigrationDriver } from "./driver"
 import { MigrateHashMismatch, MigrateLeaseHeld, MigrateSourceError, MigrateStepChanged, MigrateStepFailed, MigrateStepUncertain, type MigrateError } from "./errors"
@@ -21,18 +25,28 @@ import {
 	writeLease,
 	type AppliedRow,
 } from "./ledger"
-import { stepsOf, type LoadedMigration } from "./source"
+import { ensurePgLedger, isPgApplied, lockPg, readPgApplied, recordPgMigration, transactionOf } from "./pg-ledger"
+import { dialectOf, stepsOf, type LoadedMigration } from "./source"
 
 export interface RunOptions {
 	readonly migrations: ReadonlyArray<LoadedMigration>
+	/**
+	 * The database being migrated. Read from the migrations' snapshots when
+	 * omitted; a folder of hand-written SQL alone needs it said. Default
+	 * `clickhouse`.
+	 */
+	readonly dialect?: SchemaDialect
 	readonly render?: RenderOptions
 	/** Fail when an applied migration's file has changed. Otherwise log a warning. */
 	readonly strict?: boolean
 	/** Names this run in the lease. Defaults to a random id. */
 	readonly owner?: string
-	/** How long the lease lasts without renewal. Each finished statement renews it. */
+	/** How long the lease lasts without renewal. Each finished statement renews it. ClickHouse only. */
 	readonly leaseSeconds?: number
 }
+
+const resolveDialect = (migrations: ReadonlyArray<LoadedMigration>, dialect: SchemaDialect | undefined): SchemaDialect =>
+	dialect ?? dialectOf(migrations) ?? "clickhouse"
 
 export interface AppliedMigration {
 	readonly name: string
@@ -148,6 +162,9 @@ const applyOne = (migration: LoadedMigration, render: RenderOptions, renew: Effe
  * have their hash checked. Returns what ran.
  */
 export const run = (options: RunOptions): Effect.Effect<ReadonlyArray<AppliedMigration>, MigrateError, MigrationDriver> =>
+	resolveDialect(options.migrations, options.dialect) === "postgres" ? runPg(options) : runClickHouse(options)
+
+const runClickHouse = (options: RunOptions): Effect.Effect<ReadonlyArray<AppliedMigration>, MigrateError, MigrationDriver> =>
 	Effect.gen(function* () {
 		const render = options.render ?? {}
 		const owner = options.owner ?? `effect-orm-${globalThis.crypto.randomUUID()}`
@@ -170,12 +187,101 @@ export const run = (options: RunOptions): Effect.Effect<ReadonlyArray<AppliedMig
 		return yield* work.pipe(Effect.ensuring(writeLease(owner, 0).pipe(Effect.ignore)))
 	}).pipe(Effect.withSpan("effect_orm.migrate"))
 
+/**
+ * Postgres: each migration runs in its own transaction, with its ledger row,
+ * under an advisory lock. A failed statement rolls the whole migration back;
+ * the next run starts it again from the top. A migration another run applied
+ * while this one waited for the lock is skipped.
+ */
+const runPg = (options: RunOptions): Effect.Effect<ReadonlyArray<AppliedMigration>, MigrateError, MigrationDriver> =>
+	Effect.gen(function* () {
+		const driver = yield* MigrationDriver
+		yield* ensurePgLedger
+		const applied = new Map((yield* readPgApplied).map((row) => [row.name, row]))
+		const ran: Array<AppliedMigration> = []
+		for (const migration of options.migrations) {
+			const row = applied.get(migration.name)
+			if (row !== undefined) {
+				yield* checkHash(migration, row, options.strict ?? false)
+				continue
+			}
+			const transaction = yield* transactionOf(driver, migration.name)
+			const steps = stepsOf(migration)
+			const result = yield* transaction(
+				Effect.gen(function* () {
+					yield* lockPg
+					if (yield* isPgApplied(migration.name)) return undefined
+					for (const step of steps) {
+						yield* driver.execute(step.sql).pipe(
+							Effect.mapError(
+								(cause) =>
+									new MigrateStepFailed({
+										migration: migration.name,
+										step: step.id,
+										sql: step.sql,
+										message: `${migration.name} step ${step.id} failed, and the migration was rolled back: ${cause.message}`,
+										cause,
+									}),
+							),
+							Effect.withSpan("effect_orm.migrate.step", { attributes: { "effect_orm.migration.step": step.id } }),
+						)
+					}
+					yield* recordPgMigration(migration.name, migration.hash)
+					const done: AppliedMigration = { name: migration.name, steps: steps.length, resumedSteps: 0 }
+					return done
+				}),
+			).pipe(Effect.withSpan("effect_orm.migrate.migration", { attributes: { "effect_orm.migration.name": migration.name } }))
+			if (result !== undefined) ran.push(result)
+		}
+		return ran
+	}).pipe(Effect.withSpan("effect_orm.migrate"))
+
+export interface BaselineOptions {
+	readonly migrations: ReadonlyArray<LoadedMigration>
+	/** The last migration the database already has. It and every migration before it are recorded as applied. */
+	readonly upTo: string
+	readonly dialect?: SchemaDialect
+	readonly render?: RenderOptions
+}
+
+/**
+ * Record migrations as applied without running them, for a database whose
+ * schema another tool (drizzle-kit, a deploy pipeline) already built. Returns
+ * the names it recorded; ones already in the ledger are left alone.
+ */
+export const baseline = (options: BaselineOptions): Effect.Effect<ReadonlyArray<string>, MigrateError, MigrationDriver> =>
+	Effect.gen(function* () {
+		const index = options.migrations.findIndex((m) => m.name === options.upTo)
+		if (index === -1) return yield* new MigrateSourceError({ migration: options.upTo, message: "is not one of the migrations" })
+		const postgres = resolveDialect(options.migrations, options.dialect) === "postgres"
+		if (postgres) yield* ensurePgLedger
+		else yield* ensureLedger(options.render ?? {})
+		const applied = new Set((yield* postgres ? readPgApplied : readApplied).map((row) => row.name))
+		const recorded: Array<string> = []
+		for (const migration of options.migrations.slice(0, index + 1)) {
+			if (applied.has(migration.name)) continue
+			yield* postgres ? recordPgMigration(migration.name, migration.hash) : recordMigration(migration.name, migration.hash)
+			recorded.push(migration.name)
+		}
+		return recorded
+	})
+
 /** Where each migration stands, without running anything. */
 export const status = (
 	migrations: ReadonlyArray<LoadedMigration>,
 	render: RenderOptions = {},
+	dialect?: SchemaDialect,
 ): Effect.Effect<ReadonlyArray<MigrationStatus>, MigrateError, MigrationDriver> =>
 	Effect.gen(function* () {
+		if (resolveDialect(migrations, dialect) === "postgres") {
+			yield* ensurePgLedger
+			const applied = new Map((yield* readPgApplied).map((row) => [row.name, row]))
+			return migrations.map((migration): MigrationStatus => {
+				const row = applied.get(migration.name)
+				if (row === undefined) return { name: migration.name, state: "pending", appliedAt: undefined }
+				return { name: migration.name, state: row.hash === migration.hash ? "applied" : "changed", appliedAt: row.appliedAt }
+			})
+		}
 		yield* ensureLedger(render)
 		const applied = new Map((yield* readApplied).map((row) => [row.name, row]))
 		return yield* Effect.forEach(migrations, (migration) =>
@@ -203,6 +309,7 @@ export interface ResolveStepOptions {
 	/** What checking the database showed: the statement took effect, or it did not. */
 	readonly outcome: "ran" | "not-ran"
 	readonly render?: RenderOptions
+	readonly dialect?: SchemaDialect
 }
 
 /**
@@ -213,6 +320,12 @@ export interface ResolveStepOptions {
 export const resolveStep = (options: ResolveStepOptions): Effect.Effect<void, MigrateError, MigrationDriver> =>
 	Effect.gen(function* () {
 		const { migration } = options
+		if (resolveDialect([migration], options.dialect) === "postgres") {
+			return yield* new MigrateSourceError({
+				migration: migration.name,
+				message: "a Postgres migration runs in one transaction, so no step of it is ever uncertain",
+			})
+		}
 		const step = stepsOf(migration, options.render ?? {}).find((s) => s.id === options.step)
 		if (step === undefined) {
 			return yield* new MigrateSourceError({ migration: migration.name, message: `has no step ${options.step}` })

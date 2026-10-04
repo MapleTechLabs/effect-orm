@@ -56,7 +56,7 @@ Roughly in reading order.
 | [Tenant scoping](./tenant-scoping.md)                 | `tenantScope`, what marks a query scoped, `crossTenant()`                           |
 | [Extending the DSL](./extending.md)                   | `defineFn`, raw escape hatches, handwritten SQL                                     |
 | [Postgres](./postgres.md)                             | The Postgres dialect, its column types and functions                                |
-| [Schema and migrations](./migrations.md)              | `defineTable`, `materializedView`, `effect-orm generate`, applying migrations       |
+| [Schema and migrations](./migrations.md)              | `defineTable`, `materializedView`, `S.pg.table`, `effect-orm generate`, applying migrations, adopting drizzle-kit |
 | [Statements and transactions](./database.md)          | `Database` over your `SqlClient`: `run`, `execute`, `transaction`, retry            |
 
 ## Reference
@@ -79,7 +79,7 @@ Roughly in reading order.
 | `@maple-dev/effect-orm/benchmark/cli`  | `runCli(args)` for embedding the bundled `ch-bench` commands                                                                                              |
 | `@maple-dev/effect-orm/schema`         | `defineTable`, `materializedView`, DDL rendering, snapshots, and the schema diff. Pure                                                                   |
 | `@maple-dev/effect-orm/kit`            | `generate` and `check` over a migrations folder, `defineConfig`, and `runCli` for the bundled `effect-orm` command. Node or Bun                          |
-| `@maple-dev/effect-orm/migrate`        | `run`, `status`, `verify`, and `MigrationDriver`: applies migrations through a driver you provide                                                       |
+| `@maple-dev/effect-orm/migrate`        | `run`, `status`, `verify`, `baseline`, and `MigrationDriver`: applies ClickHouse or Postgres migrations through a driver you provide                     |
 | `@maple-dev/effect-orm/database`       | `Database` over your `SqlClient`: `run` compiled queries, `execute` statements, `transaction` with settings and contention retry                           |
 
 The root barrel is curated, not exhaustive — see

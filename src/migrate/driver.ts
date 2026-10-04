@@ -16,6 +16,11 @@ export interface MigrationDriverApi {
 	readonly execute: (sql: string) => Effect.Effect<void, MigrateSqlError>
 	/** Run a SELECT and return its rows as plain records. */
 	readonly query: (sql: string) => Effect.Effect<ReadonlyArray<Record<string, unknown>>, MigrateSqlError>
+	/**
+	 * Run an effect in one transaction: commit when it succeeds, roll back when
+	 * it fails. Postgres migrations need it; ClickHouse has none to offer.
+	 */
+	readonly transaction?: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E | MigrateSqlError, R>
 }
 
 export class MigrationDriver extends Context.Service<MigrationDriver, MigrationDriverApi>()(
@@ -32,10 +37,14 @@ export interface FromSqlClientOptions {
 	readonly command?: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>
 }
 
-/** A driver over an Effect `SqlClient`. */
+/**
+ * A driver over an Effect `SqlClient`. Its `transaction` is the client's
+ * `withTransaction`, which every statement the driver runs inside it joins.
+ */
 export const fromSqlClient = (sql: SqlClient.SqlClient, options: FromSqlClientOptions = {}): MigrationDriverApi => {
 	const command = options.command ?? ((effect) => effect)
 	return {
+		transaction: (effect) => sql.withTransaction(effect).pipe(Effect.catchTag("SqlError", (cause) => Effect.fail(sqlError("BEGIN / COMMIT")(cause)))),
 		execute: (text) => command(sql.unsafe(text)).pipe(Effect.asVoid, Effect.mapError(sqlError(text))),
 		query: (text) =>
 			sql.unsafe<Record<string, unknown>>(text).pipe(
