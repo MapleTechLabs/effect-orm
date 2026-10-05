@@ -45,6 +45,9 @@ CH.from(Users)
 	.innerJoin(Orders, "o", (u, o) => u.Id.eq(o.UserId))
 	// @ts-expect-error -- `o` is already a join alias
 	.innerJoin(Tags, "o", (u, t) => u.Id.eq(t.UserId))
+// A join map held open (`Record<string, …>`, joins added conditionally) names no alias yet
+declare let open: CH.CHQuery<(typeof Users)["columns"], {}, Record<string, CH.ColumnDefs>>
+open = open.leftJoin(Orders, "o", (u, o) => u.Id.eq(o.UserId))
 
 // A query must select something before it is run or read from
 // @ts-expect-error -- no SELECT list

@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Fixes found migrating a large consumer onto the strict params and brands:
+  - A param inside `when` / `whenTrue`, or one whose name is a union, is optional in the params
+    `compile` asks for: whether it renders is only known at runtime. It used to be required,
+    and a union name asked for a value of type `never` under each name.
+  - `compile`, `compileUnion` and `Database.run` accept a params object typed by an interface
+    (`Given extends object`, not `Record<string, unknown>`).
+  - A join alias is no longer refused against a join map that is an open `Record<string, …>`.
+  - Export `NeedsSelect` and `ParamsSatisfied`, so a helper generic over a query's output can
+    pass the query on to `compile`.
+
 - **Breaking:** one entry per database, drizzle style. `@maple-dev/effect-orm/clickhouse` and
   `@maple-dev/effect-orm/postgres` each export the whole query builder plus that database's
   column types, functions, table definitions and `compile`; one import covers a dialect.

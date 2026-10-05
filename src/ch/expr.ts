@@ -62,7 +62,34 @@ export type Widen<TSType> = TSType extends Brand.Brand<any>
 export interface ParamEntry<Name extends string = string, Value = unknown> {
 	readonly name: Name
 	readonly value: Value
+	readonly optional?: boolean
 }
+
+/**
+ * A param under `when` / `whenTrue`: the branch may not render, so its value
+ * may be left out. A missing value for a branch that did render still fails
+ * `compile`.
+ */
+export interface OptionalParamEntry<Name extends string = string, Value = unknown> extends ParamEntry<Name, Value> {
+	readonly optional: true
+}
+
+/**
+ * The entries of a param. A name that is a union (`cond ? "startTime" :
+ * "prevStartTime"`) is decided at runtime, like a `when` branch, so each name
+ * is optional; `compile` still fails on the one that renders without a value.
+ */
+export type ParamEntries<Name extends string, Value> = IsUnion<Name> extends true
+	? OptionalParams<Name extends string ? ParamEntry<Name, Value> : never>
+	: ParamEntry<Name, Value>
+
+type IsUnion<T, U = T> = [T] extends [never] ? false : T extends unknown ? ([U] extends [T] ? false : true) : never
+
+/** `P` with every entry made optional. */
+export type OptionalParams<P> = P extends ParamEntry<infer N, infer V> ? OptionalParamEntry<N, V> : never
+
+/** The names some entry of `P` requires. */
+type RequiredNames<P> = P extends ParamEntry ? (P extends { readonly optional: true } ? never : P["name"]) : never
 
 /** The params of an expression, condition, or a union or array of them. */
 export type ParamsIn<X> = 0 extends 1 & X
@@ -93,8 +120,14 @@ type UnionToIntersection<U> = (U extends unknown ? (u: U) => void : never) exten
 export type ParamsRecord<P> = [P] extends [never]
 	? {}
 	: [P] extends [ParamEntry]
-		? { readonly [N in P["name"]]: ValueOf<P, N> }
+		? Simplify<
+				{ readonly [N in RequiredNames<P>]: ValueOf<P, N> } & {
+					readonly [N in Exclude<P["name"], RequiredNames<P>>]?: ValueOf<P, N>
+				}
+			>
 		: {}
+
+type Simplify<T> = { [K in keyof T]: T[K] } & {}
 
 /**
  * `unknown` when `Given` fills every param in `P` with a value of its type;
@@ -666,15 +699,23 @@ export function aliased<T>(expr: Expr<T>, alias: string): SqlFragment {
 
 // Conditional helpers (for optional WHERE clauses)
 
+// The condition's params are optional: whether the branch renders is only
+// known at runtime.
 export function when<T, P = never>(
 	value: T | undefined | false | null,
 	fn: (v: T) => Condition<P>,
-): Condition<P> | undefined {
+): Condition<OptionalParams<P>> | undefined {
 	if (value === undefined || value === null || value === false) return undefined
-	return fn(value)
+	return optionalParams(fn(value))
 }
 
-export function whenTrue<P = never>(value: boolean | undefined, fn: () => Condition<P>): Condition<P> | undefined {
+export function whenTrue<P = never>(
+	value: boolean | undefined,
+	fn: () => Condition<P>,
+): Condition<OptionalParams<P>> | undefined {
 	if (!value) return undefined
-	return fn()
+	return optionalParams(fn())
 }
+
+// Only the phantom params change; the condition is the same value.
+const optionalParams = <P>(cond: Condition<P>): Condition<OptionalParams<P>> => cond as Condition<any>

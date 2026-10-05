@@ -88,10 +88,13 @@ export {
 	type InferOutput,
 	type InferQueryOutput,
 	type LockOptions,
+	// What `compile` asks of a query, for a wrapper generic over its output.
+	type NeedsSelect,
 	from,
 	fromQuery,
 	fromUnion,
 } from "./ch/query"
+export { type ParamsSatisfied } from "./ch/expr"
 
 export {
 	type CHInsert,

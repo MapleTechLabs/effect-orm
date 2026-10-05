@@ -49,6 +49,11 @@ Params are collected from `where`, `having`, `select`, join `on` callbacks, subq
 write `where`s. Extra keys are allowed, so one params object can serve several queries. A
 query without params takes none.
 
+A param whose use is decided at runtime is optional in the type: one inside `when` or
+`whenTrue`, and one whose name is a union (`CH.param.string(previous ? "prevStart" : "start")`).
+Leaving its value out type-checks; if the branch renders without it, `compile` fails as below.
+A value that is given must still have the param's type.
+
 A function the builder does not know passes its arguments' params on only if its signature
 says so: `defineFn`, `defineCondFn` and `compileTypedFnCall` from the extending API do, a
 hand-written `makeExpr` does not. A param the type does not see is still checked when

@@ -7,7 +7,7 @@
 import { type DateTime, Schema } from "effect"
 import type { SqlFragment } from "../sql/sql-fragment"
 import { raw } from "../sql/sql-fragment"
-import type { Comparable, Expr, ParamEntry } from "./expr"
+import type { Comparable, Expr, ParamEntries } from "./expr"
 import { QueryBuilderDefect } from "./errors"
 import * as T from "./types"
 import type { CHType } from "./types"
@@ -69,7 +69,7 @@ function assertValidParamName(name: string): void {
  */
 export type ParamValue<T> = Comparable<T>
 
-export interface ParamMarker<N extends string, T, V = ParamValue<T>> extends Expr<T, ParamEntry<N, V>> {
+export interface ParamMarker<N extends string, T, V = ParamValue<T>> extends Expr<T, ParamEntries<N, V>> {
 	readonly _paramName: N
 	readonly _paramType?: T
 }

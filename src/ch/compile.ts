@@ -574,7 +574,7 @@ export function compileCH<
 	Joins extends Record<string, ColumnDefs>,
 	Route extends string | undefined,
 	Params = never,
-	const Given extends Record<string, unknown> = {},
+	const Given extends object = {},
 	Decoded extends Output = Output,
 >(
 	query: CHQuery<Cols, Output, Joins, Route, Params> & NeedsSelect<Output> & ParamsSatisfied<Params, Given>,
@@ -588,7 +588,7 @@ export function compileCH<
 	},
 ): Effect.Effect<CompiledQuery<Decoded, Route>, QueryBuilderError>
 /** An INSERT, UPDATE or DELETE. `params` fills the `param.*` markers among its values. */
-export function compileCH<Output, Params = never, const Given extends Record<string, unknown> = {}>(
+export function compileCH<Output, Params = never, const Given extends object = {}>(
 	insert: CHWrite<Output, Params> & ParamsSatisfied<Params, Given>,
 	params?: Given,
 	options?: InsertCompileOptions,
@@ -616,7 +616,7 @@ export interface InsertCompileOptions {
 export const compileUnion = <
 	Output extends Record<string, any>,
 	Params = never,
-	const Given extends Record<string, unknown> = {},
+	const Given extends object = {},
 >(
 	union: CHUnionQuery<Output, Params> & ParamsSatisfied<Params, Given>,
 	params?: Given,
@@ -630,7 +630,7 @@ export function compileCHUnsafe<
 	Joins extends Record<string, ColumnDefs>,
 	Route extends string | undefined,
 	Params = never,
-	const Given extends Record<string, unknown> = {},
+	const Given extends object = {},
 	Decoded extends Output = Output,
 >(
 	query: CHQuery<Cols, Output, Joins, Route, Params> & NeedsSelect<Output> & ParamsSatisfied<Params, Given>,
@@ -648,7 +648,7 @@ export function compileCHUnsafe<
 	},
 ): CompiledQuery<Decoded, Route>
 /** An INSERT, UPDATE or DELETE. `params` fills the `param.*` markers among its values. */
-export function compileCHUnsafe<Output, Params = never, const Given extends Record<string, unknown> = {}>(
+export function compileCHUnsafe<Output, Params = never, const Given extends object = {}>(
 	insert: CHWrite<Output, Params> & ParamsSatisfied<Params, Given>,
 	params?: Given,
 	options?: InsertCompileOptions,
@@ -1299,7 +1299,7 @@ const unionExprsOf = (
 export function compileUnionUnsafe<
 	Output extends Record<string, any>,
 	Params = never,
-	const Given extends Record<string, unknown> = {},
+	const Given extends object = {},
 >(
 	union: CHUnionQuery<Output, Params> & ParamsSatisfied<Params, Given>,
 	params?: Given,

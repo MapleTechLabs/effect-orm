@@ -103,7 +103,7 @@ export interface DatabaseApi {
 	 * `params` fills the query's `param.*` markers. A query compiled elsewhere
 	 * runs as it is, if it was compiled for this dialect.
 	 */
-	readonly run: <Q extends Runnable, const Given extends Record<string, unknown> = {}>(
+	readonly run: <Q extends Runnable, const Given extends object = {}>(
 		query: Q & RunCheck<Q> & ParamsSatisfied<QueryParams<Q>, Given>,
 		params?: Given,
 	) => Effect.Effect<ReadonlyArray<RowOf<Q>>, DatabaseError | QueryBuilderError | CompiledQueryDecodeError>
@@ -449,7 +449,7 @@ export const layerSqlClient = (options: FromSqlClientOptions): Layer.Layer<Datab
 	)
 
 /** `run` on the `Database` in context. */
-export const run = <Q extends Runnable, const Given extends Record<string, unknown> = {}>(
+export const run = <Q extends Runnable, const Given extends object = {}>(
 	query: Q & RunCheck<Q> & ParamsSatisfied<QueryParams<Q>, Given>,
 	params?: Given,
 ): Effect.Effect<ReadonlyArray<RowOf<Q>>, DatabaseError | QueryBuilderError | CompiledQueryDecodeError, Database> =>

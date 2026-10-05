@@ -152,7 +152,10 @@ export interface CHQueryState {
  * or with a CTE, is refused when compiling.
  */
 export type FreshAlias<Alias extends string, Cols extends ColumnDefs, Joins extends Record<string, ColumnDefs>> = Alias &
-	(Alias extends (keyof Cols & string) | (keyof Joins & string) ? { readonly aliasAlreadyInUse: Alias } : unknown)
+	(Alias extends KnownKeys<Cols> | KnownKeys<Joins> ? { readonly aliasAlreadyInUse: Alias } : unknown)
+
+/** The literal keys of a record: none for an open one (`Record<string, …>`), whose keys name nothing in use. */
+type KnownKeys<R> = string extends keyof R ? never : keyof R & string
 
 /** The row a query selects. */
 export type OutputOf<Q> = Q extends { readonly _phantom?: { readonly output: infer O } } ? O : never

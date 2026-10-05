@@ -209,3 +209,36 @@ expectTypeOf<InferQueryOutput<typeof joinedStr>>().toEqualTypeOf<{ readonly s: s
 CH.compileUnsafe(joinedStr, {})
 CH.compileUnsafe(joinedStr, { sepPart: "-" })
 CH.compileUnsafe(CH.from(Users).select(($) => ({ s: CH.arrayStringConcat($.Tags, ",") })), {})
+
+// when / whenTrue: the branch may not render, so its params may be left out,
+// but a value that is given must still have the param's type.
+const optional = CH.from(Users)
+	.select("Id")
+	.where(($) => [
+		$.Name.eq(CH.param.string("name")),
+		CH.whenTrue(false, () => $.Age.gt(CH.param.int("minAge"))),
+		CH.when("x", () => $.Nick.eq(CH.param.string("nick"))),
+	])
+CH.compileUnsafe(optional, { name: "a" })
+CH.compileUnsafe(optional, { name: "a", minAge: 3, nick: "n" })
+// @ts-expect-error -- `name` is outside any `when`, so it is required
+CH.compileUnsafe(optional, { minAge: 3 })
+// @ts-expect-error -- `minAge` is optional, but still an int
+CH.compileUnsafe(optional, { name: "a", minAge: "3" })
+// A name used both inside and outside a `when` stays required.
+const both = CH.from(Users)
+	.select("Id")
+	.where(($) => [$.Name.eq(CH.param.string("name")), CH.whenTrue(true, () => $.Id.eq(CH.param.string("name")))])
+// @ts-expect-error -- `name` is required by the unconditional use
+CH.compileUnsafe(both, {})
+
+// A param whose name is decided at runtime is optional under each name, like a
+// `when` branch; a value that is given must still have the param's type.
+declare const previous: boolean
+const eitherName = CH.from(Users)
+	.select("Id")
+	.where(($) => [$.Name.eq(CH.param.string(previous ? "prevName" : "name"))])
+CH.compileUnsafe(eitherName, { name: "a" })
+CH.compileUnsafe(eitherName, { name: "a", prevName: "b" })
+// @ts-expect-error -- `prevName` must be a string
+CH.compileUnsafe(eitherName, { prevName: 1 })

@@ -180,6 +180,11 @@ decoded type of a column), `InferEncoded` (its wire type), `ColumnDefs`, `Nullab
 **Inference** — `InferOutput`, `InferQueryOutput`, `InferUnionOutput`, `SelectRowOf`,
 `InsertRow`, `InsertRowOf`, `UpdateSet`, `UpdateSetOf`.
 
+**What `compile` checks** — `NeedsSelect<Output>` (the query has a SELECT list) and
+`ParamsSatisfied<Params, Given>` (the params object fills every required param). A helper generic
+over a query's output takes `CHQuery<…, Output> & NeedsSelect<Output>` so it can pass the query on
+to `compile`.
+
 **Everything else** — `Table` (what `from` and the write builders accept; every `table` value is
 one), `Expr`, `ColumnRef`, `Condition`, `Comparable` (what a value of a type may be compared
 against), `MapValueOf`, `Subquery`, `ParamMarker`, `ParamKind`, `CHQuery`, `CHUnionQuery`,
