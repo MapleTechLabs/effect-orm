@@ -84,6 +84,7 @@ Roughly in reading order.
 | `@maple-dev/effect-orm/benchmark`             | Driver-free suite definitions, runner, report schemas, and comparisons                                                                                    |
 | `@maple-dev/effect-orm/benchmark/http`        | ClickHouse HTTP transport, environment configuration, and query-log collection                                                                            |
 | `@maple-dev/effect-orm/benchmark/cli`         | `runCli(args)` for embedding the bundled `ch-bench` commands                                                                                              |
+| `@maple-dev/effect-orm/tinybird`              | Tinybird datasources and views with `@tinybirdco/sdk` call shapes; each datasource is a query table. See [Tinybird](./tinybird.md) |
 | `@maple-dev/effect-orm/schema`                | Tooling over `table` values: `renderSchema` / `renderPgSchema`, `entitiesOf` / `pgEntitiesOf`, snapshots, and the schema diff. Pure                       |
 | `@maple-dev/effect-orm/kit`                   | `generate` and `check` over a migrations folder, `defineConfig`, and `runCli` for the bundled `effect-orm` command. Node or Bun                          |
 | `@maple-dev/effect-orm/migrate`               | `run`, `status`, `verify`, `baseline`, and `MigrationDriver`: applies ClickHouse or Postgres migrations through a driver you provide                     |

@@ -73,6 +73,26 @@ describe("defineTable", () => {
 		)
 	})
 
+	it("renders storage-only wrappers without changing the column's query type", () => {
+		const Rollup = CH.table("rollup", {
+			columns: {
+				OrgId: CH.lowCardinality(CH.string),
+				Env: CH.nullable(CH.lowCardinality(CH.string)),
+				At: CH.precision(CH.dateTime64String, 9),
+				Calls: CH.simpleAggregateFunction("sum", CH.uint64),
+			},
+			engine: CH.engine.aggregatingMergeTree(),
+			orderBy: ["OrgId"],
+		})
+		const [table] = S.renderSchema(S.entitiesOf([Rollup]))
+		expect(table).toContain("\tOrgId LowCardinality(String),")
+		expect(table).toContain("\tEnv LowCardinality(Nullable(String)),")
+		expect(table).toContain("\tAt DateTime64(9),")
+		expect(table).toContain("\tCalls SimpleAggregateFunction(sum, UInt64)")
+		expect(Rollup.columns.OrgId._tag).toBe("String")
+		expect(Rollup.columns.Calls._tag).toBe("UInt64")
+	})
+
 	it("rejects a MergeTree without a sorting key", () => {
 		expect(() =>
 			CH.table("bad", { columns: { a: CH.string }, engine: CH.engine.mergeTree() }),

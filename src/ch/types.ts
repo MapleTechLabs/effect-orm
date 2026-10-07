@@ -325,14 +325,39 @@ export const map = <K extends CHType<string, string, any>, V extends CHType<stri
 export const array = <E extends CHType<string, any, any>>(e: E): CHArray<E> =>
 	chType("Array", `Array(${e.sql})`, Schema.Array(e.schema), undefined, e) as CHArray<E>
 
+const LOW_CARDINALITY = /^LowCardinality\((.+)\)$/s
+
 export const nullable = <T extends CHType<string, any, any>>(t: T): CHNullable<T> =>
 	chType(
 		"Nullable",
-		`Nullable(${t.sql})`,
+		// ClickHouse rejects `Nullable(LowCardinality(T))`; the wrapper goes outside.
+		LOW_CARDINALITY.test(t.sql) ? t.sql.replace(LOW_CARDINALITY, "LowCardinality(Nullable($1))") : `Nullable(${t.sql})`,
 		Schema.NullOr(t.schema),
 		Schema.NullOr(t.literalSchema),
 		t,
 	) as CHNullable<T>
+
+/**
+ * `LowCardinality(T)`: dictionary-encoded storage. Queries see `T` unchanged,
+ * so only the DDL differs.
+ */
+export const lowCardinality = <T extends CHType<string, any, any>>(t: T): T =>
+	LOW_CARDINALITY.test(t.sql) ? t : { ...t, sql: `LowCardinality(${t.sql})` }
+
+/**
+ * `SimpleAggregateFunction(fn, T)`: stores the aggregated value itself, so it
+ * reads back as `T`. Only the DDL differs.
+ */
+export const simpleAggregateFunction = <T extends CHType<string, any, any>>(fn: string, t: T): T => ({
+	...t,
+	sql: `SimpleAggregateFunction(${fn}, ${t.sql})`,
+})
+
+/** A `DateTime64` with its sub-second digits: `precision(dateTime64, 9)` is `DateTime64(9)`. */
+export const precision = <T extends CHType<"DateTime64", any, any>>(
+	t: T,
+	digits: 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9,
+): T => ({ ...t, sql: `DateTime64(${digits})` })
 
 /**
  * A column type of your own: a ClickHouse type name and the schema its wire

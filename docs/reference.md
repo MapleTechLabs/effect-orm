@@ -300,7 +300,8 @@ that cannot render throws `SchemaDefinitionDefect` while the module loads.
 
 **Constructors** — `string`, `bool`, `uint8`, `uint16`, `uint32`, `uint64`, `int32`,
 `int64`, `float64`, `dateTime`, `dateTime64`, `dateTimeString`, `dateTime64String`, `map`,
-`array`, `nullable`, `aggregateState(fn, ...args)`, `custom(sql, schema, literalSchema?)`,
+`array`, `nullable`, `lowCardinality(type)`, `simpleAggregateFunction(fn, type)`,
+`precision(dateTime64Type, digits)`, `aggregateState(fn, ...args)`, `custom(sql, schema, literalSchema?)`,
 `brand(type, schema)` (the type narrowed by `schema`: a branded id, a literal union; see
 [Branded columns](./tables-and-types.md#branded-columns)), and `untyped(sql)` for a wire value
 passed through unvalidated. See [Tables and column types](./tables-and-types.md).

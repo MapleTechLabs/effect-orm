@@ -205,6 +205,7 @@ regressions live in [`src/docs-examples.test.ts`](./src/docs-examples.test.ts).
 | `@maple-dev/effect-orm/postgres`    | The same for Postgres: the builder, Postgres column types (`text`, `int8`, `timestamptz`, …) and functions, `table` with keys, indexes and foreign keys, and a `compile` for Postgres. |
 | `@maple-dev/effect-orm/expr`        | Kitchen-sink namespace: every expression helper plus all ClickHouse functions under their raw names (`min_`, `toString_`, `toStartOfInterval`, `dynamicColumn`, …). |
 | `@maple-dev/effect-orm/sql`         | The low-level `SqlFragment` AST (`raw`, `ident`, `compile`, …) for hand-rolling fragments.                                                                    |
+| `@maple-dev/effect-orm/tinybird`    | Tinybird datasources and materialized views, SDK-compatible, that are also query tables; `buildProject` writes the datafiles. See [Tinybird](./docs/tinybird.md). |
 | `@maple-dev/effect-orm/schema`      | Migration tooling over `table` values: DDL rendering, snapshots, the schema diff. Pure.                                                                       |
 | `@maple-dev/effect-orm/kit`, `/migrate` | `effect-orm generate` and `check`; applying migrations through a driver you provide. See [Schema and migrations](./docs/migrations.md).                  |
 | `@maple-dev/effect-orm/database`    | `Database` over your `SqlClient`: `run`, `execute`, `transaction` with retry.                                                                                  |
