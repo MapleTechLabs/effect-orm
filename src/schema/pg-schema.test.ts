@@ -4,6 +4,9 @@ import * as CH from "../ch/index"
 import * as PG from "../postgres"
 import * as S from "../schema"
 
+const problemsOf = (object: { readonly problems: ReadonlyArray<S.DefinitionProblem> }): string =>
+	object.problems.map((problem) => problem.message).join("; ")
+
 const Dashboards = PG.table("dashboards", {
 	columns: {
 		org_id: PG.text,
@@ -73,7 +76,7 @@ describe("PG.table", () => {
 	})
 
 	it("renders its DDL", () => {
-		expect(S.renderPgSchema(S.pgEntitiesOf([Dashboards, Shares]))).toEqual([
+		expect(S.renderPgSchema(Effect.runSync(S.pgEntitiesOf([Dashboards, Shares])))).toEqual([
 			[
 				'CREATE TABLE IF NOT EXISTS "dashboard_shares" (',
 				'\t"org_id" text NOT NULL,',
@@ -130,11 +133,13 @@ describe("PG.table", () => {
 	})
 
 	it("rejects definitions Postgres would not take as written", () => {
-		expect(() => PG.table("t", { columns: { a: PG.nullable(PG.text) }, primaryKey: ["a"] })).toThrow(/cannot be nullable/)
-		expect(() => PG.table("t".repeat(64), { columns: { a: PG.text } })).toThrow(/longer than 63/)
-		expect(() =>
-			PG.table("t", { columns: { a: PG.text }, foreignKeys: [PG.foreignKey({ columns: ["a"], references: "u", foreignColumns: ["x", "y"] })] }),
-		).toThrow(/same, non-zero, length/)
+		expect(problemsOf(PG.table("t", { columns: { a: PG.nullable(PG.text) }, primaryKey: ["a"] }))).toMatch(/cannot be nullable/)
+		expect(problemsOf(PG.table("t".repeat(64), { columns: { a: PG.text } }))).toMatch(/longer than 63/)
+		expect(
+			problemsOf(
+				PG.table("t", { columns: { a: PG.text }, foreignKeys: [PG.foreignKey({ columns: ["a"], references: "u", foreignColumns: ["x", "y"] })] }),
+			),
+		).toMatch(/same, non-zero, length/)
 	})
 
 	it("validates a schema as a whole", () => {
@@ -142,9 +147,9 @@ describe("PG.table", () => {
 			columns: { a: PG.text },
 			indexes: [PG.index("dashboards_org_idx", ["a"])],
 		})
-		expect(() => S.pgEntitiesOf([Dashboards, Other])).toThrow(/one namespace/)
-		expect(() => S.pgEntitiesOf([Shares])).toThrow(/not a table in this schema/)
-		expect(() => S.entitiesOf([Shares])).toThrow(/Postgres table/)
+		expect(Effect.runSync(Effect.flip(S.pgEntitiesOf([Dashboards, Other]))).message).toMatch(/one namespace/)
+		expect(Effect.runSync(Effect.flip(S.pgEntitiesOf([Shares]))).message).toMatch(/not a table in this schema/)
+		expect(Effect.runSync(Effect.flip(S.entitiesOf([Shares]))).message).toMatch(/Postgres table/)
 	})
 })
 
@@ -160,8 +165,9 @@ describe("canonicalPgType", () => {
 })
 
 describe("diffPgSchemas", () => {
-	const v1 = S.pgEntitiesOf([Dashboards])
-	const v2 = S.pgEntitiesOf([
+	const v1 = Effect.runSync(S.pgEntitiesOf([Dashboards]))
+	const v2 = Effect.runSync(
+	S.pgEntitiesOf([
 		PG.table("dashboards", {
 			columns: {
 				org_id: PG.text,
@@ -176,7 +182,8 @@ describe("diffPgSchemas", () => {
 			primaryKey: ["org_id", "id"],
 			indexes: [PG.index("dashboards_org_idx", ["org_id", "owner"])],
 		}),
-	])
+	]),
+)
 
 	it("alters columns, keys and indexes in place, and asks before dropping", () => {
 		const first = S.diffPgSchemas(v1, v2)
@@ -215,7 +222,7 @@ describe("diffPgSchemas", () => {
 	})
 
 	it("drops foreign keys before the tables they point at, and nothing for an unchanged schema", () => {
-		const both = S.pgEntitiesOf([Dashboards, Shares])
+		const both = Effect.runSync(S.pgEntitiesOf([Dashboards, Shares]))
 		expect(S.diffPgSchemas(both, both).ops).toEqual([])
 		const hint = { type: "confirm_data_loss", kind: "table", entity: "dashboards" } as const
 		const hint2 = { type: "confirm_data_loss", kind: "table", entity: "dashboard_shares" } as const

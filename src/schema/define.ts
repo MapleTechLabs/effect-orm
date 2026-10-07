@@ -5,10 +5,9 @@
 // entities. Expressions (keys, TTL, defaults, index and view bodies) are
 // written with the query DSL and rendered once, here, with the ClickHouse
 // dialect. A definition that cannot be rendered is a bug in the definition, so
-// it dies as a `SchemaDefinitionDefect` at module load rather than surfacing
-// later as a failed migration.
+// it records a problem on `problems` instead of throwing; `entitiesOf` fails
+// with every recorded problem as a typed `SchemaDefinitionError`.
 
-import { Schema } from "effect"
 import { compileCHUnsafe } from "../ch/compile"
 import { clickhouseDialect, withDialect } from "../ch/dialect"
 import type { Expr } from "../ch/expr"
@@ -25,12 +24,9 @@ import type {
 	MaterializedViewEntity,
 	TableEntity,
 } from "./entities"
+import { checkIdentifier, type DefinitionProblem, type ProblemSink } from "./problems"
 
-/** A schema definition that cannot be turned into DDL. Raised while the module loads. */
-export class SchemaDefinitionDefect extends Schema.TaggedError<SchemaDefinitionDefect>()(
-	"@maple-dev/effect-orm/SchemaDefinitionDefect",
-	{ object: Schema.String, message: Schema.String },
-) {}
+export { SchemaDefinitionError, type DefinitionProblem } from "./problems"
 
 // Expressions
 
@@ -248,20 +244,12 @@ export interface SchemaTable<
 	Computed extends string = string,
 > extends Table<Name, Cols, Defaulted, Computed> {
 	readonly ddl: TableDdl
-}
-
-const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/
-
-const assertIdentifier = (object: string, name: string): void => {
-	if (!IDENTIFIER.test(name)) {
-		throw new SchemaDefinitionDefect({
-			object,
-			message: `${JSON.stringify(name)} is not a plain identifier ([A-Za-z_][A-Za-z0-9_]*)`,
-		})
-	}
+	/** What is wrong with the definition; `entitiesOf` fails when any table has one. */
+	readonly problems: ReadonlyArray<DefinitionProblem>
 }
 
 const columnDefault = (
+	problems: ProblemSink,
 	table: string,
 	name: string,
 	spec: ColumnSpec<CHType<string, any, any>>,
@@ -275,10 +263,7 @@ const columnDefault = (
 		options.alias !== undefined,
 	].filter(Boolean).length
 	if (set > 1) {
-		throw new SchemaDefinitionDefect({
-			object: `${table}.${name}`,
-			message: "a column takes at most one of default, defaultExpr, materialized, alias",
-		})
+		problems.push({ object: `${table}.${name}`, message: "a column takes at most one of default, defaultExpr, materialized, alias" })
 	}
 	if (options.default !== undefined) {
 		return {
@@ -317,33 +302,28 @@ export function defineTable<const Name extends string, const Columns extends Rec
 			"alias",
 		])
 	}
-	assertIdentifier(name, name)
+	const problems: ProblemSink = []
+	checkIdentifier(problems, name, name)
 	const inputs = Object.entries(definition.columns)
-	if (inputs.length === 0) throw new SchemaDefinitionDefect({ object: name, message: "a table needs columns" })
+	if (inputs.length === 0) problems.push({ object: name, message: "a table needs columns" })
 	const types = Object.fromEntries(
 		inputs.map(([column, input]) => [column, isColumnSpec(input) ? input.type : input]),
 	) as ColumnsOf<Columns>
 
 	if (isMergeTreeFamily(definition.engine) && definition.orderBy === undefined) {
-		throw new SchemaDefinitionDefect({
-			object: name,
-			message: `${definition.engine.family} needs orderBy (use [] for ORDER BY tuple())`,
-		})
+		problems.push({ object: name, message: `${definition.engine.family} needs orderBy (use [] for ORDER BY tuple())` })
 	}
 	if (!isMergeTreeFamily(definition.engine)) {
 		const misplaced = (["orderBy", "partitionBy", "primaryKey", "ttl", "indexes"] as const).filter(
 			(key) => definition[key] !== undefined,
 		)
 		if (misplaced.length > 0) {
-			throw new SchemaDefinitionDefect({
-				object: name,
-				message: `${definition.engine.family} takes no ${misplaced.join(", ")}`,
-			})
+			problems.push({ object: name, message: `${definition.engine.family} takes no ${misplaced.join(", ")}` })
 		}
 	}
 
 	const columnEntities = inputs.map(([column, input], position): ColumnEntity => {
-		assertIdentifier(`${name}.${column}`, column)
+		checkIdentifier(problems, `${name}.${column}`, column)
 		const spec: ColumnSpec<CHType<string, any, any>> = isColumnSpec(input)
 			? input
 			: { _tag: "ColumnSpec", type: input as CHType<string, any, any>, options: {} }
@@ -353,7 +333,7 @@ export function defineTable<const Name extends string, const Columns extends Rec
 			name: column,
 			position,
 			type: spec.type.sql,
-			default: columnDefault(name, column, spec, types),
+			default: columnDefault(problems, name, column, spec, types),
 			codec: spec.options.codec ?? null,
 			comment: spec.options.comment ?? null,
 		}
@@ -367,7 +347,7 @@ export function defineTable<const Name extends string, const Columns extends Rec
 				: renderKey(definition.orderBy, types)
 
 	const indexEntities = (definition.indexes ?? []).map((spec): IndexEntity => {
-		assertIdentifier(`${name} index`, spec.name)
+		checkIdentifier(problems, `${name} index`, spec.name)
 		return {
 			kind: "index",
 			table: name,
@@ -402,6 +382,7 @@ export function defineTable<const Name extends string, const Columns extends Rec
 		...(defaults.length > 0 ? { defaults: defaults as unknown as Array<DefaultedColumnsOf<Columns>> } : undefined),
 		...(computed.length > 0 ? { computed: computed as unknown as Array<ComputedColumnsOf<Columns>> } : undefined),
 		ddl: { table, columns: columnEntities, indexes: indexEntities },
+		problems,
 	}
 }
 
@@ -416,18 +397,15 @@ export interface MaterializedView<Name extends string> {
 	readonly _tag: "MaterializedView"
 	readonly name: Name
 	readonly ddl: MaterializedViewEntity
+	/** What is wrong with the definition; `entitiesOf` fails when any view has one. */
+	readonly problems: ReadonlyArray<DefinitionProblem>
 }
 
-const leftmostTable = (query: CHQuery<any, any, any, any>): string => {
+/** The table a view's inserts come from; `undefined` for a union, which no single insert triggers. */
+const leftmostTable = (query: CHQuery<any, any, any, any>): string | undefined => {
 	const state = query._state
 	if (state.fromQuery !== undefined) return leftmostTable(state.fromQuery)
-	if (state.fromUnion !== undefined) {
-		throw new SchemaDefinitionDefect({
-			object: state.tableName,
-			message: "a materialized view cannot read FROM a union; define one view per branch",
-		})
-	}
-	return state.tableName
+	return state.fromUnion !== undefined ? undefined : state.tableName
 }
 
 /**
@@ -451,11 +429,17 @@ export function materializedView<
 		? unknown
 		: { readonly targetCannotTake: MisfitColumns<Output, Cols> }),
 ): MaterializedView<Name> {
-	assertIdentifier(name, name)
+	const problems: ProblemSink = []
+	checkIdentifier(problems, name, name)
+	const source = leftmostTable(options.as)
+	if (source === undefined) {
+		problems.push({ object: name, message: "a materialized view cannot read FROM a union; define one view per branch" })
+	}
 	const select = compileCHUnsafe(options.as, {}, { skipFormat: true, dialect: clickhouseDialect }).sql
 	return {
 		_tag: "MaterializedView",
 		name,
-		ddl: { kind: "materialized_view", name, to: options.to.name, sources: [leftmostTable(options.as)], select },
+		ddl: { kind: "materialized_view", name, to: options.to.name, sources: source === undefined ? [] : [source], select },
+		problems,
 	}
 }

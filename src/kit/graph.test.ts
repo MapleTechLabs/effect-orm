@@ -9,7 +9,7 @@ const table = (name: string, extra: Record<string, CH.ColumnInput> = {}) =>
 	CH.table(name, { columns: { Id: CH.string, ...extra }, engine: CH.engine.mergeTree(), orderBy: ["Id"] })
 
 const input = (objects: ReadonlyArray<S.SchemaObject>, prevIds: ReadonlyArray<string>) =>
-	Effect.map(S.makeSnapshot(S.entitiesOf(objects), prevIds), (snapshot) => ({
+	Effect.map(Effect.flatMap(S.entitiesOf(objects), (entities) => S.makeSnapshot(entities, prevIds)), (snapshot) => ({
 		snapshot,
 		input: { kind: "ops", migration: '{"version":"1","ops":[]}', snapshot: S.serializeSnapshot(snapshot) } satisfies MigrationInput,
 	}))

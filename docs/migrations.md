@@ -26,6 +26,7 @@ and index expressions are SQL strings or DSL callbacks. `/schema` only reads the
 renders them, snapshots them, and diffs them.
 
 ```ts title="migrations-schema.ts"
+import { Effect } from "effect"
 import * as CH from "@maple-dev/effect-orm/clickhouse"
 import * as S from "@maple-dev/effect-orm/schema"
 
@@ -59,12 +60,13 @@ export const RoutesHourlyMv = CH.materializedView("routes_hourly_mv", {
 		.groupBy("OrgId", "Hour", "Route"),
 })
 
-export const ddl = S.renderSchema(S.entitiesOf([Requests, RoutesHourly, RoutesHourlyMv]))
+export const ddl = Effect.map(S.entitiesOf([Requests, RoutesHourly, RoutesHourlyMv]), (entities) => S.renderSchema(entities))
 ```
 
 A definition that cannot become DDL (a MergeTree without `orderBy`, a name that is not a plain
-identifier, a view writing to a table outside the schema) throws `SchemaDefinitionDefect` when
-the module loads. `CH.dateTime64` renders as `DateTime64`, which ClickHouse reads as
+identifier, a view writing to a table outside the schema) never throws: it records the problem
+on its `problems`, and `S.entitiesOf` fails with a `SchemaDefinitionError` listing every
+problem in the schema. `CH.dateTime64` renders as `DateTime64`, which ClickHouse reads as
 `DateTime64(3)`; declare another precision with `CH.custom`.
 
 Write engines as the plain family. Replicated engines and `ON CLUSTER` are render options
@@ -240,6 +242,7 @@ Set `dialect: "postgres"` in the config and define tables with `PG.table`. `gene
 `migrate`, `status` and `verify` then work as above, with the differences below.
 
 ```ts title="migrations-postgres.ts"
+import { Effect } from "effect"
 import * as PG from "@maple-dev/effect-orm/postgres"
 import * as S from "@maple-dev/effect-orm/schema"
 
@@ -270,7 +273,7 @@ export const Shares = PG.table("dashboard_shares", {
 	],
 })
 
-export const ddl = S.renderPgSchema(S.pgEntitiesOf([Dashboards, Shares]))
+export const ddl = Effect.map(S.pgEntitiesOf([Dashboards, Shares]), (entities) => S.renderPgSchema(entities))
 ```
 
 **Definitions.** A column is `NOT NULL` unless its type is `PG.nullable(...)`. `PG.column(type,

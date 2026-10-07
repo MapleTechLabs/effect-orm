@@ -230,11 +230,13 @@ when a decoded row cannot be written back to its wire shape. Fields: `message`, 
 Tag `"@maple-dev/effect-orm/CompiledQueryDecodeError"`. Fails the `decodeRows` /
 `decodeFirstRow` Effect. Fields: `message`, `rowIndex`, `cause`.
 
-#### `SchemaDefinitionDefect`
+#### `SchemaDefinitionError`
 
-Tag `"@maple-dev/effect-orm/SchemaDefinitionDefect"`. Thrown by `table` (either dialect) and
-`CH.materializedView` for a definition that cannot render: a name that is not a plain
-identifier, a MergeTree-family engine with no `orderBy`, a view reading from a union.
+Tag `"@maple-dev/effect-orm/SchemaDefinitionError"`. Fails `S.entitiesOf`, `S.pgEntitiesOf` and
+`TB.buildProject` when a definition cannot render: a name that is not a plain identifier, a
+MergeTree-family engine with no `orderBy`, a view reading from a union, a view writing to a table
+outside the schema. Fields: `problems` (every `DefinitionProblem`, `{ object, message }`) and
+`message`. Definitions never throw; each records its own on `problems`.
 
 ---
 
@@ -294,7 +296,7 @@ with `default` or `defaultExpr` may be left out (`DefaultedColumnsOf`), a `mater
 
 **Types** — `ColumnInput` (a type or a `ColumnSpec`), `ColumnsOf` (the query-side column types
 of a `columns` record), `TableDdl`, `SchemaTable`, `MaterializedView`, `IndexSpec`. A definition
-that cannot render throws `SchemaDefinitionDefect` while the module loads.
+that cannot render records a `DefinitionProblem` on `problems`; `S.entitiesOf` fails with them.
 
 ### Column types
 
@@ -443,7 +445,7 @@ const Users = PG.table("users", {
 
 **Types** — `ColumnInput`, `ColumnSpec`, `ColumnsOf`, `IndexSpec`, `ForeignKeySpec`,
 `ReferentialAction` (drizzle's lowercase spelling or the catalog's), `TableDdl`, `PgSchemaTable`,
-`DdlExpr`, `DdlKey`. A definition that cannot render throws `SchemaDefinitionDefect`.
+`DdlExpr`, `DdlKey`. A definition that cannot render records a problem; `S.pgEntitiesOf` fails with it.
 
 ### Column types
 

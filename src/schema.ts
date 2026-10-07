@@ -7,6 +7,7 @@
 // docs/migrations.md.
 
 export { type SchemaTable, type MaterializedView } from "./schema/define"
+export { DefinitionProblem, SchemaDefinitionError } from "./schema/problems"
 export { type PgSchemaTable } from "./schema/pg-define"
 export {
 	ClickHouseSnapshot,

@@ -5,7 +5,7 @@
 // query API accepts it, and its DDL rides beside it on `ddl` as Postgres
 // entities. Expressions are written with the query DSL (or as SQL strings) and
 // rendered once, here, with the Postgres dialect. A definition that cannot
-// become DDL dies as a `SchemaDefinitionDefect` while the module loads.
+// become DDL records a problem, and `pgEntitiesOf` fails with it.
 
 import { compile as compileFragment } from "../sql/sql-fragment"
 import { withDialect } from "../ch/dialect"
@@ -15,7 +15,8 @@ import { createColumnAccessor, type ColumnAccessor } from "../ch/query"
 import type { Table } from "../ch/table"
 import type { CHType, ColumnDefs, InferTS } from "../ch/types"
 import { postgresDialect } from "../pg/dialect"
-import { externalTable, SchemaDefinitionDefect, type DdlExpr, type DdlKey } from "./define"
+import { externalTable, type DdlExpr, type DdlKey } from "./define"
+import type { DefinitionProblem, ProblemSink } from "./problems"
 import {
 	canonicalPgType,
 	PG_MAX_IDENTIFIER,
@@ -196,22 +197,17 @@ export interface TableDdl {
 export interface PgSchemaTable<Name extends string, Cols extends ColumnDefs, Defaulted extends string = string>
 	extends Table<Name, Cols, Defaulted, never> {
 	readonly ddl: TableDdl
+	/** What is wrong with the definition; `pgEntitiesOf` fails when any table has one. */
+	readonly problems: ReadonlyArray<DefinitionProblem>
 }
 
 const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_$]*$/
 
-const assertIdentifier = (object: string, name: string): void => {
+const checkIdentifier = (problems: ProblemSink, object: string, name: string): void => {
 	if (!IDENTIFIER.test(name)) {
-		throw new SchemaDefinitionDefect({
-			object,
-			message: `${JSON.stringify(name)} is not a plain identifier ([A-Za-z_][A-Za-z0-9_$]*)`,
-		})
-	}
-	if (name.length > PG_MAX_IDENTIFIER) {
-		throw new SchemaDefinitionDefect({
-			object,
-			message: `${JSON.stringify(name)} is longer than ${PG_MAX_IDENTIFIER} characters, which Postgres would truncate`,
-		})
+		problems.push({ object, message: `${JSON.stringify(name)} is not a plain identifier ([A-Za-z_][A-Za-z0-9_$]*)` })
+	} else if (name.length > PG_MAX_IDENTIFIER) {
+		problems.push({ object, message: `${JSON.stringify(name)} is longer than ${PG_MAX_IDENTIFIER} characters, which Postgres would truncate` })
 	}
 }
 
@@ -256,6 +252,7 @@ export const defaultForeignKeyName = (
 const lowerKeywords = (sql: string): string => (/^(TRUE|FALSE|NULL)$/.test(sql) ? sql.toLowerCase() : sql)
 
 const columnDefault = (
+	problems: ProblemSink,
 	table: string,
 	name: string,
 	spec: ColumnSpec<CHType<string, any, any>>,
@@ -264,7 +261,7 @@ const columnDefault = (
 	const { options } = spec
 	const given = [options.default !== undefined, options.defaultExpr !== undefined, options.identity !== undefined].filter(Boolean)
 	if (given.length > 1) {
-		throw new SchemaDefinitionDefect({ object: `${table}.${name}`, message: "a column takes one of default, defaultExpr, identity" })
+		problems.push({ object: `${table}.${name}`, message: "a column takes one of default, defaultExpr, identity" })
 	}
 	if (options.defaultExpr !== undefined) return renderExpr(options.defaultExpr, columns)
 	if (options.default === undefined || options.default === null) return null
@@ -293,16 +290,17 @@ export function table<const Name extends string, const Columns extends Record<st
 	if ("external" in definition) {
 		return externalTable(name, definition, (input): input is ColumnSpec<CHType<string, any, any>> => isColumnSpec(input as ColumnInput), [])
 	}
-	assertIdentifier(name, name)
+	const problems: ProblemSink = []
+	checkIdentifier(problems, name, name)
 	const inputs = Object.entries(definition.columns)
-	if (inputs.length === 0) throw new SchemaDefinitionDefect({ object: name, message: "a table needs columns" })
+	if (inputs.length === 0) problems.push({ object: name, message: "a table needs columns" })
 	const types = Object.fromEntries(
 		inputs.map(([column, input]) => [column, isColumnSpec(input) ? input.type : input]),
 	) as ColumnsOf<Columns>
 	const has = (column: string) => Object.hasOwn(types, column)
 
 	const columnEntities = inputs.map(([column, input], position): PgColumnEntity => {
-		assertIdentifier(`${name}.${column}`, column)
+		checkIdentifier(problems, `${name}.${column}`, column)
 		const spec: ColumnSpec<CHType<string, any, any>> = isColumnSpec(input)
 			? input
 			: { _tag: "PgColumnSpec", type: input as CHType<string, any, any>, options: {} }
@@ -313,16 +311,16 @@ export function table<const Name extends string, const Columns extends Record<st
 			position,
 			type: canonicalPgType(spec.type.sql),
 			notNull: spec.type._tag !== "Nullable",
-			default: columnDefault(name, column, spec, types),
+			default: columnDefault(problems, name, column, spec, types),
 			identity: spec.options.identity ?? null,
 		}
 	})
 	for (const column of columnEntities) {
 		if (column.identity !== null && !["smallint", "integer", "bigint"].includes(column.type)) {
-			throw new SchemaDefinitionDefect({ object: `${name}.${column.name}`, message: `an identity column must be smallint, integer or bigint, not ${column.type}` })
+			problems.push({ object: `${name}.${column.name}`, message: `an identity column must be smallint, integer or bigint, not ${column.type}` })
 		}
 		if (column.identity !== null && !column.notNull) {
-			throw new SchemaDefinitionDefect({ object: `${name}.${column.name}`, message: "an identity column cannot be nullable" })
+			problems.push({ object: `${name}.${column.name}`, message: "an identity column cannot be nullable" })
 		}
 	}
 
@@ -330,12 +328,12 @@ export function table<const Name extends string, const Columns extends Record<st
 	const pkColumns = pk === undefined ? [] : "columns" in pk ? pk.columns : pk
 	const pkName = pk !== undefined && "columns" in pk && pk.name !== undefined ? pk.name : `${name}_pkey`
 	if (pk !== undefined) {
-		assertIdentifier(`${name} primary key`, pkName)
-		if (pkColumns.length === 0) throw new SchemaDefinitionDefect({ object: name, message: "a primary key needs columns" })
+		checkIdentifier(problems, `${name} primary key`, pkName)
+		if (pkColumns.length === 0) problems.push({ object: name, message: "a primary key needs columns" })
 		for (const column of pkColumns) {
-			if (!has(column)) throw new SchemaDefinitionDefect({ object: `${name} primary key`, message: `${column} is not a column` })
+			if (!has(column)) problems.push({ object: `${name} primary key`, message: `${column} is not a column` })
 			if (columnEntities.find((c) => c.name === column)?.notNull === false) {
-				throw new SchemaDefinitionDefect({
+				problems.push({
 					object: `${name}.${column}`,
 					message: "a primary key column cannot be nullable; Postgres would make it NOT NULL anyway",
 				})
@@ -344,14 +342,14 @@ export function table<const Name extends string, const Columns extends Record<st
 	}
 
 	const indexEntities = (definition.indexes ?? []).map((spec): PgIndexEntity => {
-		assertIdentifier(`${name} index`, spec.name)
+		checkIdentifier(problems, `${name} index`, spec.name)
 		if (Array.isArray(spec.on)) {
 			for (const column of spec.on) {
-				if (!has(column)) throw new SchemaDefinitionDefect({ object: `${name} index ${spec.name}`, message: `${column} is not a column` })
+				if (!has(column)) problems.push({ object: `${name} index ${spec.name}`, message: `${column} is not a column` })
 			}
 		}
 		const columns = renderKeyParts(spec.on, types)
-		if (columns.length === 0) throw new SchemaDefinitionDefect({ object: `${name} index ${spec.name}`, message: "an index needs columns" })
+		if (columns.length === 0) problems.push({ object: `${name} index ${spec.name}`, message: "an index needs columns" })
 		return {
 			kind: "index",
 			table: name,
@@ -365,12 +363,12 @@ export function table<const Name extends string, const Columns extends Record<st
 
 	const foreignKeyEntities = (definition.foreignKeys ?? []).map((spec): PgForeignKeyEntity => {
 		const fkName = spec.name ?? defaultForeignKeyName(name, spec.columns, spec.references, spec.foreignColumns)
-		assertIdentifier(`${name} foreign key`, fkName)
+		checkIdentifier(problems, `${name} foreign key`, fkName)
 		for (const column of spec.columns) {
-			if (!has(column)) throw new SchemaDefinitionDefect({ object: `${name} foreign key ${fkName}`, message: `${column} is not a column` })
+			if (!has(column)) problems.push({ object: `${name} foreign key ${fkName}`, message: `${column} is not a column` })
 		}
 		if (spec.columns.length === 0 || spec.columns.length !== spec.foreignColumns.length) {
-			throw new SchemaDefinitionDefect({
+			problems.push({
 				object: `${name} foreign key ${fkName}`,
 				message: "columns and foreignColumns need the same, non-zero, length",
 			})
@@ -406,5 +404,6 @@ export function table<const Name extends string, const Columns extends Record<st
 			indexes: indexEntities,
 			foreignKeys: foreignKeyEntities,
 		},
+		problems,
 	}
 }

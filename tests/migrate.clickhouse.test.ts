@@ -61,7 +61,7 @@ const TotalsMv = CH.materializedView("totals_mv", {
 /** Generate one migration's files from two schemas, the way `effect-orm generate` does. */
 const generated = (prevEntities: ReadonlyArray<S.SchemaEntity>, objects: ReadonlyArray<S.SchemaObject>, prevIds: ReadonlyArray<string>) =>
 	Effect.gen(function* () {
-		const entities = S.entitiesOf(objects)
+		const entities = yield* S.entitiesOf(objects)
 		const { ops, missingHints, unsupported } = S.diffSchemas(prevEntities, entities)
 		expect(missingHints).toEqual([])
 		expect(unsupported).toEqual([])

@@ -24,7 +24,7 @@ export const events = defineDatasource("events", {
 
 CH.from(events).select("Kind").where(($) => [$.OrgId.eq(CH.param.of(events.columns.OrgId, "orgId"))])
 
-const { datasources, pipes } = buildProject(await import("./datasources"), await import("./views"))
+const project = buildProject(await import("./datasources"), await import("./views")) // Effect<TinybirdProject, SchemaDefinitionError>
 ```
 
 - `t.*` builds a ClickHouse column type plus its datafile modifiers. `.lowCardinality()`,
@@ -32,7 +32,8 @@ const { datasources, pipes } = buildProject(await import("./datasources"), await
   the SDK; `.brand(schema)` narrows the query column and leaves the ingested row alone.
 - `DateTime` and `DateTime64` columns read back as the string ClickHouse sends, which is also
   what `InferRow` types them as. `InferRow` types a `Map` as a `Record`, the JSON Tinybird ingests.
-- `buildProject(...modules)` writes every datasource and view a module exports, in export order.
+- `buildProject(...modules)` writes every datasource and view a module exports, in export order,
+  as an Effect that fails with a `SchemaDefinitionError` when any definition recorded a problem.
   Its output matches `@tinybirdco/sdk` 0.0.84 byte for byte for the features here: schemas with
   json paths, defaults and codecs, the MergeTree family and `Null` engines, indexes, forward
   queries, and materialized views. Kafka, S3, tokens, endpoints and copy pipes are not ported.

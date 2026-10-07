@@ -1,6 +1,8 @@
 // Tinybird datafiles (`.datasource`, `.pipe`), byte-compatible with the
 // generator of `@tinybirdco/sdk` 0.0.84 (MIT), for the features ported here.
 
+import { Effect } from "effect"
+import { definitionError, type ProblemSink, type SchemaDefinitionError } from "../schema/problems"
 import {
 	defaultSqlOf,
 	getColumnJsonPath,
@@ -123,8 +125,11 @@ export const generatePipe = (pipe: MaterializedViewDefinition): Datafile => {
  * The datafiles of every datasource and materialized view exported by the
  * given modules, in export order (a module namespace lists exports by name).
  */
-export const buildProject = (...modules: ReadonlyArray<Readonly<Record<string, unknown>>>): TinybirdProject => {
+export const buildProject = (
+	...modules: ReadonlyArray<Readonly<Record<string, unknown>>>
+): Effect.Effect<TinybirdProject, SchemaDefinitionError> => {
 	const seen = new Set<unknown>()
+	const problems: ProblemSink = []
 	const datasources: Array<Datafile> = []
 	const pipes: Array<Datafile> = []
 	for (const module of modules) {
@@ -132,12 +137,14 @@ export const buildProject = (...modules: ReadonlyArray<Readonly<Record<string, u
 			if (seen.has(value)) continue
 			if (isDatasourceDefinition(value)) {
 				seen.add(value)
+				problems.push(...value.problems)
 				datasources.push(generateDatasource(value))
 			} else if (isPipeDefinition(value)) {
 				seen.add(value)
+				problems.push(...value.problems)
 				pipes.push(generatePipe(value))
 			}
 		}
 	}
-	return { datasources, pipes }
+	return problems.length > 0 ? Effect.fail(definitionError(problems)) : Effect.succeed({ datasources, pipes })
 }

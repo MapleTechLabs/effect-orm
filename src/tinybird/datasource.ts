@@ -3,7 +3,8 @@
 // take it directly and its DDL renders for a plain ClickHouse server too.
 
 import * as Define from "../schema/define"
-import { SchemaDefinitionDefect, type MaterializedView, type SchemaTable } from "../schema/define"
+import type { MaterializedView, SchemaTable } from "../schema/define"
+import { IDENTIFIER, type ProblemSink } from "../schema/problems"
 import type { ColumnDefs } from "../ch/types"
 import type { EngineSpec } from "../schema/entities"
 import { getTinybirdType, isTinybirdType, type AnyTinybirdType, type RowOf, type TinybirdType } from "./types"
@@ -212,12 +213,10 @@ export const defineDatasource = <const Name extends string, const S extends Sche
 	name: Name,
 	options: DatasourceOptions<S>,
 ): Datasource<Name, S> => {
+	const problems: ProblemSink = []
 	for (const index of options.indexes ?? []) {
 		if (!Number.isInteger(index.granularity) || index.granularity <= 0) {
-			throw new SchemaDefinitionDefect({
-				object: `${name}.${index.name}`,
-				message: "index granularity must be a positive integer",
-			})
+			problems.push({ object: `${name}.${index.name}`, message: "index granularity must be a positive integer" })
 		}
 	}
 	const config = options.engine
@@ -268,6 +267,7 @@ export const defineDatasource = <const Name extends string, const S extends Sche
 		_name: name,
 		_schema: options.schema,
 		options,
+		problems: [...table.problems, ...problems],
 	}) as unknown as Datasource<Name, S>
 }
 
@@ -279,12 +279,8 @@ export interface NodeDefinition {
 	readonly description?: string
 }
 
-const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/
-
+/** A pipe node. Its view checks its name. */
 export const node = (options: { readonly name: string; readonly sql: string; readonly description?: string }): NodeDefinition => {
-	if (!IDENTIFIER.test(options.name)) {
-		throw new SchemaDefinitionDefect({ object: options.name, message: "a node name must be a plain identifier" })
-	}
 	return {
 		_name: options.name,
 		sql: options.sql,
@@ -325,21 +321,24 @@ export const defineMaterializedView = <const Name extends string>(
 		readonly deploymentMethod?: "alter"
 	},
 ): MaterializedViewDefinition<Name> => {
-	if (!IDENTIFIER.test(name)) {
-		throw new SchemaDefinitionDefect({ object: name, message: "a pipe name must be a plain identifier" })
+	const problems: ProblemSink = []
+	if (!IDENTIFIER.test(name)) problems.push({ object: name, message: "a pipe name must be a plain identifier" })
+	for (const n of options.nodes) {
+		if (!IDENTIFIER.test(n._name)) problems.push({ object: `${name}.${n._name}`, message: "a node name must be a plain identifier" })
 	}
 	if (options.nodes.length !== 1) {
-		throw new SchemaDefinitionDefect({ object: name, message: "a materialized view needs exactly one node to render as ClickHouse DDL" })
+		problems.push({ object: name, message: "a materialized view needs exactly one node to render as ClickHouse DDL" })
 	}
-	const select = options.nodes[0]!.sql.trim()
+	const select = options.nodes[0]?.sql.trim() ?? ""
 	if (/\{%|\{\{/.test(select)) {
-		throw new SchemaDefinitionDefect({ object: name, message: "a materialized view cannot use Tinybird template syntax" })
+		problems.push({ object: name, message: "a materialized view cannot use Tinybird template syntax" })
 	}
 	return {
 		[PipeTypeId]: PipeTypeId,
 		_tag: "MaterializedView",
 		name,
 		ddl: { kind: "materialized_view", name, to: options.datasource.name, sources: sourcesOf(select), select },
+		problems,
 		_name: name,
 		_type: "pipe",
 		options: {

@@ -74,8 +74,8 @@ const tables = Effect.gen(function* () {
 describe("Postgres migrations", () => {
 	it.effect("apply generated migrations once, record them, and verify with no drift", () =>
 		Effect.gen(function* () {
-			const v1 = S.pgEntitiesOf([Dashboards])
-			const v2 = S.pgEntitiesOf([Dashboards, Shares])
+			const v1 = yield* S.pgEntitiesOf([Dashboards])
+			const v2 = yield* S.pgEntitiesOf([Dashboards, Shares])
 			const first = yield* generated([], v1, [S.ORIGIN_ID])
 			const second = yield* generated(v1, v2, [first.snapshot.id])
 			const migrations = yield* Migrate.fromRecord({ "20261004000000_init": first.input, "20261004000001_shares": second.input })
@@ -102,7 +102,7 @@ describe("Postgres migrations", () => {
 
 	it.effect("verify reports drift in columns, defaults, indexes, keys, and extra tables", () =>
 		Effect.gen(function* () {
-			const v1 = S.pgEntitiesOf([Dashboards, Shares])
+			const v1 = yield* S.pgEntitiesOf([Dashboards, Shares])
 			const first = yield* generated([], v1, [S.ORIGIN_ID])
 			const migrations = yield* Migrate.fromRecord({ "20261004000000_init": first.input })
 			yield* Migrate.run({ migrations })
@@ -166,7 +166,7 @@ describe("Postgres migrations", () => {
 			const sql = yield* SqlClient.SqlClient
 			// What drizzle-kit (or a deploy pipeline) already applied.
 			yield* sql.unsafe(`CREATE TABLE legacy (id text PRIMARY KEY)`)
-			const base = yield* S.makeSnapshot(S.pgEntitiesOf([PG.table("legacy", { columns: { id: PG.text }, primaryKey: ["id"] })]), [S.ORIGIN_ID], "postgres")
+			const base = yield* S.makeSnapshot(yield* S.pgEntitiesOf([PG.table("legacy", { columns: { id: PG.text }, primaryKey: ["id"] })]), [S.ORIGIN_ID], "postgres")
 			const migrations = yield* Migrate.fromRecord({
 				"20260101000000_drizzle_init": {
 					kind: "sql",

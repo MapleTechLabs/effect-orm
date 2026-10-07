@@ -1,4 +1,4 @@
-import { Schema } from "effect"
+import { Effect, Schema } from "effect"
 import { describe, expect, expectTypeOf, it } from "vitest"
 import * as CH from "../clickhouse"
 import * as S from "../schema"
@@ -132,7 +132,7 @@ describe("datafiles", () => {
 	})
 
 	it("collects a project from module namespaces in export order", () => {
-		const project = TB.buildProject({ b: hourly, a: events, view: hourlyMv, other: 1 }, { again: events })
+		const project = Effect.runSync(TB.buildProject({ b: hourly, a: events, view: hourlyMv, other: 1 }, { again: events }))
 		expect(project.datasources.map((d) => d.name)).toEqual(["events_hourly", "events"])
 		expect(project.pipes.map((p) => p.name)).toEqual(["events_hourly_mv"])
 	})
@@ -153,7 +153,7 @@ describe("a datasource is a table", () => {
 	})
 
 	it("renders ClickHouse DDL", () => {
-		const [table] = S.renderSchema(S.entitiesOf([events]))
+		const [table] = S.renderSchema(Effect.runSync(S.entitiesOf([events])))
 		expect(table).toContain("\tOrgId LowCardinality(String),")
 		expect(table).toContain("\tKind LowCardinality(String) DEFAULT 'click',")
 		expect(table).toContain("\tBody String CODEC(ZSTD(1)),")
@@ -162,7 +162,7 @@ describe("a datasource is a table", () => {
 	})
 
 	it("migrates a materialized view pipe", () => {
-		const entities = S.entitiesOf([events, hourly, hourlyMv])
+		const entities = Effect.runSync(S.entitiesOf([events, hourly, hourlyMv]))
 		expect(entities.find((e) => e.kind === "materialized_view")).toEqual({
 			kind: "materialized_view",
 			name: "events_hourly_mv",
@@ -172,14 +172,16 @@ describe("a datasource is a table", () => {
 		})
 		const view = S.renderSchema(entities).find((sql) => sql.includes("MATERIALIZED VIEW"))
 		expect(view).toContain("CREATE MATERIALIZED VIEW IF NOT EXISTS events_hourly_mv TO events_hourly")
-		expect(S.diffSchemas(S.entitiesOf([events, hourly]), entities).ops.map((op) => op.op)).toEqual(["create_view"])
+		expect(S.diffSchemas(Effect.runSync(S.entitiesOf([events, hourly])), entities).ops.map((op) => op.op)).toEqual(["create_view"])
 	})
 
 	it("rejects a view that cannot render as ClickHouse DDL", () => {
-		const view = (...sql: ReadonlyArray<string>) => () =>
+		const view = (...sql: ReadonlyArray<string>) =>
 			TB.defineMaterializedView("v", { datasource: hourly, nodes: sql.map((s, i) => TB.node({ name: `n${i}`, sql: s })) })
-		expect(view("SELECT 1", "SELECT 2")).toThrow(/exactly one node/)
-		expect(view("SELECT * FROM events WHERE OrgId = {{ String(org) }}")).toThrow(/template syntax/)
+		const failure = (...sql: ReadonlyArray<string>) => Effect.runSync(Effect.flip(S.entitiesOf([hourly, view(...sql)]))).message
+		expect(failure("SELECT 1", "SELECT 2")).toMatch(/exactly one node/)
+		expect(failure("SELECT * FROM events WHERE OrgId = {{ String(org) }}")).toMatch(/template syntax/)
+		expect(Effect.runSync(Effect.flip(TB.buildProject({ bad: view("SELECT 1", "SELECT 2") }))).problems).toHaveLength(1)
 	})
 
 	it("infers the ingested JSON row", () => {
