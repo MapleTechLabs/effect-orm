@@ -732,6 +732,14 @@ const typeFixtures = [
 	["array", CH.array(CH.nullable(CH.int64)), "[toNullable(toInt64(42)), NULL]", [42, null]],
 	["map", CH.map(CH.string, CH.array(CH.uint64)), "map('key', [toUInt64(42)])", { key: [42] }],
 	["nullable", CH.nullable(CH.string), "CAST(NULL AS Nullable(String))", null],
+	["lowCardinality", CH.lowCardinality(CH.string), "toLowCardinality('hello')", "hello"],
+	["simpleAggregateFunction", CH.simpleAggregateFunction("sum", CH.uint64), "toUInt64(42)", 42],
+	[
+		"precision",
+		CH.precision(CH.dateTime64String, 9),
+		"toDateTime64('2026-01-01 00:00:00.123456789', 9, 'UTC')",
+		"2026-01-01 00:00:00.123456789",
+	],
 	// A brand over UInt64 keeps the base codec, so a quoted 64-bit value still decodes.
 	["brand", CH.brand(CH.uint64, Schema.Number.pipe(Schema.brand("Count"))), "toUInt64(42)", 42],
 ] as const

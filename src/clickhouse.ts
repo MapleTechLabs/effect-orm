@@ -44,6 +44,9 @@ export {
 	map,
 	array,
 	nullable,
+	lowCardinality,
+	simpleAggregateFunction,
+	precision,
 	custom,
 	brand,
 } from "./ch/types"

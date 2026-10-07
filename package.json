@@ -53,6 +53,10 @@
 			"types": "./dist/schema.d.mts",
 			"import": "./dist/schema.mjs"
 		},
+		"./tinybird": {
+			"types": "./dist/tinybird.d.mts",
+			"import": "./dist/tinybird.mjs"
+		},
 		"./migrate": {
 			"types": "./dist/migrate.d.mts",
 			"import": "./dist/migrate.mjs"

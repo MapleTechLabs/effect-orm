@@ -182,6 +182,11 @@ The constructors are values, not calls (except the parameterised ones):
 | `CH.nullable(t)`      | `Nullable(T)`     | `T \| null`         | value or `null`           |
 | `CH.untyped(sql)`     | whatever you name | `unknown`           | unvalidated               |
 
+Three wrappers change only the DDL, never how a column reads back:
+`CH.lowCardinality(t)` (`LowCardinality(T)`; inside `nullable` it renders
+`LowCardinality(Nullable(T))`), `CH.simpleAggregateFunction("sum", t)`
+(`SimpleAggregateFunction(sum, T)`), and `CH.precision(CH.dateTime64String, 9)` (`DateTime64(9)`).
+
 Column types, functions, and the query builder share the one `CH` namespace, so a schema module
 and a query module import the same thing.
 

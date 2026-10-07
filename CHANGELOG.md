@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- New `@maple-dev/effect-orm/tinybird` entry: `defineDatasource`, `defineMaterializedView`,
+  `column`, `t`, `engine`, `node` and `InferRow` with the call shapes of `@tinybirdco/sdk`, and
+  `buildProject` writing the same datafiles byte for byte. A datasource is a ClickHouse
+  `table`, so the query builder takes it and `renderSchema` writes its DDL. See
+  [docs/tinybird.md](./docs/tinybird.md).
+- `CH.lowCardinality(t)`, `CH.simpleAggregateFunction(fn, t)` and `CH.precision(t, digits)`:
+  storage wrappers that change the DDL and not how the column reads. `CH.nullable` of a
+  `LowCardinality` type renders `LowCardinality(Nullable(T))`, which ClickHouse requires.
+
 - Fixes found migrating a large consumer onto the strict params and brands:
   - A param inside `when` / `whenTrue`, or one whose name is a union, is optional in the params
     `compile` asks for: whether it renders is only known at runtime. It used to be required,
