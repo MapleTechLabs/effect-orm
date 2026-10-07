@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.0
 
 - New `@maple-dev/effect-orm/tinybird` entry: `defineDatasource`, `defineMaterializedView`,
   `column`, `t`, `engine`, `node` and `InferRow` with the call shapes of `@tinybirdco/sdk`, and
@@ -10,6 +10,8 @@
 - `CH.lowCardinality(t)`, `CH.simpleAggregateFunction(fn, t)` and `CH.precision(t, digits)`:
   storage wrappers that change the DDL and not how the column reads. `CH.nullable` of a
   `LowCardinality` type renders `LowCardinality(Nullable(T))`, which ClickHouse requires.
+
+## 0.2.0
 
 - Fixes found migrating a large consumer onto the strict params and brands:
   - A param inside `when` / `whenTrue`, or one whose name is a union, is optional in the params
@@ -187,9 +189,6 @@
 - A literal that would contain the param marker `__PARAM_` now fails the compile with
   `InvalidLiteral` instead of relying on each dialect's escaping.
 - `compileUnionUnsafe` no longer accepts the internal `enclosingCtes` option.
-
-## 0.2.0
-
 - Require Effect `^4.0.0`. Effect 4.0.0 moved `effect/unstable/*` to `effect/*`
   with no compatibility exports. The benchmark entries (`./benchmark/http`,
   `./benchmark/cli`, `ch-bench`) now import `effect/http`, so 0.1.x fails there on
