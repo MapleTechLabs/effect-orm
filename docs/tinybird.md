@@ -38,3 +38,6 @@ const { datasources, pipes } = buildProject(await import("./datasources"), await
   queries, and materialized views. Kafka, S3, tokens, endpoints and copy pipes are not ported.
 - Materialized view SQL is a string. For a view checked against its target's columns, use
   `CH.materializedView` from `/clickhouse`.
+- A materialized view is also a schema view, so `effect-orm generate` migrates it with the
+  datasources. It takes exactly one node, without template syntax (`{{ }}`, `{% %}`): that node's
+  SQL is the view body on a plain ClickHouse server.

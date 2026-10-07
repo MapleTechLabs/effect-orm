@@ -3,7 +3,7 @@
 // take it directly and its DDL renders for a plain ClickHouse server too.
 
 import * as Define from "../schema/define"
-import { SchemaDefinitionDefect, type SchemaTable } from "../schema/define"
+import { SchemaDefinitionDefect, type MaterializedView, type SchemaTable } from "../schema/define"
 import type { ColumnDefs } from "../ch/types"
 import type { EngineSpec } from "../schema/entities"
 import { getTinybirdType, isTinybirdType, type AnyTinybirdType, type RowOf, type TinybirdType } from "./types"
@@ -295,7 +295,8 @@ export const node = (options: { readonly name: string; readonly sql: string; rea
 export const PipeTypeId: unique symbol = Symbol.for("@maple-dev/effect-orm/tinybird/Pipe")
 export type PipeTypeId = typeof PipeTypeId
 
-export interface MaterializedViewDefinition<Name extends string = string> {
+/** A Tinybird pipe that is also a schema view, so `generate` migrates it like `CH.materializedView`. */
+export interface MaterializedViewDefinition<Name extends string = string> extends MaterializedView<Name> {
 	readonly [PipeTypeId]: PipeTypeId
 	readonly _name: Name
 	readonly _type: "pipe"
@@ -308,6 +309,11 @@ export interface MaterializedViewDefinition<Name extends string = string> {
 
 export const isPipeDefinition = (value: unknown): value is MaterializedViewDefinition =>
 	typeof value === "object" && value !== null && PipeTypeId in value
+
+// Tables a view body reads, for the drop check; a CTE name listed here is harmless.
+const sourcesOf = (select: string): ReadonlyArray<string> => [
+	...new Set(Array.from(select.matchAll(/\b(?:FROM|JOIN)\s+([A-Za-z_][A-Za-z0-9_]*)\b/gi), (m) => m[1]!)),
+]
 
 export const defineMaterializedView = <const Name extends string>(
 	name: Name,
@@ -322,11 +328,18 @@ export const defineMaterializedView = <const Name extends string>(
 	if (!IDENTIFIER.test(name)) {
 		throw new SchemaDefinitionDefect({ object: name, message: "a pipe name must be a plain identifier" })
 	}
-	if (options.nodes.length === 0) {
-		throw new SchemaDefinitionDefect({ object: name, message: "a materialized view needs a node" })
+	if (options.nodes.length !== 1) {
+		throw new SchemaDefinitionDefect({ object: name, message: "a materialized view needs exactly one node to render as ClickHouse DDL" })
+	}
+	const select = options.nodes[0]!.sql.trim()
+	if (/\{%|\{\{/.test(select)) {
+		throw new SchemaDefinitionDefect({ object: name, message: "a materialized view cannot use Tinybird template syntax" })
 	}
 	return {
 		[PipeTypeId]: PipeTypeId,
+		_tag: "MaterializedView",
+		name,
+		ddl: { kind: "materialized_view", name, to: options.datasource.name, sources: sourcesOf(select), select },
 		_name: name,
 		_type: "pipe",
 		options: {

@@ -161,6 +161,27 @@ describe("a datasource is a table", () => {
 		expect(table).toContain("TTL toDate(Timestamp) + INTERVAL 30 DAY")
 	})
 
+	it("migrates a materialized view pipe", () => {
+		const entities = S.entitiesOf([events, hourly, hourlyMv])
+		expect(entities.find((e) => e.kind === "materialized_view")).toEqual({
+			kind: "materialized_view",
+			name: "events_hourly_mv",
+			to: "events_hourly",
+			sources: ["events"],
+			select: "SELECT OrgId, toStartOfHour(Timestamp) AS Hour\n        FROM events",
+		})
+		const view = S.renderSchema(entities).find((sql) => sql.includes("MATERIALIZED VIEW"))
+		expect(view).toContain("CREATE MATERIALIZED VIEW IF NOT EXISTS events_hourly_mv TO events_hourly")
+		expect(S.diffSchemas(S.entitiesOf([events, hourly]), entities).ops.map((op) => op.op)).toEqual(["create_view"])
+	})
+
+	it("rejects a view that cannot render as ClickHouse DDL", () => {
+		const view = (...sql: ReadonlyArray<string>) => () =>
+			TB.defineMaterializedView("v", { datasource: hourly, nodes: sql.map((s, i) => TB.node({ name: `n${i}`, sql: s })) })
+		expect(view("SELECT 1", "SELECT 2")).toThrow(/exactly one node/)
+		expect(view("SELECT * FROM events WHERE OrgId = {{ String(org) }}")).toThrow(/template syntax/)
+	})
+
 	it("infers the ingested JSON row", () => {
 		type Row = TB.InferRow<typeof events>
 		expectTypeOf<Row["OrgId"]>().toEqualTypeOf<string>()
