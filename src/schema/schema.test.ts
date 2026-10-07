@@ -218,3 +218,48 @@ describe("diffSchemas", () => {
 		expect(S.diffSchemas(before, after).ops).toEqual([])
 	})
 })
+
+describe("backfill", () => {
+	const spec: S.BackfillSpec = {
+		target: "totals",
+		columns: ["OrgId", "Count"],
+		from: "events",
+		timeColumn: "Timestamp",
+		select: "OrgId, count()",
+		where: "OrgId != ''",
+		groupBy: "OrgId",
+	}
+	const day = 86_400
+
+	it("renders the whole source, or one window on the raw column", () => {
+		expect(S.renderBackfill(spec)).toBe(
+			"INSERT INTO totals (OrgId, Count)\nSELECT OrgId, count()\nFROM events\nWHERE (OrgId != '')\nGROUP BY OrgId",
+		)
+		expect(S.renderBackfill(spec, { from: day, to: 2 * day })).toBe(
+			[
+				"INSERT INTO totals (OrgId, Count)",
+				"SELECT OrgId, count()",
+				"FROM events",
+				`WHERE (OrgId != '') AND Timestamp >= toDateTime(${day}) AND Timestamp < toDateTime(${2 * day})`,
+				"GROUP BY OrgId",
+				"SETTINGS prefer_column_name_to_alias = 1",
+			].join("\n"),
+		)
+	})
+
+	it("windows on the epoch, so a moved lower bound keeps the same windows", () => {
+		expect(S.backfillWindows(spec, day + 5, 3 * day)).toEqual([
+			{ from: day, to: 2 * day },
+			{ from: 2 * day, to: 3 * day },
+			{ from: 3 * day, to: 4 * day },
+		])
+		const weekly = { ...spec, windowDays: 7 }
+		expect(S.backfillWindows(weekly, 8 * day, 9 * day)).toEqual([{ from: 7 * day, to: 14 * day }])
+		expect(S.backfillWindows(spec, 0, 0)).toEqual([])
+	})
+
+	it("is labelled and never generated", () => {
+		expect(S.labelOf({ op: "backfill", backfill: spec })).toBe("backfill")
+	})
+})
+

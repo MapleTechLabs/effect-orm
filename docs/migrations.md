@@ -98,6 +98,7 @@ connects to a database. The plan it prints labels each statement:
 - `ingest gap`: a materialized view is dropped and recreated. Inserts in between are not
   materialized by it. A view's body is fixed at creation, so this is the only way to change one.
 - `destructive`: a table or column is dropped.
+- `backfill`: rows are copied into a table (see [Backfills](#backfills)). Never generated.
 
 Drops need confirmation. In a terminal, `generate` asks. Without one, it exits with status 2,
 writes nothing, and prints the hints to pass back:
@@ -113,6 +114,34 @@ and the drop asks for confirmation, so it never loses data silently.
 
 `effect-orm generate --custom` writes an empty `migration.sql` for statements you write by hand
 (separate them with a line holding `--> statement-breakpoint`). Its snapshot copies its parent's.
+
+### Backfills
+
+A table or view created with history to fill needs an `INSERT ... SELECT`, which `generate` cannot
+infer. Add a `backfill` op by hand to the generated `migration.json`, after the ops it depends on:
+
+```json
+{
+	"op": "backfill",
+	"backfill": {
+		"target": "totals",
+		"columns": ["OrgId", "Name", "Count"],
+		"from": "events",
+		"timeColumn": "Timestamp",
+		"select": "OrgId, Name, sum(Count)",
+		"groupBy": "OrgId, Name",
+		"windowDays": 1
+	}
+}
+```
+
+It runs as one statement per window of `windowDays` (default 1) on `timeColumn`, over the
+source's `min` to `max` when the migration runs. Windows are aligned to the epoch, not to the
+data, and each is journaled under its start date (`0.2026-10-01`). A resumed run skips the
+windows it finished, even after TTL has moved the lower bound, and adds any the source has
+grown into. Each window compares the raw column (`prefer_column_name_to_alias = 1`), so a
+`select` aliasing `Timestamp` to itself still prunes partitions. With `groupBy`, use windows at
+least as coarse as the grain, so no group is split across two windows.
 
 `effect-orm check` validates the folder: every snapshot id matches its contents, every parent
 exists and sorts earlier, and branches merged from different pull requests touch different
@@ -183,6 +212,23 @@ database that is behind is reported as behind (`status`), not as drifted. The se
 both sides (`formatQuery`, `defaultValueOfTypeName`). It checks tables, engine family, keys,
 columns, skipping indexes, and view targets and bodies; it does not check TTL, codecs, settings,
 or comments yet. `effect-orm verify` exits 3 when it finds drift.
+
+### Running one step at a time
+
+`run` applies everything in one process. An orchestrator that runs each statement as its own
+durable step (a workflow engine, a job queue) uses the parts `run` is built from:
+
+```ts
+const pending = yield* Migrate.pendingMigrations({ migrations, strict: true })
+for (const migration of pending) {
+	const plan = yield* Migrate.planMigration(migration) // reads backfill bounds; plain data
+	for (const step of plan.steps) if (!step.done) yield* Migrate.applyStep(plan.name, step)
+	yield* Migrate.completeMigration(migration)
+}
+```
+
+Plan a migration only once the ones before it are applied: a backfill reads its source when it
+is planned. These calls take no lease, so the orchestrator must run one migration at a time.
 
 _(Effect's own `ClickhouseMigrator` creates its ledger with a statement ClickHouse 26.8
 rejects, and inserts ledger rows before running each migration. That is why this package has

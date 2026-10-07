@@ -26,7 +26,8 @@ import {
 	type AppliedRow,
 } from "./ledger"
 import { ensurePgLedger, isPgApplied, lockPg, readPgApplied, recordPgMigration, transactionOf } from "./pg-ledger"
-import { dialectOf, stepsOf, type LoadedMigration } from "./source"
+import { backfillWindows, renderBackfill, renderBackfillBounds, renderOp } from "../schema/ops"
+import { dialectOf, stepsOf, type LoadedMigration, type MigrationStep } from "./source"
 
 export interface RunOptions {
 	readonly migrations: ReadonlyArray<LoadedMigration>
@@ -99,12 +100,59 @@ const acquireLease = (owner: string, seconds: number) =>
 		}
 	})
 
-const applyOne = (migration: LoadedMigration, render: RenderOptions, renew: Effect.Effect<void, MigrateError, MigrationDriver>) =>
+/** A statement of a pending migration, and whether an earlier run finished it. */
+export interface PlannedStep extends MigrationStep {
+	readonly sqlHash: string
+	readonly done: boolean
+}
+
+/** What one migration runs. Plain data, so an orchestrator can persist it between steps. */
+export interface MigrationPlan {
+	readonly name: string
+	readonly steps: ReadonlyArray<PlannedStep>
+}
+
+const windowId = (from: number): string => new Date(from * 1000).toISOString().slice(0, 10)
+
+/**
+ * The statements a migration runs, with each backfill split into windows over the
+ * source's current time range. Window ids are their start dates, so a resumed run
+ * skips the windows it finished and adds any the source has grown into.
+ */
+export const planSteps = (
+	migration: LoadedMigration,
+	render: RenderOptions = {},
+): Effect.Effect<ReadonlyArray<MigrationStep>, MigrateError, MigrationDriver> =>
 	Effect.gen(function* () {
+		const file = migration.file
+		if (file === undefined || "dialect" in file) return stepsOf(migration, render)
 		const driver = yield* MigrationDriver
-		const steps = stepsOf(migration, render)
+		const steps: Array<MigrationStep> = []
+		for (const [i, op] of file.ops.entries()) {
+			if (op.op !== "backfill") {
+				renderOp(op, render).forEach((sql, j) => steps.push({ id: `${i}.${j}`, sql }))
+				continue
+			}
+			const [bounds] = yield* driver.query(renderBackfillBounds(op.backfill))
+			for (const window of backfillWindows(op.backfill, Number(bounds?.lo), Number(bounds?.hi))) {
+				steps.push({ id: `${i}.${windowId(window.from)}`, sql: renderBackfill(op.backfill, window) })
+			}
+		}
+		return steps
+	})
+
+/**
+ * Plan one pending migration against its journal. Fails, as `run` does, on a step
+ * left uncertain or a finished step whose SQL has since changed.
+ */
+export const planMigration = (
+	migration: LoadedMigration,
+	render: RenderOptions = {},
+): Effect.Effect<MigrationPlan, MigrateError, MigrationDriver> =>
+	Effect.gen(function* () {
+		const steps = yield* planSteps(migration, render)
 		const journal = yield* readSteps(migration.name)
-		let resumed = 0
+		const planned: Array<PlannedStep> = []
 		for (const step of steps) {
 			const sqlHash = yield* Effect.promise(() => sha256Hex(step.sql))
 			const previous = journal.get(step.id)
@@ -116,42 +164,82 @@ const applyOne = (migration: LoadedMigration, render: RenderOptions, renew: Effe
 					message: `${migration.name} step ${step.id} started and never reported back, so it may or may not have run. Check the database, then record the outcome with resolveStep (effect-orm resolve)`,
 				})
 			}
-			if (previous?.state === "done" && previous.sqlHash === sqlHash) {
-				resumed += 1
-				continue
-			}
 			// A finished step whose SQL is now different: the partial migration was
 			// edited above the failure, or rendered with other options. Skipping it
 			// would leave a statement unrun; rerunning it could repeat one.
-			if (previous?.state === "done") {
+			if (previous?.state === "done" && previous.sqlHash !== sqlHash) {
 				return yield* new MigrateStepChanged({
 					migration: migration.name,
 					step: step.id,
 					message: `${migration.name} step ${step.id} already ran with different SQL. Edit only the failed statement and those after it, or keep the render options of the first run`,
 				})
 			}
-			// Journal the attempt first: if the statement runs but the `done` row is
-			// never written, the next run stops at this step instead of repeating it.
-			yield* recordStep(migration.name, step.id, sqlHash, "started")
-			yield* driver.execute(step.sql).pipe(
-				Effect.tapError(() => recordStep(migration.name, step.id, sqlHash, "failed").pipe(Effect.ignore)),
-				Effect.mapError(
-					(cause) =>
-						new MigrateStepFailed({
-							migration: migration.name,
-							step: step.id,
-							sql: step.sql,
-							message: `${migration.name} step ${step.id} failed: ${cause.message}`,
-							cause,
-						}),
-				),
-				Effect.withSpan("effect_orm.migrate.step", { attributes: { "effect_orm.migration.step": step.id } }),
-			)
-			yield* recordStep(migration.name, step.id, sqlHash, "done")
+			planned.push({ ...step, sqlHash, done: previous?.state === "done" })
+		}
+		return { name: migration.name, steps: planned }
+	})
+
+/**
+ * Run one planned step and journal it. Takes no lease: an orchestrator calling this
+ * directly must run one migration at a time itself.
+ */
+export const applyStep = (migration: string, step: PlannedStep): Effect.Effect<void, MigrateError, MigrationDriver> =>
+	Effect.gen(function* () {
+		const driver = yield* MigrationDriver
+		// Journal the attempt first: if the statement runs but the `done` row is
+		// never written, the next run stops at this step instead of repeating it.
+		yield* recordStep(migration, step.id, step.sqlHash, "started")
+		yield* driver.execute(step.sql).pipe(
+			Effect.tapError(() => recordStep(migration, step.id, step.sqlHash, "failed").pipe(Effect.ignore)),
+			Effect.mapError(
+				(cause) =>
+					new MigrateStepFailed({
+						migration,
+						step: step.id,
+						sql: step.sql,
+						message: `${migration} step ${step.id} failed: ${cause.message}`,
+						cause,
+					}),
+			),
+			Effect.withSpan("effect_orm.migrate.step", { attributes: { "effect_orm.migration.step": step.id } }),
+		)
+		yield* recordStep(migration, step.id, step.sqlHash, "done")
+	})
+
+/** Record a migration as applied, once every step of its plan is done. */
+export const completeMigration = (migration: LoadedMigration): Effect.Effect<void, MigrateError, MigrationDriver> =>
+	recordMigration(migration.name, migration.hash)
+
+const pendingOf = (options: RunOptions) =>
+	Effect.gen(function* () {
+		const applied = new Map((yield* readApplied).map((row) => [row.name, row]))
+		const pending: Array<LoadedMigration> = []
+		for (const migration of options.migrations) {
+			const row = applied.get(migration.name)
+			if (row === undefined) pending.push(migration)
+			else yield* checkHash(migration, row, options.strict ?? false)
+		}
+		return pending
+	})
+
+/** The ClickHouse migrations not yet applied, in order; applied ones have their hash checked. */
+export const pendingMigrations = (options: RunOptions): Effect.Effect<ReadonlyArray<LoadedMigration>, MigrateError, MigrationDriver> =>
+	ensureLedger(options.render ?? {}).pipe(Effect.andThen(pendingOf(options)))
+
+const applyOne = (migration: LoadedMigration, render: RenderOptions, renew: Effect.Effect<void, MigrateError, MigrationDriver>) =>
+	Effect.gen(function* () {
+		const plan = yield* planMigration(migration, render)
+		for (const step of plan.steps) {
+			if (step.done) continue
+			yield* applyStep(migration.name, step)
 			yield* renew
 		}
-		yield* recordMigration(migration.name, migration.hash)
-		const result: AppliedMigration = { name: migration.name, steps: steps.length, resumedSteps: resumed }
+		yield* completeMigration(migration)
+		const result: AppliedMigration = {
+			name: migration.name,
+			steps: plan.steps.length,
+			resumedSteps: plan.steps.filter((step) => step.done).length,
+		}
 		return result
 	}).pipe(
 		Effect.withSpan("effect_orm.migrate.migration", { attributes: { "effect_orm.migration.name": migration.name } }),
@@ -172,14 +260,8 @@ const runClickHouse = (options: RunOptions): Effect.Effect<ReadonlyArray<Applied
 		yield* ensureLedger(render)
 		yield* acquireLease(owner, leaseSeconds)
 		const work = Effect.gen(function* () {
-			const applied = new Map((yield* readApplied).map((row) => [row.name, row]))
 			const ran: Array<AppliedMigration> = []
-			for (const migration of options.migrations) {
-				const row = applied.get(migration.name)
-				if (row !== undefined) {
-					yield* checkHash(migration, row, options.strict ?? false)
-					continue
-				}
+			for (const migration of yield* pendingOf(options)) {
 				ran.push(yield* applyOne(migration, render, writeLease(owner, leaseSeconds)))
 			}
 			return ran
@@ -326,7 +408,7 @@ export const resolveStep = (options: ResolveStepOptions): Effect.Effect<void, Mi
 				message: "a Postgres migration runs in one transaction, so no step of it is ever uncertain",
 			})
 		}
-		const step = stepsOf(migration, options.render ?? {}).find((s) => s.id === options.step)
+		const step = (yield* planSteps(migration, options.render ?? {})).find((s) => s.id === options.step)
 		if (step === undefined) {
 			return yield* new MigrateSourceError({ migration: migration.name, message: `has no step ${options.step}` })
 		}

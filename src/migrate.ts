@@ -31,11 +31,18 @@ export {
 	type MigrationStep,
 } from "./migrate/source"
 export {
+	applyStep,
 	baseline,
+	completeMigration,
+	pendingMigrations,
+	planMigration,
+	planSteps,
 	resolveStep,
 	run,
 	status,
 	type AppliedMigration,
+	type MigrationPlan,
+	type PlannedStep,
 	type BaselineOptions,
 	type MigrationState,
 	type MigrationStatus,

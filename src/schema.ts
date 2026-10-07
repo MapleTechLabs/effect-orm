@@ -40,7 +40,18 @@ export {
 	renderSchema,
 	type RenderOptions,
 } from "./schema/render"
-export { ClickHouseMigrationFile, MigrationFile, MigrationOp, labelOf, renderOp, type OpLabel } from "./schema/ops"
+export {
+	BackfillSpec,
+	ClickHouseMigrationFile,
+	MigrationFile,
+	MigrationOp,
+	backfillWindows,
+	labelOf,
+	renderBackfill,
+	renderBackfillBounds,
+	renderOp,
+	type OpLabel,
+} from "./schema/ops"
 export {
 	dialectOfObject,
 	entitiesOf,
