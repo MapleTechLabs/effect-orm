@@ -4,6 +4,7 @@
 
 import * as Define from "../schema/define"
 import { SchemaDefinitionDefect, type SchemaTable } from "../schema/define"
+import type { ColumnDefs } from "../ch/types"
 import type { EngineSpec } from "../schema/entities"
 import { getTinybirdType, isTinybirdType, type AnyTinybirdType, type RowOf, type TinybirdType } from "./types"
 
@@ -163,11 +164,20 @@ export interface Datasource<Name extends string = string, S extends SchemaDefini
 	readonly [DatasourceTypeId]: DatasourceTypeId
 	readonly _name: Name
 	readonly _schema: S
-	readonly options: DatasourceOptions<S>
+	readonly options: StoredOptions<S>
+}
+
+type StoredOptions<S extends SchemaDefinition> = Omit<DatasourceOptions<S>, "tenantColumn"> & {
+	readonly tenantColumn?: string
 }
 
 /** Any datasource, whatever its schema: what generators and views take. */
-export type AnyDatasource = Datasource<string, any>
+export interface AnyDatasource extends SchemaTable<string, ColumnDefs> {
+	readonly [DatasourceTypeId]: DatasourceTypeId
+	readonly _name: string
+	readonly _schema: SchemaDefinition
+	readonly options: StoredOptions<SchemaDefinition>
+}
 
 /** A JSON row as Tinybird ingests it into the datasource. */
 export type InferRow<D> = D extends Datasource<any, infer S> ? { [K in keyof S]: RowOf<TypeOfColumn<S[K]>> } : never
