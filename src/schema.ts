@@ -7,6 +7,7 @@
 // docs/migrations.md.
 
 export { type SchemaTable, type MaterializedView } from "./schema/define"
+export { DefinitionProblem, SchemaDefinitionError } from "./schema/problems"
 export { type PgSchemaTable } from "./schema/pg-define"
 export {
 	ClickHouseSnapshot,
@@ -40,7 +41,18 @@ export {
 	renderSchema,
 	type RenderOptions,
 } from "./schema/render"
-export { ClickHouseMigrationFile, MigrationFile, MigrationOp, labelOf, renderOp, type OpLabel } from "./schema/ops"
+export {
+	BackfillSpec,
+	ClickHouseMigrationFile,
+	MigrationFile,
+	MigrationOp,
+	backfillWindows,
+	labelOf,
+	renderBackfill,
+	renderBackfillBounds,
+	renderOp,
+	type OpLabel,
+} from "./schema/ops"
 export {
 	dialectOfObject,
 	entitiesOf,

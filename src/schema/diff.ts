@@ -73,6 +73,8 @@ const opOrder: Record<MigrationOp["op"], number> = {
 	modify_comment: 9,
 	add_index: 10,
 	create_view: 11,
+	// Never generated; listed so the order covers every op.
+	backfill: 12,
 }
 
 export const diffSchemas = (

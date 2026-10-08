@@ -11,6 +11,7 @@ import type { MigrationDriver } from "../migrate/driver"
 import { diffSchemas, type DiffResult, type Hint } from "../schema/diff"
 import { fromDrizzleSnapshot } from "../schema/drizzle"
 import { ORIGIN_ID, type AnySchemaEntity, type SchemaDialect, type SchemaEntity } from "../schema/entities"
+import type { SchemaDefinitionError } from "../schema/problems"
 import { labelOf, renderOp, type MigrationFile, type MigrationOp } from "../schema/ops"
 import { diffPgSchemas } from "../schema/pg-diff"
 import type { PgSchemaEntity } from "../schema/pg-entities"
@@ -197,10 +198,18 @@ export const generate = (config: KitConfig, cwd: string, options: GenerateOption
 			prevIds = [ORIGIN_ID]
 		} else {
 			const objects = yield* loadSchema(config, cwd)
-			const next = yield* Effect.try({
-				try: (): ReadonlyArray<AnySchemaEntity> => (dialect === "postgres" ? pgEntitiesOf(objects) : entitiesOf(objects)),
-				catch: (cause) => new KitError({ code: "config", message: cause instanceof Error ? cause.message : String(cause) }),
-			})
+			const entities: Effect.Effect<ReadonlyArray<AnySchemaEntity>, SchemaDefinitionError> =
+				dialect === "postgres" ? pgEntitiesOf(objects) : entitiesOf(objects)
+			const next = yield* entities.pipe(
+				Effect.mapError(
+					(error) =>
+						new KitError({
+							code: "config",
+							message: "the schema definitions have problems",
+							details: error.problems.map((problem) => `${problem.object}: ${problem.message}`),
+						}),
+				),
+			)
 			snapshotEntities = next
 			if (options.baseline === "schema") prevIds = [ORIGIN_ID]
 			else if (options.custom === true) snapshotEntities = analysis.base

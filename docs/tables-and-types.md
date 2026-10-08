@@ -36,8 +36,9 @@ this definition is your schema; otherwise treat it as a contract you keep in syn
 migrations by hand.
 
 A definition that cannot become DDL (a MergeTree table without `orderBy`, a name that is not a
-plain identifier, two of `default`/`materialized` on one column) throws `SchemaDefinitionDefect`
-when the module loads.
+plain identifier, two of `default`/`materialized` on one column) records the problem on its
+`problems` instead of throwing; `S.entitiesOf` (and so `generate`) fails with a
+`SchemaDefinitionError` listing every problem.
 
 The Postgres table has the same shape, with a primary key in place of an engine:
 

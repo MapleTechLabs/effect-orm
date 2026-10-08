@@ -44,7 +44,7 @@ export {
 	type TableDefinition,
 	type ExternalTableDefinition,
 } from "./schema/pg-define"
-export { SchemaDefinitionDefect, type DdlExpr, type DdlKey } from "./schema/define"
+export { SchemaDefinitionError, type DefinitionProblem, type DdlExpr, type DdlKey } from "./schema/define"
 
 /** `compile`, for Postgres unless `options.dialect` says otherwise. */
 // Typed through `any` and cast: `compileCH` is overloaded (queries and inserts),

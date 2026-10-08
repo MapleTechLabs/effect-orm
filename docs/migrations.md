@@ -26,6 +26,7 @@ and index expressions are SQL strings or DSL callbacks. `/schema` only reads the
 renders them, snapshots them, and diffs them.
 
 ```ts title="migrations-schema.ts"
+import { Effect } from "effect"
 import * as CH from "@maple-dev/effect-orm/clickhouse"
 import * as S from "@maple-dev/effect-orm/schema"
 
@@ -59,12 +60,13 @@ export const RoutesHourlyMv = CH.materializedView("routes_hourly_mv", {
 		.groupBy("OrgId", "Hour", "Route"),
 })
 
-export const ddl = S.renderSchema(S.entitiesOf([Requests, RoutesHourly, RoutesHourlyMv]))
+export const ddl = Effect.map(S.entitiesOf([Requests, RoutesHourly, RoutesHourlyMv]), (entities) => S.renderSchema(entities))
 ```
 
 A definition that cannot become DDL (a MergeTree without `orderBy`, a name that is not a plain
-identifier, a view writing to a table outside the schema) throws `SchemaDefinitionDefect` when
-the module loads. `CH.dateTime64` renders as `DateTime64`, which ClickHouse reads as
+identifier, a view writing to a table outside the schema) never throws: it records the problem
+on its `problems`, and `S.entitiesOf` fails with a `SchemaDefinitionError` listing every
+problem in the schema. `CH.dateTime64` renders as `DateTime64`, which ClickHouse reads as
 `DateTime64(3)`; declare another precision with `CH.custom`.
 
 Write engines as the plain family. Replicated engines and `ON CLUSTER` are render options
@@ -98,6 +100,7 @@ connects to a database. The plan it prints labels each statement:
 - `ingest gap`: a materialized view is dropped and recreated. Inserts in between are not
   materialized by it. A view's body is fixed at creation, so this is the only way to change one.
 - `destructive`: a table or column is dropped.
+- `backfill`: rows are copied into a table (see [Backfills](#backfills)). Never generated.
 
 Drops need confirmation. In a terminal, `generate` asks. Without one, it exits with status 2,
 writes nothing, and prints the hints to pass back:
@@ -113,6 +116,34 @@ and the drop asks for confirmation, so it never loses data silently.
 
 `effect-orm generate --custom` writes an empty `migration.sql` for statements you write by hand
 (separate them with a line holding `--> statement-breakpoint`). Its snapshot copies its parent's.
+
+### Backfills
+
+A table or view created with history to fill needs an `INSERT ... SELECT`, which `generate` cannot
+infer. Add a `backfill` op by hand to the generated `migration.json`, after the ops it depends on:
+
+```json
+{
+	"op": "backfill",
+	"backfill": {
+		"target": "totals",
+		"columns": ["OrgId", "Name", "Count"],
+		"from": "events",
+		"timeColumn": "Timestamp",
+		"select": "OrgId, Name, sum(Count)",
+		"groupBy": "OrgId, Name",
+		"windowDays": 1
+	}
+}
+```
+
+It runs as one statement per window of `windowDays` (default 1) on `timeColumn`, over the
+source's `min` to `max` when the migration runs. Windows are aligned to the epoch, not to the
+data, and each is journaled under its start date (`0.2026-10-01`). A resumed run skips the
+windows it finished, even after TTL has moved the lower bound, and adds any the source has
+grown into. Each window compares the raw column (`prefer_column_name_to_alias = 1`), so a
+`select` aliasing `Timestamp` to itself still prunes partitions. With `groupBy`, use windows at
+least as coarse as the grain, so no group is split across two windows.
 
 `effect-orm check` validates the folder: every snapshot id matches its contents, every parent
 exists and sorts earlier, and branches merged from different pull requests touch different
@@ -184,6 +215,23 @@ both sides (`formatQuery`, `defaultValueOfTypeName`). It checks tables, engine f
 columns, skipping indexes, and view targets and bodies; it does not check TTL, codecs, settings,
 or comments yet. `effect-orm verify` exits 3 when it finds drift.
 
+### Running one step at a time
+
+`run` applies everything in one process. An orchestrator that runs each statement as its own
+durable step (a workflow engine, a job queue) uses the parts `run` is built from:
+
+```ts
+const pending = yield* Migrate.pendingMigrations({ migrations, strict: true })
+for (const migration of pending) {
+	const plan = yield* Migrate.planMigration(migration) // reads backfill bounds; plain data
+	for (const step of plan.steps) if (!step.done) yield* Migrate.applyStep(plan.name, step)
+	yield* Migrate.completeMigration(migration)
+}
+```
+
+Plan a migration only once the ones before it are applied: a backfill reads its source when it
+is planned. These calls take no lease, so the orchestrator must run one migration at a time.
+
 _(Effect's own `ClickhouseMigrator` creates its ledger with a statement ClickHouse 26.8
 rejects, and inserts ledger rows before running each migration. That is why this package has
 its own runner.)_
@@ -194,6 +242,7 @@ Set `dialect: "postgres"` in the config and define tables with `PG.table`. `gene
 `migrate`, `status` and `verify` then work as above, with the differences below.
 
 ```ts title="migrations-postgres.ts"
+import { Effect } from "effect"
 import * as PG from "@maple-dev/effect-orm/postgres"
 import * as S from "@maple-dev/effect-orm/schema"
 
@@ -224,7 +273,7 @@ export const Shares = PG.table("dashboard_shares", {
 	],
 })
 
-export const ddl = S.renderPgSchema(S.pgEntitiesOf([Dashboards, Shares]))
+export const ddl = Effect.map(S.pgEntitiesOf([Dashboards, Shares]), (entities) => S.renderPgSchema(entities))
 ```
 
 **Definitions.** A column is `NOT NULL` unless its type is `PG.nullable(...)`. `PG.column(type,

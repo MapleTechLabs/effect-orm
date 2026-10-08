@@ -2,7 +2,7 @@
 
 import { Effect } from "effect"
 import type { MaterializedView, SchemaTable } from "./define"
-import { SchemaDefinitionDefect } from "./define"
+import { definitionError, type ProblemSink, type SchemaDefinitionError } from "./problems"
 import {
 	canonicalJson,
 	entityKey,
@@ -33,12 +33,22 @@ export const isSchemaObject = (value: unknown): value is SchemaObject =>
 export const dialectOfObject = (object: SchemaObject): SchemaDialect =>
 	object._tag === "Table" && "dialect" in object.ddl ? object.ddl.dialect : "clickhouse"
 
-/** The entities of a set of definitions, validated as one schema. */
-export const entitiesOf = (objects: ReadonlyArray<SchemaObject>): ReadonlyArray<SchemaEntity> => {
+/** Fail with every problem, or succeed with the sorted entities. */
+const validated = <E extends AnySchemaEntity>(
+	problems: ProblemSink,
+	entities: ReadonlyArray<E>,
+): Effect.Effect<ReadonlyArray<E>, SchemaDefinitionError> =>
+	problems.length > 0 ? Effect.fail(definitionError(problems)) : Effect.succeed(sortEntities(entities))
+
+/** The entities of a set of definitions, validated as one schema. Fails with every problem found. */
+export const entitiesOf = (objects: ReadonlyArray<SchemaObject>): Effect.Effect<ReadonlyArray<SchemaEntity>, SchemaDefinitionError> => {
+	const problems: ProblemSink = []
 	const entities: Array<SchemaEntity> = []
 	for (const object of objects) {
+		problems.push(...object.problems)
 		if (dialectOfObject(object) !== "clickhouse") {
-			throw new SchemaDefinitionDefect({ object: object.name, message: "is a Postgres table; use pgEntitiesOf" })
+			problems.push({ object: object.name, message: "is a Postgres table; use pgEntitiesOf" })
+			continue
 		}
 		if (object._tag === "Table") {
 			const ddl = object.ddl as SchemaTable<string, any>["ddl"]
@@ -50,13 +60,13 @@ export const entitiesOf = (objects: ReadonlyArray<SchemaObject>): ReadonlyArray<
 	for (const entity of entities) {
 		const key = entityKey(entity)
 		if (seen.has(key)) {
-			throw new SchemaDefinitionDefect({ object: key, message: "defined twice" })
+			problems.push({ object: key, message: "defined twice" })
 		}
 		seen.add(key)
 		if (entity.kind === "table" || entity.kind === "materialized_view") {
 			const other = names.get(entity.name)
 			if (other !== undefined) {
-				throw new SchemaDefinitionDefect({
+				problems.push({
 					object: entity.name,
 					message: `a ${entity.kind} and a ${other} share one name`,
 				})
@@ -68,13 +78,13 @@ export const entitiesOf = (objects: ReadonlyArray<SchemaObject>): ReadonlyArray<
 	// time, and then every insert into its source fails with UNKNOWN_TABLE.
 	for (const entity of entities) {
 		if (entity.kind === "materialized_view" && names.get(entity.to) !== "table") {
-			throw new SchemaDefinitionDefect({
+			problems.push({
 				object: entity.name,
 				message: `writes to ${entity.to}, which is not a table in this schema`,
 			})
 		}
 	}
-	return sortEntities(entities)
+	return validated(problems, entities)
 }
 
 /**
@@ -83,11 +93,14 @@ export const entitiesOf = (objects: ReadonlyArray<SchemaObject>): ReadonlyArray<
  * one namespace per schema), and every foreign key references a table and
  * columns of this schema.
  */
-export const pgEntitiesOf = (objects: ReadonlyArray<SchemaObject>): ReadonlyArray<PgSchemaEntity> => {
+export const pgEntitiesOf = (objects: ReadonlyArray<SchemaObject>): Effect.Effect<ReadonlyArray<PgSchemaEntity>, SchemaDefinitionError> => {
+	const problems: ProblemSink = []
 	const tables: Array<PgSchemaTable<string, any>> = []
 	for (const object of objects) {
+		problems.push(...object.problems)
 		if (dialectOfObject(object) !== "postgres") {
-			throw new SchemaDefinitionDefect({ object: object.name, message: "is a ClickHouse definition; use entitiesOf" })
+			problems.push({ object: object.name, message: "is a ClickHouse definition; use entitiesOf" })
+			continue
 		}
 		tables.push(object as PgSchemaTable<string, any>)
 	}
@@ -96,7 +109,7 @@ export const pgEntitiesOf = (objects: ReadonlyArray<SchemaObject>): ReadonlyArra
 	const claim = (name: string, what: string) => {
 		const other = relations.get(name)
 		if (other !== undefined) {
-			throw new SchemaDefinitionDefect({ object: name, message: `names both ${other} and ${what}; Postgres keeps them in one namespace` })
+			problems.push({ object: name, message: `names both ${other} and ${what}; Postgres keeps them in one namespace` })
 		}
 		relations.set(name, what)
 	}
@@ -111,19 +124,20 @@ export const pgEntitiesOf = (objects: ReadonlyArray<SchemaObject>): ReadonlyArra
 	for (const { ddl } of tables) {
 		for (const fk of ddl.foreignKeys) {
 			const key = `${fk.table}.${fk.name}`
-			if (seenConstraints.has(key)) throw new SchemaDefinitionDefect({ object: key, message: "defined twice" })
+			if (seenConstraints.has(key)) problems.push({ object: key, message: "defined twice" })
 			seenConstraints.add(key)
 			const target = columnsOf.get(fk.foreignTable)
 			if (target === undefined) {
-				throw new SchemaDefinitionDefect({ object: key, message: `references ${fk.foreignTable}, which is not a table in this schema` })
+				problems.push({ object: key, message: `references ${fk.foreignTable}, which is not a table in this schema` })
+				continue
 			}
 			const missing = fk.foreignColumns.filter((c) => !target.has(c))
 			if (missing.length > 0) {
-				throw new SchemaDefinitionDefect({ object: key, message: `references ${missing.join(", ")}, not columns of ${fk.foreignTable}` })
+				problems.push({ object: key, message: `references ${missing.join(", ")}, not columns of ${fk.foreignTable}` })
 			}
 		}
 	}
-	return sortEntities(entities)
+	return validated(problems, entities)
 }
 
 /** A snapshot of `entities` with the given parents. Its id is the hash of the entities alone. */

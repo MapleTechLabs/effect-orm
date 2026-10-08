@@ -41,7 +41,7 @@ export const compiled = PG.compileUnsafe(query, { orgId: "org_1", since: new Dat
 
 const db = new PGlite()
 // The CREATE TABLE comes from the definition itself; migrations.md shows the managed way.
-for (const statement of S.renderPgSchema(S.pgEntitiesOf([Requests]))) await db.exec(statement)
+for (const statement of S.renderPgSchema(Effect.runSync(S.pgEntitiesOf([Requests])))) await db.exec(statement)
 await db.exec(`
 	INSERT INTO requests ("OrgId", "Route", "DurationMs", "At") VALUES
 		('org_1', '/checkout', 120, '2026-01-01T10:00:00Z'),

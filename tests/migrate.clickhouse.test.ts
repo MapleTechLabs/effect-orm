@@ -61,7 +61,7 @@ const TotalsMv = CH.materializedView("totals_mv", {
 /** Generate one migration's files from two schemas, the way `effect-orm generate` does. */
 const generated = (prevEntities: ReadonlyArray<S.SchemaEntity>, objects: ReadonlyArray<S.SchemaObject>, prevIds: ReadonlyArray<string>) =>
 	Effect.gen(function* () {
-		const entities = S.entitiesOf(objects)
+		const entities = yield* S.entitiesOf(objects)
 		const { ops, missingHints, unsupported } = S.diffSchemas(prevEntities, entities)
 		expect(missingHints).toEqual([])
 		expect(unsupported).toEqual([])
@@ -240,6 +240,52 @@ describe("migrate", () => {
 						)
 						const exit = yield* Effect.exit(Migrate.run({ migrations, owner: "me" }))
 						expect(String(exit)).toContain("MigrateLeaseHeld")
+					}),
+				),
+			)
+		})
+
+		it("backfills in day windows, and an orchestrator resumes at the next window", async () => {
+			await Effect.runPromise(
+				withDatabase(
+					Effect.gen(function* () {
+						const first = yield* generated([], [Events, Totals], [S.ORIGIN_ID])
+						const sql = yield* ClickhouseClient.ClickhouseClient
+						const backfill: S.BackfillSpec = {
+							target: "totals",
+							columns: ["OrgId", "Name", "Count"],
+							from: "events",
+							timeColumn: "Timestamp",
+							select: "OrgId, Name, sum(Count)",
+							groupBy: "OrgId, Name",
+						}
+						const migrations = yield* Migrate.fromRecord({
+							"20261003000000_init": first.input,
+							"20261003000100_backfill": {
+								kind: "ops",
+								migration: JSON.stringify({ version: "1", ops: [{ op: "backfill", backfill }] }),
+								snapshot: S.serializeSnapshot(yield* S.makeSnapshot(first.entities, [first.snapshot.id])),
+							},
+						})
+						yield* Migrate.run({ migrations: migrations.slice(0, 1) })
+						yield* sql.asCommand(
+							sql.unsafe(
+								"INSERT INTO events (OrgId, Timestamp, Name) SELECT 'o', toStartOfDay(now64(3)) - toIntervalDay(number) + 3600, 'a' FROM numbers(3)",
+							),
+						)
+
+						const [pending] = yield* Migrate.pendingMigrations({ migrations })
+						const plan = yield* Migrate.planMigration(pending!)
+						expect(plan.steps.map((step) => step.id)).toHaveLength(3)
+						expect(plan.steps.every((step) => step.id.startsWith("0.") && !step.done)).toBe(true)
+						yield* Migrate.applyStep(plan.name, plan.steps[0]!)
+
+						const resumed = yield* Migrate.planMigration(pending!)
+						expect(resumed.steps.map((step) => step.done)).toEqual([true, false, false])
+						const ran = yield* Migrate.run({ migrations })
+						expect(ran).toEqual([{ name: "20261003000100_backfill", steps: 3, resumedSteps: 1 }])
+						const rows = yield* sql.unsafe<{ Count: string }>("SELECT sum(Count) AS Count FROM totals")
+						expect(Number(rows[0]!.Count)).toBe(3)
 					}),
 				),
 			)

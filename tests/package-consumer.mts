@@ -44,7 +44,7 @@ const countsMv = CH.materializedView("counts_mv", {
 	as: CH.from(managed).select(($) => ({ name: $.name, n: CH.count() })).groupBy("name"),
 })
 assert.match(CH.compileUnsafe(CH.from(managed).select("name"), {}).sql, /FROM managed/)
-const created = S.diffSchemas([], S.entitiesOf([managed, counts, countsMv]))
+const created = S.diffSchemas([], Effect.runSync(S.entitiesOf([managed, counts, countsMv])))
 assert.deepEqual(created.ops.map((op) => op.op), ["create_table", "create_table", "create_view"])
 assert.match(created.ops.flatMap((op) => S.renderOp(op)).join("\n"), /name String DEFAULT ''/)
 const loaded = await Effect.runPromise(

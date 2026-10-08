@@ -13,7 +13,7 @@ or row decoding. [Running a query](./running-queries.md#error-boundaries) separa
 | A helper exists in source but not in the package             | A deep source import or stale local build.            | Use the public entry points in `package.json` `exports` and rebuild/reinstall your tarball.           |
 | `@maple-dev/effect-orm` or `@maple-dev/effect-orm/types` cannot be resolved | Code written for the removed root and `/types` entries. | Import everything for one database from `@maple-dev/effect-orm/clickhouse` or `@maple-dev/effect-orm/postgres`; write `CH.string`, not `T.string`. |
 | An example's `Events`, `Services`, or `CH` is undefined      | A guide fragment expects the shared schema/imports.   | Start with the complete example and shared `schema.ts`; recipe files include their own imports.      |
-| `SchemaDefinitionDefect` when a module loads                 | A `table` definition is invalid, such as a MergeTree table without `orderBy`. | Read the message; pass `orderBy: []` for `ORDER BY tuple()`, or `external: true` for a table this schema does not own. |
+| `SchemaDefinitionError` from `entitiesOf` or `generate`      | A `table` definition is invalid, such as a MergeTree table without `orderBy`. | Read the message; pass `orderBy: []` for `ORDER BY tuple()`, or `external: true` for a table this schema does not own. |
 
 ## Compilation failures
 

@@ -20,6 +20,23 @@ import {
 	type RenderOptions,
 } from "./render"
 
+/**
+ * `INSERT INTO target (columns) SELECT select FROM from [WHERE] [GROUP BY]`, run in
+ * windows of `windowDays` (default 1) on `timeColumn`, aligned to the epoch.
+ * A window aligned at or coarser than a `groupBy` grain never splits a group.
+ */
+export const BackfillSpec = Schema.Struct({
+	target: Schema.String,
+	columns: Schema.Array(Schema.String),
+	from: Schema.String,
+	timeColumn: Schema.String,
+	select: Schema.String,
+	where: Schema.optionalKey(Schema.String),
+	groupBy: Schema.optionalKey(Schema.String),
+	windowDays: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThanOrEqualTo(1))),
+})
+export type BackfillSpec = typeof BackfillSpec.Type
+
 export const MigrationOp = Schema.Union([
 	Schema.Struct({
 		op: Schema.Literal("create_table"),
@@ -44,6 +61,8 @@ export const MigrationOp = Schema.Union([
 		reset: Schema.Array(Schema.String),
 	}),
 	Schema.Struct({ op: Schema.Literal("modify_comment"), table: Schema.String, comment: Schema.NullOr(Schema.String) }),
+	/** Written by hand into a generated file; `generate` never emits it. */
+	Schema.Struct({ op: Schema.Literal("backfill"), backfill: BackfillSpec }),
 ])
 export type MigrationOp = typeof MigrationOp.Type
 
@@ -62,7 +81,7 @@ export const MigrationFile = Schema.Union([PgMigrationFile, ClickHouseMigrationF
 export type MigrationFile = typeof MigrationFile.Type
 
 /** Labels the plan prints, so the expensive lines stand out. */
-export type OpLabel = "metadata" | "destructive" | "ingest gap"
+export type OpLabel = "metadata" | "destructive" | "ingest gap" | "backfill"
 
 export const labelOf = (op: MigrationOp): OpLabel => {
 	switch (op.op) {
@@ -71,6 +90,8 @@ export const labelOf = (op: MigrationOp): OpLabel => {
 			return "destructive"
 		case "drop_view":
 			return "ingest gap"
+		case "backfill":
+			return "backfill"
 		default:
 			return "metadata"
 	}
@@ -139,5 +160,43 @@ export const renderOp = (op: MigrationOp, options: RenderOptions = {}): Readonly
 			]
 		case "modify_comment":
 			return [renderAlter(op.table, `MODIFY COMMENT ${quote(op.comment ?? "")}`, options)]
+		case "backfill":
+			return [renderBackfill(op.backfill)]
 	}
+}
+
+const DAY_SECONDS = 86_400
+
+/**
+ * One backfill statement: the whole source, or the half-open window `[from, to)` in
+ * unix seconds. A window compares the raw column, not an alias of the same name.
+ */
+export const renderBackfill = (spec: BackfillSpec, window?: { readonly from: number; readonly to: number }): string => {
+	const where = [
+		...(spec.where !== undefined && spec.where.trim().length > 0 ? [`(${spec.where})`] : []),
+		...(window === undefined
+			? []
+			: [`${ident(spec.timeColumn)} >= toDateTime(${window.from}) AND ${ident(spec.timeColumn)} < toDateTime(${window.to})`]),
+	]
+	return [
+		`INSERT INTO ${ident(spec.target)} (${spec.columns.map(ident).join(", ")})`,
+		`SELECT ${spec.select}`,
+		`FROM ${ident(spec.from)}`,
+		...(where.length > 0 ? [`WHERE ${where.join(" AND ")}`] : []),
+		...(spec.groupBy !== undefined && spec.groupBy.trim().length > 0 ? [`GROUP BY ${spec.groupBy}`] : []),
+		...(window === undefined ? [] : ["SETTINGS prefer_column_name_to_alias = 1"]),
+	].join("\n")
+}
+
+/** The query reading a backfill source's time range as unix seconds `lo` and `hi`. */
+export const renderBackfillBounds = (spec: BackfillSpec): string =>
+	`SELECT toUnixTimestamp(min(${ident(spec.timeColumn)})) AS lo, toUnixTimestamp(max(${ident(spec.timeColumn)})) AS hi FROM ${ident(spec.from)}`
+
+/** Epoch-aligned windows covering `[lo, hi]`, so the same data range always yields the same windows. */
+export const backfillWindows = (spec: BackfillSpec, lo: number, hi: number): ReadonlyArray<{ readonly from: number; readonly to: number }> => {
+	if (!Number.isFinite(lo) || !Number.isFinite(hi) || hi <= 0) return []
+	const size = (spec.windowDays ?? 1) * DAY_SECONDS
+	const windows: Array<{ from: number; to: number }> = []
+	for (let from = Math.floor(lo / size) * size; from <= hi; from += size) windows.push({ from, to: from + size })
+	return windows
 }

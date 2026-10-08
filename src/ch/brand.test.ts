@@ -66,7 +66,7 @@ describe("brand", () => {
 
 	it.effect("round-trips branded values through Postgres", () =>
 		Effect.gen(function* () {
-			for (const statement of S.renderPgSchema(S.pgEntitiesOf([Accounts]))) yield* Db.execute(Db.sql.raw(statement))
+			for (const statement of S.renderPgSchema(yield* S.pgEntitiesOf([Accounts]))) yield* Db.execute(Db.sql.raw(statement))
 			const org = OrgId.make("org_1")
 			const inserted = yield* Db.run(
 				CH.insertInto(Accounts)
