@@ -19,7 +19,7 @@ import { Schema } from "effect"
  *   funnel with no steps), a pattern string that would break out of its quotes.
  *   Code that assembles a query from a request body can hit every one of these
  *   with correct code and bad input, so they belong in the Effect error
- *   channel: `compile` turns a thrown one into a typed failure.
+ *   channel: `compile` fails with the one a check recorded (see `failure.ts`).
  *
  * - A {@link QueryBuilderDefect} describes a **call** that could not be right
  *   for any value — a query with no `select()`, an `orderBy` entry that is not
@@ -45,8 +45,8 @@ export class QueryBuilderError extends Schema.TaggedError<QueryBuilderError>()(
  * A DSL misuse — see the rule on {@link QueryBuilderError}.
  *
  * A separate class rather than another `QueryBuilderError` code, because the
- * class is what decides the channel: `compile` maps a thrown
- * `QueryBuilderError` into the error channel and dies on everything else, so
+ * class is what decides the channel: `compile` fails with a recorded
+ * `QueryBuilderError` and dies on a recorded defect, so
  * this one reaches callers as a defect in the `Cause` — where a bug belongs and
  * where no `catchTag` can quietly swallow it.
  */

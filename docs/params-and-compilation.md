@@ -21,13 +21,13 @@ is — most often on the right of a comparison:
 ```
 
 Calling a comparison method **on** an unresolved param (rather than passing it as an argument)
-throws `QueryBuilderDefect`: there is nothing to compare yet, and which side of the comparison the
+is a `QueryBuilderDefect` when the query compiles: there is nothing to compare yet, and which side of the comparison the
 param sits on is written in the source, so no input can cause or avoid it. See
 [Failures and defects](#failures-and-defects).
 
 Param names must be alphanumeric, optionally separated by single underscores — the name travels
 through the placeholder that `compile` later matches, and `__` would make its boundary
-ambiguous. A name that cannot round-trip is a `QueryBuilderDefect` at declaration.
+ambiguous. A name that cannot round-trip is a `QueryBuilderDefect` when the query compiles.
 
 ## Params are in the query's type
 
@@ -324,6 +324,6 @@ This is a demonstration result, not an HTTP error contract. In your service, map
 failures to your domain errors at the boundary. Validate page sizes, bucket sizes, dates,
 and allowed sort fields before query construction. Do not retry an invalid parameter.
 
-`compile` captures builder failures raised while it evaluates query callbacks. A helper that
-throws before you call `compile` is outside that boundary; avoid eagerly constructing unsafe
-expressions from unchecked input.
+Nothing in the builder throws. A bad argument (a pattern, an empty funnel, a param name) is
+recorded where its SQL renders, so it fails the `compile` that uses it, however early the
+expression was built. Only your own callbacks can throw; `compile` turns that into a defect.

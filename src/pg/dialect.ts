@@ -5,6 +5,7 @@ import type { Dialect } from "../ch/dialect"
 import { QueryBuilderError } from "../ch/errors"
 import { PARAM_MARKER_PREFIX } from "../ch/param"
 import { PgTimestampLiteral, timestampLiteral } from "./types"
+import { fail } from "../ch/failure"
 
 const quoteIdent = (name: string): string => `"${name.replace(/"/g, '""')}"`
 
@@ -16,10 +17,10 @@ const quoteIdent = (name: string): string => `"${name.replace(/"/g, '""')}"`
  */
 const quoteString = (value: string): string => {
 	if (value.includes("\0")) {
-		throw new QueryBuilderError({
+		return fail(new QueryBuilderError({
 			code: "InvalidLiteral",
 			message: "a string literal: Postgres text cannot contain a NUL character",
-		})
+		}), "NULL")
 	}
 	if (!value.includes(PARAM_MARKER_PREFIX)) return `'${value.replace(/'/g, "''")}'`
 	const escaped = value
@@ -42,7 +43,7 @@ const literal = (value: unknown, context: string): string => {
 	if (typeof value === "bigint") return String(value)
 	if (typeof value === "number") {
 		if (!Number.isFinite(value)) {
-			throw new QueryBuilderError({ code: "InvalidLiteral", message: `${context}: ${value} has no Postgres literal` })
+			return fail(new QueryBuilderError({ code: "InvalidLiteral", message: `${context}: ${value} has no Postgres literal` }), "NULL")
 		}
 		return String(value)
 	}
@@ -53,10 +54,10 @@ const literal = (value: unknown, context: string): string => {
 	}
 	// A record reaches here from a jsonb codec that did not stringify it.
 	if (isPlainObject(value)) return quoteString(JSON.stringify(value))
-	throw new QueryBuilderError({
+	return fail(new QueryBuilderError({
 		code: "InvalidLiteral",
 		message: `${context}: cannot write ${typeof value} as a Postgres literal`,
-	})
+	}), "NULL")
 }
 
 /** `param.dateTimeSeconds`: the same instant, floored to whole seconds. */

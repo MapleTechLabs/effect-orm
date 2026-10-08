@@ -8,6 +8,7 @@
 import { Effect } from "effect"
 import { checkedLiteral, type Dialect } from "../ch/dialect"
 import { QueryBuilderError } from "../ch/errors"
+import { collectFailures, fail } from "../ch/failure"
 import { DatabaseError } from "./errors"
 
 const SqlTemplateTag = "@maple-dev/effect-orm/SqlTemplate"
@@ -102,10 +103,13 @@ const PLAIN_NAME = /^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$/
 
 const identifier = (dialect: Dialect, name: string): string => {
 	if (!PLAIN_NAME.test(name)) {
-		throw new QueryBuilderError({
-			code: "InvalidLiteral",
-			message: `sql.identifier: ${JSON.stringify(name)} is not a plain identifier (letters, digits, _, dotted for schema.table)`,
-		})
+		return fail(
+			new QueryBuilderError({
+				code: "InvalidLiteral",
+				message: `sql.identifier: ${JSON.stringify(name)} is not a plain identifier (letters, digits, _, dotted for schema.table)`,
+			}),
+			"",
+		)
 	}
 	return name
 		.split(".")
@@ -118,12 +122,12 @@ export const renderTemplate = (
 	template: SqlTemplate,
 	dialect: Dialect,
 ): Effect.Effect<{ readonly sql: string; readonly parameters: ReadonlyArray<unknown> }, DatabaseError> =>
-	Effect.try({
-		try: () => {
+	Effect.suspend(() => {
+		const { value, failures } = collectFailures(() => {
 			const parameters: Array<unknown> = []
 			const render = (current: SqlTemplate): string => {
 				if (emptyJoins.has(current)) {
-					throw new QueryBuilderError({ code: "InvalidArguments", message: "sql.join: no values to join" })
+					return fail(new QueryBuilderError({ code: "InvalidArguments", message: "sql.join: no values to join" }), "")
 				}
 				return current.strings.reduce((text, part, index) => {
 					if (index === 0) return part
@@ -141,12 +145,16 @@ export const renderTemplate = (
 				}, "")
 			}
 			return { sql: render(template), parameters }
-		},
-		catch: (cause) =>
-			new DatabaseError({
-				message: cause instanceof QueryBuilderError ? cause.message : String(cause),
-				sql: template.strings.join("?"),
-				reason: cause instanceof QueryBuilderError ? cause.code : "InvalidLiteral",
-				cause,
-			}),
+		})
+		const failure = failures[0]
+		return failure === undefined
+			? Effect.succeed(value)
+			: Effect.fail(
+					new DatabaseError({
+						message: failure.message,
+						sql: template.strings.join("?"),
+						reason: failure instanceof QueryBuilderError ? failure.code : "InvalidLiteral",
+						cause: failure,
+					}),
+				)
 	})

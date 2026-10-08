@@ -8,6 +8,7 @@
 // param beyond theirs. A param can then never be in a query without being in
 // its type: either `uses` names it, or compiling fails and says so.
 
+import { fail } from "./failure"
 import { type Condition, type Expr, makeCond as makeCondUnchecked, makeExpr as makeExprUnchecked, type ParamsIn } from "./expr"
 import { QueryBuilderDefect } from "./errors"
 import { PARAM_PLACEHOLDER_PATTERN } from "./param"
@@ -41,9 +42,9 @@ const checked = (what: string, fragment: SqlFragment, uses: ReadonlyArray<unknow
 		)
 		const undeclared = [...found].filter((p) => !declared.has(p))
 		if (undeclared.length > 0) {
-			throw new QueryBuilderDefect({
+			return fail(new QueryBuilderDefect({
 				message: `${what}: the SQL holds a param (${undeclared.join(", ")}) that no expression in \`uses\` carries; pass the expressions you interpolate as \`uses\` so the query's type requires their params`,
-			})
+			}), "NULL")
 		}
 		return sql
 	})

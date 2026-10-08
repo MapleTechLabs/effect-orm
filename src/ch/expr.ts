@@ -13,6 +13,7 @@ import { activeSqlSyntax } from "../sql/sql-syntax"
 import { chDateTimeLiteral, CHFloatResult, CHNumber, string as chString, type CHType, type InferTS } from "./types"
 import { encodeColumnLiteral } from "./literal"
 import { QueryBuilderError } from "./errors"
+import { fail } from "./failure"
 import { markTenantColumn, markTenantPredicate, tenantColumnOf, tenantPredicatesOf } from "./tenant"
 
 // Core interfaces
@@ -310,12 +311,16 @@ const dateTimeLiteral = (value: DateTime.Utc): string =>
  * never true, so this is refused rather than written. A failure, not a defect:
  * the value usually comes from data the types said could not be null.
  */
-const refusedNull = (value: null | undefined): never => {
-	throw new QueryBuilderError({
-		code: "InvalidArguments",
-		message: `compared against ${String(value)}, which SQL never matches; use isNull() / isNotNull()`,
-	})
-}
+const refusedNull = (value: null | undefined): SqlFragment =>
+	known(() =>
+		fail(
+			new QueryBuilderError({
+				code: "InvalidArguments",
+				message: `compared against ${String(value)}, which SQL never matches; use isNull() / isNotNull()`,
+			}),
+			"NULL",
+		),
+	)
 
 /**
  * `expr IN (…)` / `expr NOT IN (…)`. An empty list has no SQL spelling, so it
@@ -496,7 +501,7 @@ export function makeColumnRef<Name extends string, ColType extends CHType<string
 		columnType?.schema as Schema.Codec<InferTS<ColType>, any> | undefined,
 		columnType === undefined
 			? undefined
-			: (value) => raw(encodeColumnLiteral(columnType, value, columnName ?? name)),
+			: (value) => known(() => encodeColumnLiteral(columnType, value, columnName ?? name)),
 	)
 	if (columnType !== undefined) columnTypes.set(base, columnType)
 	const isTenantColumn = tenantColumn !== undefined && (columnName ?? name) === tenantColumn
@@ -512,7 +517,7 @@ export function makeColumnRef<Name extends string, ColType extends CHType<string
 		if (value === null || value === undefined) return undefined
 		return columnType === undefined
 			? toFragment(value)
-			: raw(encodeColumnLiteral(columnType, value, columnName ?? name))
+			: known(() => encodeColumnLiteral(columnType, value, columnName ?? name))
 	}
 	return Object.assign(
 		base,

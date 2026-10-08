@@ -3,6 +3,7 @@ import { DateTime, Effect, Schema } from "effect"
 import * as CH from "./index"
 import * as T from "./types"
 import { compileCHUnsafe } from "./compile"
+import { collectFailures } from "./failure"
 import { encodeLiteral, sqlLiteral } from "./literal"
 
 // A column type is a codec, so the value that comes back out of a row and the
@@ -122,9 +123,10 @@ describe("sqlLiteral", () => {
 	})
 
 	it("refuses what has no ClickHouse literal", () => {
-		expect(() => sqlLiteral(Number.NaN, "test")).toThrow(/no ClickHouse literal/)
-		expect(() => sqlLiteral(undefined, "test")).toThrow(/cannot write undefined/)
-		expect(() => sqlLiteral(() => 1, "test")).toThrow(/cannot write a function/)
+		const failureOf = (value: unknown) => collectFailures(() => sqlLiteral(value, "test")).failures[0]?.message
+		expect(failureOf(Number.NaN)).toMatch(/no ClickHouse literal/)
+		expect(failureOf(undefined)).toMatch(/cannot write undefined/)
+		expect(failureOf(() => 1)).toMatch(/cannot write a function/)
 	})
 })
 

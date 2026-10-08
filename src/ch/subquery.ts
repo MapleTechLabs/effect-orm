@@ -6,8 +6,9 @@
 // today only because everything crossing it is a hoisted `function` declaration
 // — one top-level `const` away from a TDZ crash in the bundle.
 
+import { fail } from "./failure"
 import { renderSubquery } from "./subquery-context"
-import { compileCHUnsafe, selectedAliasesOf } from "./compile"
+import { compileCHRaw, selectedAliasesOf } from "./compile"
 import { QueryBuilderDefect } from "./errors"
 import { type Condition, type Expr, makeCond, makeExpr, makeUntypedExpr } from "./expr"
 import type { CHQuery, NeedsSelect, SingleColumnOf } from "./query"
@@ -32,7 +33,7 @@ const toSql = (subquery: Subquery): string =>
 	renderSubquery(subquery, (query) =>
 		typeof query === "string"
 			? query
-			: compileCHUnsafe(query, {}, { skipFormat: true, deferParams: true }).sql,
+			: compileCHRaw(query, {}, { skipFormat: true, deferParams: true }).sql,
 	)
 
 /**
@@ -44,9 +45,9 @@ const oneColumn = (what: string, subquery: Subquery): Subquery => {
 	if (typeof subquery === "string") return subquery
 	const aliases = selectedAliasesOf(subquery)
 	if (aliases !== undefined && aliases.length !== 1) {
-		throw new QueryBuilderDefect({
+		return fail(new QueryBuilderDefect({
 			message: `${what}: the subquery must select exactly one column, not ${aliases.length === 0 ? "none" : aliases.join(", ")}`,
-		})
+		}), subquery)
 	}
 	return subquery
 }

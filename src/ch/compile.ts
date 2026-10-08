@@ -7,6 +7,7 @@
 // 3. Evaluating the whereFn (with params resolved) to get Conditions
 // 4. Assembling into SqlQuery and calling the existing compileQuery()
 
+import { compiled, compiledUnsafe, fail } from "./failure"
 import { custom, dateTime, dateTime64, type CHType, type ColumnDefs } from "./types"
 import type { CHQuery, CHQueryState, NeedsSelect } from "./query"
 import type { CHUnionQuery } from "./union"
@@ -55,19 +56,19 @@ const lockClause = (lock: import("./query").LockClause | undefined): string | un
 	if (lock === undefined) return undefined
 	const dialect = currentDialect()
 	if (dialect.clauses.locking !== true) {
-		throw new QueryBuilderDefect({
+		return fail(new QueryBuilderDefect({
 			message: `CHQuery: FOR ${lock.strength} has no meaning for the ${dialect.name} dialect, which has no row locks`,
-		})
+		}), "")
 	}
 	if (lock.skipLocked === true && lock.noWait === true) {
-		throw new QueryBuilderDefect({ message: "CHQuery: a lock takes skipLocked or noWait, not both" })
+		return fail(new QueryBuilderDefect({ message: "CHQuery: a lock takes skipLocked or noWait, not both" }), "")
 	}
 	// Postgres takes only unqualified names here, so `public.jobs` is refused, not quoted.
 	for (const name of lock.of ?? []) {
 		if (name.includes(".")) {
-			throw new QueryBuilderDefect({
+			return fail(new QueryBuilderDefect({
 				message: `CHQuery: FOR ${lock.strength} OF ${JSON.stringify(name)}: name the table by its alias or unqualified name`,
-			})
+			}), "")
 		}
 	}
 	const of = lock.of !== undefined && lock.of.length > 0 ? ` OF ${lock.of.map(quoteIdent).join(", ")}` : ""
@@ -84,15 +85,15 @@ const lockClause = (lock: import("./query").LockClause | undefined): string | un
 const orderByClause = (specs: ReadonlyArray<[string, "asc" | "desc"]>): Array<string> =>
 	specs.map((spec) => {
 		if (!Array.isArray(spec) || spec.length !== 2) {
-			throw new QueryBuilderDefect({
+			return fail(new QueryBuilderDefect({
 				message: `CHQuery: orderBy() takes [column, direction] tuples, got ${JSON.stringify(spec)}`,
-			})
+			}), "")
 		}
 		const [column, direction] = spec
 		if (direction !== "asc" && direction !== "desc") {
-			throw new QueryBuilderDefect({
+			return fail(new QueryBuilderDefect({
 				message: `CHQuery: orderBy() direction must be "asc" or "desc", got ${JSON.stringify(direction)}`,
-			})
+			}), "")
 		}
 		return `${quoteIdent(column)} ${direction.toUpperCase()}`
 	})
@@ -105,10 +106,10 @@ const orderByClause = (specs: ReadonlyArray<[string, "asc" | "desc"]>): Array<st
 const rowCount = (clause: "limit" | "offset", value: number | undefined) => {
 	if (value == null) return undefined
 	if (!Number.isSafeInteger(value) || value < 0) {
-		throw new QueryBuilderError({
+		return fail(new QueryBuilderError({
 			code: "InvalidArguments",
 			message: `${clause}(${value}): expected a non-negative integer`,
-		})
+		}), raw("0"))
 	}
 	return raw(String(value))
 }
@@ -131,9 +132,9 @@ const formatClause = (format: string | undefined): string | undefined => {
 	if (format === undefined) return undefined
 	const dialect = currentDialect()
 	if (!dialect.clauses.format) {
-		throw new QueryBuilderDefect({
+		return fail(new QueryBuilderDefect({
 			message: `CHQuery: format(${JSON.stringify(format)}) has no meaning for the ${dialect.name} dialect, which has no FORMAT clause`,
-		})
+		}),undefined)
 	}
 	return format
 }
@@ -534,39 +535,17 @@ export const rawCompiledQuery = <
 		args.kind,
 	)
 
-/**
- * A thrown `QueryBuilderError` as a typed failure.
- *
- * Compilation reads values it cannot check earlier — the params bag, whatever a
- * caller compared a column against — so a missing param or an unencodable value
- * is an expected failure, not a bug. Anything else that escapes is a bug and
- * stays a defect: catching it would turn a real crash into a value someone
- * pattern-matches on.
- */
-interface UnexpectedCompileFailure {
-	readonly _tag: "UnexpectedCompileFailure"
-	readonly cause: unknown
-}
-
-const asEffect = <A>(compile: () => A): Effect.Effect<A, QueryBuilderError> =>
-	Effect.try({
-		try: compile,
-		catch: (cause): QueryBuilderError | UnexpectedCompileFailure =>
-			cause instanceof QueryBuilderError ? cause : { _tag: "UnexpectedCompileFailure" as const, cause },
-		// `UnexpectedCompileFailure` is this builder's own "cannot happen" tag: a query
-		// is built from typed definitions, so a compile that throws is a bug in this
-		// file rather than a failure a call site could handle.
-		// oxlint-disable-next-line maple/no-effect-die
-	}).pipe(Effect.catchTag("UnexpectedCompileFailure", ({ cause }) => Effect.die(cause)))
+/** What a failed compile returns while the failure it recorded waits for the entry point. */
+const failedQuery = <Output, Route extends string | undefined>(): CompiledQuery<Output, Route> =>
+	makeCompiledQuery<Output, Route>("", [], "untenanted", "none", undefined)
 
 /**
  * Compile a query, with failures in the error channel.
  *
- * The compile step used to throw. `QueryBuilderError` was already a
- * `Schema.TaggedError`, but a thrown one is a defect: a route could not
- * `catchTag` it, and a missing param reached production as an unhandled crash
- * rather than a typed 400. Use {@link compileCHUnsafe} where a throw is what you
- * want — a fixture that fails to compile should fail its test loudly.
+ * Nothing in the builder throws: a check that fails records its error (see
+ * `failure.ts`), a `QueryBuilderError` becomes this Effect's failure and a
+ * `QueryBuilderDefect` its defect. {@link compileCHUnsafe} runs it with
+ * `Effect.runSync`, for a fixture that should fail its test loudly.
  */
 export function compileCH<
 	Cols extends ColumnDefs,
@@ -598,7 +577,7 @@ export function compileCH(
 	params?: Record<string, unknown>,
 	options?: any,
 ): Effect.Effect<CompiledQuery<any, any>, QueryBuilderError> {
-	return asEffect(() => compileCHUnsafe(query as CHQuery<any, any, any, any>, params ?? {}, options))
+	return compiled(() => compileCHRaw(query, params, options))
 }
 
 /** A write statement: what `compile` takes besides a query. */
@@ -622,7 +601,7 @@ export const compileUnion = <
 	params?: Given,
 	options?: { rowSchema?: CompiledQueryRowSchema<Output>; deferParams?: boolean; dialect?: Dialect },
 ): Effect.Effect<CompiledQuery<Output, undefined>, QueryBuilderError> =>
-	asEffect(() => compileUnionUnsafe(union as CHUnionQuery<Output>, params ?? {}, options))
+	compiled(() => compileUnionRaw(union, params, options))
 
 export function compileCHUnsafe<
 	Cols extends ColumnDefs,
@@ -654,6 +633,18 @@ export function compileCHUnsafe<Output, Params = never, const Given extends obje
 	options?: InsertCompileOptions,
 ): CompiledQuery<Output, undefined>
 export function compileCHUnsafe(
+	query: CHQuery<any, any, any, any> | CHWrite<any>,
+	params?: Record<string, unknown>,
+	options?: any,
+): CompiledQuery<any, any> {
+	return compiledUnsafe(() => compileCHRaw(query, params, options))
+}
+
+/**
+ * The compile behind {@link compileCH}: never throws, and records a failure in the
+ * enclosing compile's slot (see `failure.ts`). For the library's own nested compiles.
+ */
+export function compileCHRaw(
 	query: CHQuery<any, any, any, any> | CHWrite<any>,
 	params?: Record<string, unknown>,
 	options?: any,
@@ -738,14 +729,14 @@ function compileInner<
 			(keys.length !== options.selectKeys.length ||
 				options.selectKeys.some((key) => !Object.hasOwn(selectExprs, key)))
 		) {
-			throw new QueryBuilderDefect({
+			return fail(new QueryBuilderDefect({
 				message: "unionAll: every branch must select the same column aliases",
-			})
+			}), failedQuery<Decoded, Route>())
 		}
 		const selectKeys = options?.selectKeys ?? keys
 
 		if (selectKeys.length === 0) {
-			throw new QueryBuilderDefect({ message: "CHQuery: select() is required" })
+			return fail(new QueryBuilderDefect({ message: "CHQuery: select() is required" }), failedQuery<Decoded, Route>())
 		}
 
 		// WHERE — resolve params by injecting values into the accessor
@@ -856,7 +847,8 @@ function compileInner<
 						j.tenantColumn === undefined ? undefined : `${j.alias}.${j.tenantColumn}`,
 					)
 				} else {
-					throw new QueryBuilderDefect({ message: "TypedJoin: missing table or query" })
+					tableSql = fail(new QueryBuilderDefect({ message: "TypedJoin: missing table or query" }), "")
+					source = sourceForTable("")
 				}
 				sources.push(source)
 				const on = j.on?.(
@@ -902,13 +894,11 @@ function compileInner<
 				distinct: state.distinct !== undefined,
 				distinctOn: Array.isArray(state.distinct)
 					? (state.distinct.length === 0
-							? (() => {
-									throw new QueryBuilderDefect({ message: "CHQuery: distinctOn() needs at least one key" })
-								})()
+							? fail<ReadonlyArray<string>>(new QueryBuilderDefect({ message: "CHQuery: distinctOn() needs at least one key" }), [])
 							: state.distinct
 						).map((key: string) => {
 							if (!(options?.selectKeys ?? keys).includes(key)) {
-								throw new QueryBuilderDefect({ message: `CHQuery: distinctOn(${JSON.stringify(key)}) is not a selected alias` })
+								return fail(new QueryBuilderDefect({ message: `CHQuery: distinctOn(${JSON.stringify(key)}) is not a selected alias` }), raw(""))
 							}
 							return raw(quoteIdent(key))
 						})
@@ -916,9 +906,9 @@ function compileInner<
 				lock: (() => {
 					// Postgres refuses a lock on rows that are no longer table rows; say so here.
 					if (state.lock !== undefined && (state.distinct !== undefined || state.groupByKeys.length > 0 || state.havingFn !== undefined)) {
-						throw new QueryBuilderDefect({
+						return fail(new QueryBuilderDefect({
 							message: `CHQuery: FOR ${state.lock.strength} cannot lock rows of a query with DISTINCT, GROUP BY or HAVING`,
-						})
+						}), undefined)
 					}
 					return lockClause(state.lock)
 				})(),
@@ -994,9 +984,9 @@ const plainColumn = (fragment: SqlFragment): string | undefined =>
 const rowFilter = (clause: string, condition: Condition): string => {
 	const [sql, found] = track(() => compileSqlFragment(condition.toFragment()))
 	if (found.aggregate) {
-		throw new QueryBuilderDefect({
+		return fail(new QueryBuilderDefect({
 			message: `CHQuery: ${clause} has an aggregate, which has no value before rows are grouped; filter on it in having()`,
-		})
+		}), "")
 	}
 	return sql
 }
@@ -1018,7 +1008,7 @@ function assertGrouping(
 	if (grouped.size === 0 && !aggregates) return
 	for (const key of grouped) {
 		if (selected.find((s) => s.alias === key)?.found.aggregate === true) {
-			throw new QueryBuilderDefect({ message: `CHQuery: groupBy(${JSON.stringify(key)}) names an aggregate, which cannot be a grouping key` })
+			return fail(new QueryBuilderDefect({ message: `CHQuery: groupBy(${JSON.stringify(key)}) names an aggregate, which cannot be a grouping key` }), undefined)
 		}
 	}
 	const keys = selected.filter((s) => grouped.has(s.alias))
@@ -1029,17 +1019,17 @@ function assertGrouping(
 		if (grouped.has(s.alias) || keySql.has(s.sql)) continue
 		const column = ungrouped(s.found.columns)
 		if (column !== undefined) {
-			throw new QueryBuilderDefect({
+			return fail(new QueryBuilderDefect({
 				message: `CHQuery: select alias ${JSON.stringify(s.alias)} reads ${column}, which is neither a groupBy() key nor inside an aggregate`,
-			})
+			}), undefined)
 		}
 	}
 	for (const h of having) {
 		const column = ungrouped(h.found.columns)
 		if (column !== undefined) {
-			throw new QueryBuilderDefect({
+			return fail(new QueryBuilderDefect({
 				message: `CHQuery: having() reads ${column}, which is neither a groupBy() key nor inside an aggregate`,
-			})
+			}), undefined)
 		}
 	}
 }
@@ -1057,21 +1047,21 @@ function assertDistinctNames(state: CHQueryState): void {
 	const seen = new Set<string>([fromAlias])
 	for (const join of state.typedJoins) {
 		if (seen.has(join.alias)) {
-			throw new QueryBuilderDefect({
+			return fail(new QueryBuilderDefect({
 				message: `CHQuery: join alias ${JSON.stringify(join.alias)} is already the name of another source in this query`,
-			})
+			}), undefined)
 		}
 		if (columns.has(join.alias)) {
-			throw new QueryBuilderDefect({
+			return fail(new QueryBuilderDefect({
 				message: `CHQuery: join alias ${JSON.stringify(join.alias)} is also a column of the FROM source; pick another alias`,
-			})
+			}), undefined)
 		}
 		seen.add(join.alias)
 	}
 	const ctes = new Set<string>()
 	for (const cte of state.ctes) {
 		if (ctes.has(cte.name)) {
-			throw new QueryBuilderDefect({ message: `CHQuery: withCTE(${JSON.stringify(cte.name)}) is defined twice` })
+			return fail(new QueryBuilderDefect({ message: `CHQuery: withCTE(${JSON.stringify(cte.name)}) is defined twice` }), undefined)
 		}
 		ctes.add(cte.name)
 	}
@@ -1309,7 +1299,16 @@ export function compileUnionUnsafe<
 		dialect?: Dialect
 	},
 ): CompiledQuery<Output, undefined> {
-	return withDialect(options?.dialect ?? currentDialect(), () => compileUnionInner(union as CHUnionQuery<Output>, params ?? {}, options))
+	return compiledUnsafe(() => compileUnionRaw(union, params, options))
+}
+
+/** {@link compileCHRaw} for a union. */
+export function compileUnionRaw<Output extends Record<string, any>>(
+	union: CHUnionQuery<Output, any>,
+	params?: object,
+	options?: { rowSchema?: CompiledQueryRowSchema<Output>; deferParams?: boolean; dialect?: Dialect },
+): CompiledQuery<Output, undefined> {
+	return withDialect(options?.dialect ?? currentDialect(), () => compileUnionInner(union, params ?? {}, options))
 }
 
 /** The recursion behind {@link compileUnionUnsafe}; see {@link compileInner}. */
@@ -1333,10 +1332,10 @@ function compileUnionInner<Output extends Record<string, any>, Params extends Re
 
 	// Compile each sub-query without FORMAT
 	const first = state.queries[0]
-	if (first === undefined) throw new QueryBuilderDefect({ message: "unionAll requires at least one query" })
+	if (first === undefined) return fail(new QueryBuilderDefect({ message: "unionAll requires at least one query" }),failedQuery<Output, undefined>())
 	const selectKeys = Object.keys(selectExprsOf(first) ?? {})
 	if (state.queries.some((q) => q._state.lock !== undefined)) {
-		throw new QueryBuilderDefect({ message: "unionAll: a branch cannot take a row lock; lock in a query over the union instead" })
+		return fail(new QueryBuilderDefect({ message: "unionAll: a branch cannot take a row lock; lock in a query over the union instead" }),failedQuery<Output, undefined>())
 	}
 	const subQueries = state.queries.map((q) =>
 		compileInner(q, params, { skipFormat: true, deferParams, nested: true, selectKeys, enclosingCtes }),
@@ -1467,19 +1466,19 @@ function renderParams(
 	})
 
 	if (style._tag === "bind" && style.maxParameters !== undefined && parameters.length > style.maxParameters) {
-		throw new QueryBuilderError({
+		return fail(new QueryBuilderError({
 			code: "InvalidArguments",
 			message: `compile: the statement binds ${parameters.length} values, over the ${style.maxParameters} ${dialect.name} allows in one statement; send fewer rows per statement`,
-		})
+		}), { sql: "", parameters: [] })
 	}
 
 	if (missing.length > 0) {
-		throw new QueryBuilderError({
+		return fail(new QueryBuilderError({
 			code: "UnresolvedParam",
 			message: `compile: no value given for param${missing.length > 1 ? "s" : ""} ${missing
 				.map((n) => `'${n}'`)
 				.join(", ")}`,
-		})
+		}), { sql: "", parameters: [] })
 	}
 
 	// Nothing placeholder-shaped may survive a resolved compile. The loop above
@@ -1487,10 +1486,10 @@ function renderParams(
 	// matches but `paramSchema` cannot resolve — or one a value smuggled past the
 	// escaper — would otherwise reach the warehouse as query text.
 	if (resolved.includes(PARAM_MARKER_PREFIX)) {
-		throw new QueryBuilderError({
+		return fail(new QueryBuilderError({
 			code: "UnresolvedParam",
 			message: "compile: unresolved param placeholder remains in the compiled SQL",
-		})
+		}), { sql: "", parameters: [] })
 	}
 
 	return { sql: resolved, parameters }
@@ -1520,9 +1519,9 @@ function encodeParam(dialect: Dialect, kind: ParamKind, name: string, value: unk
 		// Only reachable from a hand-written placeholder naming a kind nothing
 		// declared: `param.of` registers its type before it can reach any SQL —
 		// which is why it is a defect and not a failure a caller could report.
-		throw new QueryBuilderDefect({
+		return fail(new QueryBuilderDefect({
 			message: `compile: param '${name}' has an unknown type '${kind}'`,
-		})
+		}), "")
 	}
 	return encodeValue(schema, value, paramContext(kind, name))
 }
@@ -1558,22 +1557,22 @@ const onConflictClause = (
 	const where = `insertInto(${table.name})`
 	const dialect = currentDialect()
 	if (dialect.clauses.onConflict !== true) {
-		throw new QueryBuilderDefect({
+		return fail(new QueryBuilderDefect({
 			message: `${where}: onConflict has no meaning for the ${dialect.name} dialect, which has no ON CONFLICT clause`,
-		})
+		}), "")
 	}
 
 	let target = ""
 	if (conflict.target !== undefined) {
 		if ("constraint" in conflict.target) {
 			if (conflict.targetWhere !== undefined) {
-				throw new QueryBuilderDefect({ message: `${where}: targetWhere needs a column target, not a constraint` })
+				return fail(new QueryBuilderDefect({ message: `${where}: targetWhere needs a column target, not a constraint` }), "")
 			}
 			target = ` ON CONSTRAINT ${quoteIdent(conflict.target.constraint)}`
 		} else {
 			const targetColumns = conflict.target
 			if (targetColumns.length === 0 || targetColumns.some((column) => !Object.hasOwn(table.columns, column))) {
-				throw new QueryBuilderDefect({ message: `${where}: the conflict target must name columns of the table` })
+				return fail(new QueryBuilderDefect({ message: `${where}: the conflict target must name columns of the table` }), "")
 			}
 			const predicate = conflict.targetWhere?.(createColumnAccessor(table.columns))
 			target = ` (${targetColumns.map(quoteIdent).join(", ")})${
@@ -1581,7 +1580,7 @@ const onConflictClause = (
 			}`
 		}
 	} else if (conflict.targetWhere !== undefined) {
-		throw new QueryBuilderDefect({ message: `${where}: targetWhere needs a target` })
+		return fail(new QueryBuilderDefect({ message: `${where}: targetWhere needs a target` }), "")
 	}
 	if (conflict.action === "nothing") return `\nON CONFLICT${target} DO NOTHING`
 
@@ -1604,14 +1603,14 @@ const returningOf = (
 	if (returningFn === undefined) return undefined
 	const dialect = currentDialect()
 	if (dialect.clauses.returning !== true) {
-		throw new QueryBuilderDefect({
+		return fail(new QueryBuilderDefect({
 			message: `${where}: returning() has no meaning for the ${dialect.name} dialect, which has no RETURNING clause`,
-		})
+		}), undefined)
 	}
 	const exprs = returningFn(createColumnAccessor(table.columns))
 	const aliases = Object.keys(exprs)
 	if (aliases.length === 0) {
-		throw new QueryBuilderDefect({ message: `${where}: returning() needs at least one column` })
+		return fail(new QueryBuilderDefect({ message: `${where}: returning() needs at least one column` }), undefined)
 	}
 	const sql = `\nRETURNING ${aliases.map((alias) => compileSqlFragment(aliased(exprs[alias]!, alias))).join(", ")}`
 	return { exprs, aliases, sql, derived: deriveRowSchema(exprs) }
@@ -1707,17 +1706,17 @@ const setAssignments = (
 	const assignments = Object.entries(set).flatMap(([column, value]) => {
 		if (value === undefined) return []
 		if (!Object.hasOwn(table.columns, column) || computed.has(column)) {
-			throw new QueryBuilderError({
+			return fail(new QueryBuilderError({
 				code: "InvalidArguments",
 				message: `${where}: ${context} sets ${JSON.stringify(column)}, which is not an insertable column of the table`,
-			})
+			}),[])
 		}
 		const sql = cell(column, value, `${context} set`)
 		wrote(column, value, sql)
 		return [`${quoteIdent(column)} = ${sql}`]
 	})
 	if (assignments.length === 0) {
-		throw new QueryBuilderError({ code: "InvalidArguments", message: `${where}: ${context} sets no columns` })
+		return fail(new QueryBuilderError({ code: "InvalidArguments", message: `${where}: ${context} sets no columns` }),[])
 	}
 	return assignments
 }
@@ -1741,9 +1740,9 @@ const insertSelectSource = (
 	// defect, as the type error on `select` says.
 	for (const column of columns) {
 		if (!Object.hasOwn(table.columns, column) || computed.has(column)) {
-			throw new QueryBuilderDefect({
+			fail(new QueryBuilderDefect({
 				message: `insertInto(${table.name}): the query selects ${JSON.stringify(column)}, which is not an insertable column of the table`,
-			})
+			}), undefined)
 		}
 	}
 	const inner = isUnion
@@ -1763,14 +1762,14 @@ const writeSettingsClause = (
 	if (entries.length === 0) return ""
 	const dialect = currentDialect()
 	if (dialect.clauses.writeSettings !== true) {
-		throw new QueryBuilderDefect({
+		return fail(new QueryBuilderDefect({
 			message: `${where}: settings() has no meaning for the ${dialect.name} dialect, which has no SETTINGS on writes`,
-		})
+		}), "")
 	}
 	return ` SETTINGS ${entries
 		.map(([name, value]) => {
 			if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
-				throw new QueryBuilderDefect({ message: `${where}: ${JSON.stringify(name)} is not a setting name` })
+				return fail(new QueryBuilderDefect({ message: `${where}: ${JSON.stringify(name)} is not a setting name` }), "")
 			}
 			return `${name} = ${checkedLiteral(dialect, value, `setting ${name}`)}`
 		})
@@ -1787,7 +1786,7 @@ function compileInsert(insert: CHInsert<any, any, any, any>, params: Record<stri
 	const { table, rows, selectQuery } = insert._state
 	const where = `insertInto(${table.name})`
 	if (rows === undefined && selectQuery === undefined) {
-		throw new QueryBuilderDefect({ message: `${where}: values() or select() is required` })
+		return fail(new QueryBuilderDefect({ message: `${where}: values() or select() is required` }),failedQuery<any, undefined>())
 	}
 	const dialect = currentDialect()
 	const { values, cell } = valueCells(table, params, where)
@@ -1885,7 +1884,7 @@ const valuesColumns = (
 	const where = `insertInto(${table.name})`
 	// The rows usually come from data, so their number and keys are failures, not defects.
 	if (rows.length === 0) {
-		throw new QueryBuilderError({ code: "InvalidArguments", message: `${where}: values() was given no rows` })
+		return fail(new QueryBuilderError({ code: "InvalidArguments", message: `${where}: values() was given no rows` }), [])
 	}
 	const computed = new Set<string>(table.computed ?? [])
 	const present = new Set<string>()
@@ -1893,23 +1892,23 @@ const valuesColumns = (
 		for (const [column, value] of Object.entries(row)) {
 			if (value === undefined) continue
 			if (!Object.hasOwn(table.columns, column)) {
-				throw new QueryBuilderError({
+				return fail(new QueryBuilderError({
 					code: "InvalidArguments",
 					message: `${where}: row ${index} has ${JSON.stringify(column)}, which is not a column of the table`,
-				})
+				}), undefined)
 			}
 			if (computed.has(column)) {
-				throw new QueryBuilderError({
+				return fail(new QueryBuilderError({
 					code: "InvalidArguments",
 					message: `${where}: row ${index} writes ${column}, which the database computes (MATERIALIZED or ALIAS)`,
-				})
+				}), undefined)
 			}
 			present.add(column)
 		}
 	})
 	const columns = Object.keys(table.columns).filter((column) => present.has(column))
 	if (columns.length === 0) {
-		throw new QueryBuilderError({ code: "InvalidArguments", message: `${where}: every row is empty; give at least one column` })
+		return fail(new QueryBuilderError({ code: "InvalidArguments", message: `${where}: every row is empty; give at least one column` }), [])
 	}
 	return columns
 }
@@ -1938,7 +1937,7 @@ function compileUpdateOrDelete(
 	// came out undefined is data, and would otherwise turn a filtered write into
 	// one over every row.
 	if (state.whereFn === undefined && state.allRows !== true) {
-		throw new QueryBuilderDefect({ message: `${where}: no where(); call allRows() to write every row` })
+		return fail(new QueryBuilderDefect({ message: `${where}: no where(); call allRows() to write every row` }), failedQuery<any, undefined>())
 	}
 	const conditions = (state.whereFn?.($) ?? []).filter((c): c is NonNullable<typeof c> => c != null)
 
@@ -1952,7 +1951,7 @@ function compileUpdateOrDelete(
 			let assignments: ReadonlyArray<string> = []
 			if (write._tag === "CHUpdate") {
 				const set = (write as CHUpdate<any, any, any>)._state.set
-				if (set === undefined) throw new QueryBuilderDefect({ message: `${where}: set() is required` })
+				if (set === undefined) return fail(new QueryBuilderDefect({ message: `${where}: set() is required` }), [assignments, ""] as const)
 				const record = typeof set === "function" ? set($) : set
 				assignments = setAssignments(table, record as Record<string, unknown>, cell, (column, value, sql) => {
 					if (column === tenant) setWrites.push({ value, sql })
@@ -1961,10 +1960,10 @@ function compileUpdateOrDelete(
 			// An empty rendering (a `rawCond("")`) filters nothing, so it does not count.
 			const rendered = conditions.map((c) => compileSqlFragment(c.toFragment())).filter((sql) => sql.trim() !== "")
 			if (state.whereFn !== undefined && rendered.length === 0 && state.allRows !== true) {
-				throw new QueryBuilderError({
+				return fail(new QueryBuilderError({
 					code: "InvalidArguments",
 					message: `${where}: where() gave no conditions (each was undefined or empty), which would write every row; call allRows() if that is meant`,
-				})
+				}), [assignments, ""] as const)
 			}
 			const whereSql =
 				rendered.length > 0

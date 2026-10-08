@@ -202,8 +202,8 @@ their full namespaced tag; `QueryBuilderDefect` remains a defect rather than a t
 
 #### `QueryBuilderError`
 
-Tag `"@maple-dev/effect-orm/QueryBuilderError"`. Raised while compiling, and surfaced in
-`compile`'s error channel (thrown by `compileUnsafe`).
+Tag `"@maple-dev/effect-orm/QueryBuilderError"`. Recorded while compiling and surfaced in
+`compile`'s error channel; `compileUnsafe` runs `compile` with `Effect.runSync`, which throws it.
 
 | `code`             | Cause                                                                    |
 | ------------------ | ------------------------------------------------------------------------ |

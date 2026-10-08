@@ -6,8 +6,9 @@
 
 import { type DateTime, Schema } from "effect"
 import type { SqlFragment } from "../sql/sql-fragment"
-import { raw } from "../sql/sql-fragment"
-import type { Comparable, Expr, ParamEntries } from "./expr"
+import { known, raw } from "../sql/sql-fragment"
+import { fail } from "./failure"
+import { makeCond, makeUntypedExpr, type Comparable, type Condition, type Expr, type ParamEntries } from "./expr"
 import { QueryBuilderDefect } from "./errors"
 import * as T from "./types"
 import type { CHType } from "./types"
@@ -32,7 +33,7 @@ export type ParamKind = string
  * nobody supplied.
  */
 export const paramPlaceholder = (kind: ParamKind, name: string): string => {
-	assertValidParamName(name)
+	if (!isValidParamName(name)) fail(badParamName(name), undefined)
 	return `${PARAM_MARKER_PREFIX}${kind}_${name}__`
 }
 
@@ -53,13 +54,12 @@ export const PARAM_PLACEHOLDER_PATTERN = /__PARAM_([A-Za-z][A-Za-z0-9]*)_(.+?)__
  * A defect, not a failure: a param name is written in the query definition, so
  * no runtime value can produce a bad one. See the rule on `QueryBuilderError`.
  */
-function assertValidParamName(name: string): void {
-	if (!/^[A-Za-z0-9$]+(?:_[A-Za-z0-9$]+)*$/.test(name)) {
-		throw new QueryBuilderDefect({
-			message: `param name ${JSON.stringify(name)} must be alphanumeric, optionally separated by single underscores`,
-		})
-	}
-}
+const isValidParamName = (name: string): boolean => /^[A-Za-z0-9$]+(?:_[A-Za-z0-9$]+)*$/.test(name)
+
+const badParamName = (name: string) =>
+	new QueryBuilderDefect({
+		message: `param name ${JSON.stringify(name)} must be alphanumeric, optionally separated by single underscores`,
+	})
 
 // Param marker — used during query definition (before compilation)
 
@@ -79,21 +79,26 @@ export interface ParamMarker<N extends string, T, V = ParamValue<T>> extends Exp
  * value, so `param.string("x").eq(y)` has nothing to compare. Compare the
  * *column* against the param instead — `$.OrgId.eq(param.string("orgId"))`.
  *
- * A defect rather than a failure for the same reason `assertValidParamName` is:
+ * A defect rather than a failure for the same reason a bad param name is:
  * which side of the comparison the param sits on is written in the source.
  */
-const unresolved = (name: string) => (): never => {
-	throw new QueryBuilderDefect({
-		message: `param '${name}' is a placeholder, not a value — compare a column against it (\`$.Col.eq(param.string('${name}'))\`) rather than comparing on the param`,
-	})
-}
+const unresolvedSql = (name: string): SqlFragment =>
+	known(() =>
+		fail(
+			new QueryBuilderDefect({
+				message: `param '${name}' is a placeholder, not a value — compare a column against it (\`$.Col.eq(param.string('${name}'))\`) rather than comparing on the param`,
+			}),
+			"NULL",
+		),
+	)
 
 function makeParamMarker<N extends string, T>(
 	name: N,
 	fragment: SqlFragment,
 	schema?: Schema.Codec<T, any>,
 ): ParamMarker<N, T> {
-	const raise = unresolved(name)
+	const raise = (): Condition<any> => makeCond(unresolvedSql(name))
+	const raiseExpr = (): Expr<any, any> => makeUntypedExpr(unresolvedSql(name))
 	return {
 		_brand: "Expr" as const,
 		_paramName: name,
@@ -112,11 +117,11 @@ function makeParamMarker<N extends string, T>(
 		isNotNull: raise,
 		between: raise,
 		notBetween: raise,
-		div: raise,
-		mul: raise,
-		add: raise,
-		sub: raise,
-		mod: raise,
+		div: raiseExpr,
+		mul: raiseExpr,
+		add: raiseExpr,
+		sub: raiseExpr,
+		mod: raiseExpr,
 		in_: raise,
 		notIn: raise,
 	} as ParamMarker<N, T>
@@ -158,8 +163,10 @@ export const paramSchema = (kind: ParamKind): Schema.Codec<any, any> | undefined
 const makeParam =
 	<T, V = ParamValue<T>>(kind: ParamKind, schema: Schema.Codec<T, any>) =>
 	<N extends string>(name: N): ParamMarker<N, T, V> => {
-		assertValidParamName(name)
-		return makeParamMarker<N, T>(name, raw(paramPlaceholder(kind, name)), schema) as ParamMarker<N, T, V>
+		const fragment = isValidParamName(name)
+			? raw(paramPlaceholder(kind, name))
+			: known(() => fail(badParamName(name), "NULL"))
+		return makeParamMarker<N, T>(name, fragment, schema) as ParamMarker<N, T, V>
 	}
 
 const customKinds = new WeakMap<Schema.Codec<any, any>, ParamKind>()

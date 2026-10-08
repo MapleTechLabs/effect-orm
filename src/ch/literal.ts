@@ -16,6 +16,7 @@ import { QueryBuilderError } from "./errors"
 import { quoteClickHouseString } from "../sql/sql-fragment"
 import { activeSqlSyntax } from "../sql/sql-syntax"
 import type { CHType } from "./types"
+import { fail } from "./failure"
 
 const isPlainObject = (value: unknown): value is Record<string, unknown> =>
 	typeof value === "object" &&
@@ -55,10 +56,10 @@ export function sqlLiteral(value: unknown, context: string): string {
 
 	if (typeof value === "number") {
 		if (!Number.isFinite(value)) {
-			throw new QueryBuilderError({
+			return fail(new QueryBuilderError({
 				code: "InvalidLiteral",
 				message: `${context}: ${value} has no ClickHouse literal`,
-			})
+			}), "NULL")
 		}
 		return String(value)
 	}
@@ -76,10 +77,10 @@ export function sqlLiteral(value: unknown, context: string): string {
 		return `map(${pairs.join(", ")})`
 	}
 
-	throw new QueryBuilderError({
+	return fail(new QueryBuilderError({
 		code: "InvalidLiteral",
 		message: `${context}: cannot write ${describe(value)} as a ClickHouse literal`,
-	})
+	}), "NULL")
 }
 
 /**
@@ -101,10 +102,10 @@ export function encodeLiteral<A>(schema: Schema.Codec<A, any>, value: unknown, c
 export function encodeValue<A>(schema: Schema.Codec<A, any>, value: unknown, context: string): unknown {
 	const encoded = Schema.encodeUnknownResult(schema)(value)
 	if (Result.isFailure(encoded)) {
-		throw new QueryBuilderError({
+		return fail(new QueryBuilderError({
 			code: "InvalidLiteral",
 			message: `${context}: ${describe(value)} is not a valid value — ${oneLine(encoded.failure)}`,
-		})
+		}), null)
 	}
 	return encoded.success
 }
