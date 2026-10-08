@@ -1,6 +1,18 @@
 # Changelog
 
-## Unreleased
+## 0.4.0
+
+- **Breaking:** definitions never throw. `CH.table`, `PG.table`, `CH.materializedView`,
+  `defineDatasource` and `defineMaterializedView` record what is wrong on `problems`, and
+  `S.entitiesOf`, `S.pgEntitiesOf` and `TB.buildProject` are Effects that fail with a
+  `SchemaDefinitionError` listing every problem. `SchemaDefinitionDefect` is removed.
+- A `/tinybird` materialized view is also a schema view, so `effect-orm generate` migrates it
+  with the datasources. It takes one node, without template syntax.
+- `backfill` op for a hand-written step in `migration.json`: `INSERT ... SELECT` run one
+  epoch-aligned window of `windowDays` at a time, each journaled under its start date, so a
+  resumed run skips the windows it finished. See [docs/migrations.md](./docs/migrations.md).
+- `Migrate.pendingMigrations`, `planMigration`, `applyStep` and `completeMigration`, the parts
+  `run` is built from, for an orchestrator that runs each statement as its own durable step.
 
 - New `@maple-dev/effect-orm/tinybird` entry: `defineDatasource`, `defineMaterializedView`,
   `column`, `t`, `engine`, `node` and `InferRow` with the call shapes of `@tinybirdco/sdk`, and
