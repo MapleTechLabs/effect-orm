@@ -12,6 +12,7 @@
 //   insides it does not count. That is what lets `compile` refuse an aggregate
 //   in WHERE, or a column next to an aggregate that is not grouped.
 
+import { fail } from "../failure"
 import type { Schema } from "effect"
 import { compile, known, type SqlFragment } from "../../sql/sql-fragment"
 import { hidden, inAggregate } from "../../sql/render-tracker"
@@ -33,9 +34,9 @@ const assertSet = (set: FunctionSet | "portable", name: string | undefined): voi
 	const dialect = activeDialect()
 	if (dialect === undefined) return
 	if (dialect.functions !== undefined && dialect.functions !== set) {
-		throw new QueryBuilderDefect({
+		return fail(new QueryBuilderDefect({
 			message: `${name === undefined ? "this function" : `${name}()`} is ${setLabel[set]} and has no meaning for the ${dialect.name} dialect; use that dialect's own function`,
-		})
+		}), undefined)
 	}
 }
 

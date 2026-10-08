@@ -16,7 +16,7 @@ import type { Table } from "../ch/table"
 import type { CHType, ColumnDefs, InferTS } from "../ch/types"
 import { postgresDialect } from "../pg/dialect"
 import { externalTable, type DdlExpr, type DdlKey } from "./define"
-import type { DefinitionProblem, ProblemSink } from "./problems"
+import { withRenderProblems, type DefinitionProblem, type ProblemSink } from "./problems"
 import {
 	canonicalPgType,
 	PG_MAX_IDENTIFIER,
@@ -290,6 +290,13 @@ export function table<const Name extends string, const Columns extends Record<st
 	if ("external" in definition) {
 		return externalTable(name, definition, (input): input is ColumnSpec<CHType<string, any, any>> => isColumnSpec(input as ColumnInput), [])
 	}
+	return withRenderProblems(name, () => buildTable(name, definition))
+}
+
+function buildTable<const Name extends string, const Columns extends Record<string, ColumnInput>>(
+	name: Name,
+	definition: TableDefinition<Columns>,
+): PgSchemaTable<Name, ColumnsOf<Columns>, DefaultedColumnsOf<Columns>> {
 	const problems: ProblemSink = []
 	checkIdentifier(problems, name, name)
 	const inputs = Object.entries(definition.columns)

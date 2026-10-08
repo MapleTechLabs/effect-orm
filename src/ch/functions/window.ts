@@ -1,4 +1,5 @@
 import { makeExpr, toFragment } from "../expr"
+import { fail } from "../failure"
 import { compile } from "../../sql/sql-fragment"
 import type { Expr, ParamsIn } from "../expr"
 import { schemaOf } from "../define-fn"
@@ -64,16 +65,18 @@ export function rowsBetween<Q1 = never, Q2 = never>(
 }
 
 export function windowSpec<const S extends WindowSpec>(spec: S): CompiledWindowSpec<SpecParams<S>> {
-	if (!spec.partitionBy?.length && !spec.orderBy?.length && !spec.frame) {
-		throw new QueryBuilderError({
-			code: "InvalidArguments",
-			message: "windowSpec requires at least one of partitionBy, orderBy or frame",
-		})
-	}
 	return {
 		_brand: "WindowSpec",
 		get sql() {
-			return renderWindowSpec(spec)
+			return !spec.partitionBy?.length && !spec.orderBy?.length && !spec.frame
+				? fail(
+						new QueryBuilderError({
+							code: "InvalidArguments",
+							message: "windowSpec requires at least one of partitionBy, orderBy or frame",
+						}),
+						"",
+					)
+				: renderWindowSpec(spec)
 		},
 	}
 }

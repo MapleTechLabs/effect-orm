@@ -6,6 +6,7 @@
 // than `count()`, `FILTER (WHERE …)` rather than `-If` combinators, and
 // aggregates over no rows returning NULL rather than 0.
 
+import { fail } from "../ch/failure"
 import { Schema, type DateTime } from "effect"
 import { QueryBuilderDefect } from "../ch/errors"
 import { makeExpr, type Condition, type Expr } from "../ch/expr"
@@ -65,10 +66,14 @@ export const max = <A, Q = never>(expr: Expr<A, Q>): Expr<A | null, Q> => makeEx
 /** `percentile_cont(fraction) WITHIN GROUP (ORDER BY expr)`: an interpolated
  *  quantile, ClickHouse's `quantileExact` family. */
 export const percentileCont = <Q = never>(fraction: number, expr: Expr<number | null, Q>): Expr<number | null, Q> => {
-	if (!(fraction >= 0 && fraction <= 1)) {
-		throw new QueryBuilderDefect({ message: `percentileCont: fraction must be within [0, 1], got ${fraction}` })
-	}
-	return makeExpr(aggregate.lazy(() => `percentile_cont(${fraction}) WITHIN GROUP (ORDER BY ${sql(expr)})`), nullableNumber)
+	return makeExpr(
+		aggregate.lazy(() =>
+			fraction >= 0 && fraction <= 1
+				? `percentile_cont(${fraction}) WITHIN GROUP (ORDER BY ${sql(expr)})`
+				: fail(new QueryBuilderDefect({ message: `percentileCont: fraction must be within [0, 1], got ${fraction}` }), "NULL"),
+		),
+		nullableNumber,
+	)
 }
 
 /** `array_agg(expr)`. NULL over no rows. */
@@ -94,11 +99,12 @@ export const dateTrunc = <Q = never>(unit: DateTruncUnit, ts: Expr<DateTime.Utc,
 /** `date_bin(seconds, ts, epoch)`: fixed-width buckets aligned to the Unix
  *  epoch, ClickHouse's `toStartOfInterval`. Postgres 14+. */
 export const dateBin = <Q = never>(seconds: number, ts: Expr<DateTime.Utc, Q>): Expr<DateTime.Utc, Q> => {
-	if (!(Number.isSafeInteger(seconds) && seconds > 0)) {
-		throw new QueryBuilderDefect({ message: `dateBin: bucket width must be a positive whole number of seconds, got ${seconds}` })
-	}
 	return makeExpr(
-		scalar.lazy(() => `date_bin(make_interval(secs => ${seconds}), ${sql(ts)}, TIMESTAMPTZ '1970-01-01 00:00:00+00')`),
+		scalar.lazy(() =>
+			Number.isSafeInteger(seconds) && seconds > 0
+				? `date_bin(make_interval(secs => ${seconds}), ${sql(ts)}, TIMESTAMPTZ '1970-01-01 00:00:00+00')`
+				: fail(new QueryBuilderDefect({ message: `dateBin: bucket width must be a positive whole number of seconds, got ${seconds}` }), "NULL"),
+		),
 		timestamptz,
 	)
 }

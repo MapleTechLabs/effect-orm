@@ -269,7 +269,7 @@ describe("parametric aggregates", () => {
 	// uses it rather than at module scope where nothing can catch it.
 	it("sequenceMatch refuses a pattern that could break out of the literal", () => {
 		const matcher = CH.sequenceMatch("(?1)'; DROP")
-		expect(() => matcher(CH.dynamicColumn("Timestamp"), CH.rawCond("1"))).toThrow(/quotes/)
+		expect(() => matcher(CH.dynamicColumn("Timestamp"), CH.rawCond("1"))).not.toThrow()
 
 		const query = CH.from(TestTable)
 			.select(($) => ({ matched: CH.sequenceMatch("(?1)'; DROP")($.Timestamp, $.Name.eq("a")) }))
@@ -471,6 +471,10 @@ describe("param resolution", () => {
 	})
 
 	it("rejects a param name that cannot round-trip through the placeholder", () => {
-		expect(() => CH.param.string("org__id")).toThrow(/alphanumeric/)
+		expect(() => CH.param.string("org__id")).not.toThrow()
+		const query = CH.from(TestTable)
+			.select(($) => ({ id: $.Id }))
+			.where(($) => [$.Id.eq(CH.param.string("org__id"))])
+		expect(() => compileCHUnsafe(query, { org__id: "x" })).toThrow(/alphanumeric/)
 	})
 })

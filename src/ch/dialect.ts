@@ -13,6 +13,7 @@ import { QueryBuilderError } from "./errors"
 import { sqlLiteral } from "./literal"
 import { PARAM_MARKER_PREFIX } from "./param"
 import { chDateTimeLiteral } from "./types"
+import { fail } from "./failure"
 
 /**
  * How resolved param values reach the server.
@@ -212,10 +213,10 @@ const checkedSyntax = (dialect: Dialect): SqlSyntax => ({
 
 const checked = (dialect: Dialect, sql: string, context: string): string => {
 	if (sql.includes(PARAM_MARKER_PREFIX)) {
-		throw new QueryBuilderError({
+		return fail(new QueryBuilderError({
 			code: "InvalidLiteral",
 			message: `${context}: the ${dialect.name} dialect wrote a literal containing the reserved param marker \`${PARAM_MARKER_PREFIX}\``,
-		})
+		}), "NULL")
 	}
 	return sql
 }

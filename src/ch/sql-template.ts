@@ -21,11 +21,12 @@
 // `sql.ident` values are recognised by identity (a private WeakSet), never by a
 // field, so an object parsed from request JSON cannot pass for one.
 
+import { fail } from "./failure"
 import { DateTime } from "effect"
 import { currentDialect } from "./dialect"
 import { QueryBuilderError } from "./errors"
 import { type Condition, type Expr, isExprLike, makeCond, makeExpr, makeUntypedExpr, type ParamsIn, toFragment } from "./expr"
-import { compileCHUnsafe } from "./compile"
+import { compileCHRaw } from "./compile"
 import type { CHQuery } from "./query"
 import type { QueryParams } from "./union"
 import { renderSubquery } from "./subquery-context"
@@ -100,31 +101,31 @@ const renderValueRaw = (value: unknown): string => {
 	if (tagged(value, IdentTag)) {
 		const { name } = value as SqlIdent
 		if (!PLAIN_NAME.test(name)) {
-			throw new QueryBuilderError({
+			return fail(new QueryBuilderError({
 				code: "InvalidLiteral",
 				message: `sql.ident: ${JSON.stringify(name)} is not a plain identifier (letters, digits, _, dotted for schema.table)`,
-			})
+			}), "NULL")
 		}
 		return quoteIdentPath(name)
 	}
 	if (isUnion(value)) {
-		throw new QueryBuilderError({
+		return fail(new QueryBuilderError({
 			code: "InvalidArguments",
 			message: "sql``: a unionAll cannot be interpolated; select from it with fromUnion(union, alias) and interpolate that query",
-		})
+		}), "NULL")
 	}
 	if (isQuery(value)) {
 		return `(${renderSubquery(value, (query) =>
-			typeof query === "string" ? query : compileCHUnsafe(query, {}, { skipFormat: true, deferParams: true }).sql,
+			typeof query === "string" ? query : compileCHRaw(query, {}, { skipFormat: true, deferParams: true }).sql,
 		)})`
 	}
 	if (value === null) return "NULL"
 	if (typeof value === "bigint") return String(value)
 	if (typeof value === "number" && !Number.isFinite(value)) {
-		throw new QueryBuilderError({ code: "InvalidLiteral", message: `sql\`\`: ${value} has no SQL literal` })
+		return fail(new QueryBuilderError({ code: "InvalidLiteral", message: `sql\`\`: ${value} has no SQL literal` }), "NULL")
 	}
 	if (value instanceof Date && Number.isNaN(value.getTime())) {
-		throw new QueryBuilderError({ code: "InvalidLiteral", message: "sql``: an invalid Date has no SQL literal" })
+		return fail(new QueryBuilderError({ code: "InvalidLiteral", message: "sql``: an invalid Date has no SQL literal" }), "NULL")
 	}
 	// A param inlined as a literal (ClickHouse) is only known after rendering, so
 	// it is parenthesized here: a negative value must not follow a `-`.
@@ -141,10 +142,10 @@ const renderValueRaw = (value: unknown): string => {
 	) {
 		return compile(toFragment(value))
 	}
-	throw new QueryBuilderError({
+	return fail(new QueryBuilderError({
 		code: "InvalidLiteral",
 		message: `sql\`\`: cannot write ${Array.isArray(value) ? "an array" : typeof value} as a literal without its SQL type; pass it as a typed param (param.of(type, name))`,
-	})
+	}), "NULL")
 }
 
 /**
@@ -216,7 +217,7 @@ export const sql: SqlTag = Object.assign(
 			makeUntypedExpr(
 				lazy(() => {
 					if (values.length === 0) {
-						throw new QueryBuilderError({ code: "InvalidArguments", message: "sql.join: no values to join" })
+						return fail(new QueryBuilderError({ code: "InvalidArguments", message: "sql.join: no values to join" }), "")
 					}
 					return values.map(renderValue).join(separator)
 				}),

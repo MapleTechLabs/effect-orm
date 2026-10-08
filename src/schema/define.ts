@@ -8,7 +8,7 @@
 // it records a problem on `problems` instead of throwing; `entitiesOf` fails
 // with every recorded problem as a typed `SchemaDefinitionError`.
 
-import { compileCHUnsafe } from "../ch/compile"
+import { compileCHRaw } from "../ch/compile"
 import { clickhouseDialect, withDialect } from "../ch/dialect"
 import type { Expr } from "../ch/expr"
 import { encodeColumnLiteral } from "../ch/literal"
@@ -24,7 +24,7 @@ import type {
 	MaterializedViewEntity,
 	TableEntity,
 } from "./entities"
-import { checkIdentifier, type DefinitionProblem, type ProblemSink } from "./problems"
+import { checkIdentifier, withRenderProblems, type DefinitionProblem, type ProblemSink } from "./problems"
 
 export { SchemaDefinitionError, type DefinitionProblem } from "./problems"
 
@@ -302,6 +302,13 @@ export function defineTable<const Name extends string, const Columns extends Rec
 			"alias",
 		])
 	}
+	return withRenderProblems(name, () => buildTable(name, definition))
+}
+
+function buildTable<const Name extends string, const Columns extends Record<string, ColumnInput>>(
+	name: Name,
+	definition: TableDefinition<Columns>,
+): SchemaTable<Name, ColumnsOf<Columns>, DefaultedColumnsOf<Columns>, ComputedColumnsOf<Columns>> {
 	const problems: ProblemSink = []
 	checkIdentifier(problems, name, name)
 	const inputs = Object.entries(definition.columns)
@@ -429,17 +436,21 @@ export function materializedView<
 		? unknown
 		: { readonly targetCannotTake: MisfitColumns<Output, Cols> }),
 ): MaterializedView<Name> {
+	return withRenderProblems(name, () => buildView(name, options.to.name, options.as))
+}
+
+function buildView<const Name extends string>(name: Name, to: string, as: CHQuery<any, any, any, any>): MaterializedView<Name> {
 	const problems: ProblemSink = []
 	checkIdentifier(problems, name, name)
-	const source = leftmostTable(options.as)
+	const source = leftmostTable(as)
 	if (source === undefined) {
 		problems.push({ object: name, message: "a materialized view cannot read FROM a union; define one view per branch" })
 	}
-	const select = compileCHUnsafe(options.as, {}, { skipFormat: true, dialect: clickhouseDialect }).sql
+	const select = compileCHRaw(as, {}, { skipFormat: true, dialect: clickhouseDialect }).sql
 	return {
 		_tag: "MaterializedView",
 		name,
-		ddl: { kind: "materialized_view", name, to: options.to.name, sources: source === undefined ? [] : [source], select },
+		ddl: { kind: "materialized_view", name, to, sources: source === undefined ? [] : [source], select },
 		problems,
 	}
 }

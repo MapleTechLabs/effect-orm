@@ -1,4 +1,5 @@
 import { numericResultSchema, overflowResultSchema } from "../define-fn"
+import { fail } from "../failure"
 import { QueryBuilderError } from "../errors"
 import { makeExpr } from "../expr"
 import { compile } from "../../sql/sql-fragment"
@@ -164,18 +165,19 @@ export function windowFunnel(window: number, mode?: WindowFunnelMode) {
 		timestamp: Expr<number | string | DateTime.Utc, Q>,
 		...conditions: C
 	): Expr<number, Q | ParamsIn<C[number]>> => {
-		// Reported, not thrown: the number of conditions is the number of steps a
+		// A failure, not a defect: the number of conditions is the number of steps a
 		// funnel has, and that count comes from data as often as from source.
-		if (conditions.length === 0) {
-			throw new QueryBuilderError({
-				code: "InvalidArguments",
-				message: "windowFunnel requires at least one condition",
-			})
-		}
 		const args = () => [timestamp.toFragment(), ...conditions.map((c) => c.toFragment())]
 			.map(compile)
 			.join(", ")
-		return makeExpr(lazy(() => `windowFunnel(${params})(${args()})`), T.uint8.schema)
+		return makeExpr(
+			lazy(() =>
+				conditions.length === 0
+					? fail(new QueryBuilderError({ code: "InvalidArguments", message: "windowFunnel requires at least one condition" }), "NULL")
+					: `windowFunnel(${params})(${args()})`,
+			),
+			T.uint8.schema,
+		)
 	}
 }
 
@@ -193,28 +195,21 @@ export function sequenceMatch(pattern: string) {
 		timestamp: Expr<number | string | DateTime.Utc, Q>,
 		...conditions: C
 	): Expr<number, Q | ParamsIn<C[number]>> => {
-		// An injection guard, so it reports rather than crashes: the pattern is
-		// embedded verbatim, and "not user input" is a claim about the caller that
-		// the caller is exactly who might get wrong.
-		//
-		// Checked here rather than when the factory is called, so that a hoisted
-		// `const matcher = sequenceMatch(pattern)` fails inside the compile that
-		// uses it rather than throwing at module scope, where nothing can catch it.
-		if (pattern.includes("'") || pattern.includes("\\")) {
-			throw new QueryBuilderError({
-				code: "InvalidArguments",
-				message: "sequenceMatch pattern must not contain quotes or backslashes",
-			})
-		}
-		if (conditions.length === 0) {
-			throw new QueryBuilderError({
-				code: "InvalidArguments",
-				message: "sequenceMatch requires at least one condition",
-			})
-		}
+		// An injection guard, so it is a failure: the pattern is embedded verbatim,
+		// and "not user input" is a claim the caller is exactly who might get wrong.
+		// Checked as the SQL renders, so it fails the compile that uses it.
 		const args = () => [timestamp.toFragment(), ...conditions.map((c) => c.toFragment())]
 			.map(compile)
 			.join(", ")
-		return makeExpr(lazy(() => `sequenceMatch('${pattern}')(${args()})`), T.uint8.schema)
+		return makeExpr(
+			lazy(() =>
+				pattern.includes("'") || pattern.includes("\\")
+					? fail(new QueryBuilderError({ code: "InvalidArguments", message: "sequenceMatch pattern must not contain quotes or backslashes" }), "NULL")
+					: conditions.length === 0
+						? fail(new QueryBuilderError({ code: "InvalidArguments", message: "sequenceMatch requires at least one condition" }), "NULL")
+						: `sequenceMatch('${pattern}')(${args()})`,
+			),
+			T.uint8.schema,
+		)
 	}
 }
