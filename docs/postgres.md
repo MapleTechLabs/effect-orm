@@ -36,8 +36,9 @@ const query = PG.from(Requests)
 	.orderBy(["count", "desc"])
 
 export const compiled = PG.compileUnsafe(query, { orgId: "org_1", since: new Date("2026-01-01T00:00:00Z") })
-// compiled.sql:        ... WHERE "requests"."OrgId" = $1 AND "requests"."At" >= $2 ...
-// compiled.parameters: ["org_1", "2026-01-01T00:00:00.000Z"]
+// compiled.sql:        ... FILTER (WHERE "requests"."DurationMs" >= $1) ...
+//                      ... WHERE "requests"."OrgId" = $2 AND "requests"."At" >= $3 ...
+// compiled.parameters: [500, "org_1", "2026-01-01T00:00:00.000Z"]
 
 const db = new PGlite()
 // The CREATE TABLE comes from the definition itself; migrations.md shows the managed way.
@@ -67,6 +68,7 @@ insert may leave it out: `PG.InsertRowOf<typeof Requests>` makes it optional. Se
 | Identifiers | Bare: `events.OrgId` | Quoted: `"events"."OrgId"` |
 | String literals | Backslash escapes: `'it\'s'` | Doubled quotes: `'it''s'` |
 | Params | Written in as literals; `parameters` empty | Bound as `$1`, `$2`, … in `parameters` |
+| Values compared with a column, `LIKE` patterns | Written in as literals | Bound too, one param per distinct value |
 | `param.bool` | `1` / `0` | `true` / `false` |
 | `param.dateTime` | `'2026-01-01 00:00:00'` (UTC, zoneless) | `'2026-01-01T00:00:00.000Z'` |
 | `GROUP BY` keys | Select aliases | Select-list positions (`GROUP BY 1`) |
@@ -76,6 +78,11 @@ insert may leave it out: `PG.InsertRowOf<typeof Requests>` makes it optional. Se
 Postgres reads a bare name in `GROUP BY` as an input column before a select alias, so
 `select({ Service: lower($.Service) }).groupBy("Service")` would group by the raw column. Writing
 the position instead keeps ClickHouse's meaning.
+
+A value compared with a column (`$.email.eq(email)`, `in_`, `between`, a `LIKE` pattern) is
+bound like a param, so the statement text carries no values: it stays out of logs and traces, and
+one query shape is one statement. Two exceptions stay literals: an `onConflict*` `targetWhere`,
+which Postgres matches against a partial index's predicate as written, and DDL.
 
 Every string that reaches the SQL as a literal is escaped for Postgres. A value that spells the
 param marker `__PARAM_` is written as an `E'…'` string with the marker hex-escaped, and a
@@ -89,6 +96,7 @@ literal that still contained it would fail the compile with `InvalidLiteral`.
 | `bool` | `boolean` | `boolean` | boolean |
 | `int2`, `int4`, `int8`, `float4`, `float8`, `numeric` | same | `number` | number, numeric string, `bigint` |
 | `timestamptz` | `timestamptz` | `DateTime.Utc` | `Date`, or text such as `2026-01-01 00:00:00+00` |
+| `timestamptzMillis` | `timestamptz` | epoch milliseconds (`number`) | the same |
 | `jsonb(schema?)` | `jsonb` | the schema's type (`unknown` by default) | a parsed value |
 | `array(type)` | `type[]` | `ReadonlyArray` | array |
 | `nullable(type)` | the same type | `T \| null` | the same, or `null` |
@@ -102,6 +110,10 @@ digits. Where exact digits matter, declare
 both as a `bigint`. A `timestamptz`
 compared against a `Date`, a `DateTime.Utc` or a string is written as an ISO-8601 instant,
 which no session time zone can reinterpret; a zoneless string is read as UTC.
+
+Comparisons with a literal-union column take only its members: with `status` typed
+`"open" | "closed"`, `$.status.eq("opne")` is a type error. A param of the primitive
+(`param.string`) still compares, for a value known only at run time.
 
 ## Functions
 
@@ -118,6 +130,14 @@ which no session time zone can reinterpret; a zoneless string is read as UTC.
 | `lower`, `upper`, `length` | same | |
 | `coalesce(x, fallback)` | `coalesce(x, fallback)` | No longer nullable |
 | `jsonText(x, key)` | `(x ->> key)` | `null` when absent |
+| `greatest(a, ...)`, `least(a, ...)` | same | NULL arguments are skipped |
+| `caseWhen([[c, v], ...], otherwise)` | `CASE WHEN c THEN v ... ELSE otherwise END` | |
+| `asBoolean(c)` | `(c)` | A condition as a value, to select or `set` |
+| `typedValue(type, value)` | a bound param | Encoded as `type` writes it: `typedValue(T.columns.at, ms)` |
+
+`undecoded($.column)` reads a column without its codec: a jsonb document as `unknown`, a branded
+id as its string. Use it where the reader decodes stored values itself (to tolerate an older
+document shape, or to name the bad row in its own error); every other read stays typed.
 
 The shared operators (`eq`, `in_`, `like`, `ilike`, `and`, `or`, `not`, arithmetic, `lit`) work
 unchanged. `/postgres` exports only functions Postgres has, plus `nullIf`, which renders the

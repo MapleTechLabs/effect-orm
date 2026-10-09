@@ -212,16 +212,20 @@ export const externalTable = <const Name extends string>(
 	definition: { readonly columns: Record<string, unknown>; readonly tenantColumn?: string },
 	isSpec: (input: unknown) => input is { readonly type: CHType<string, any, any>; readonly options: object },
 	computedOptions: ReadonlyArray<string>,
+	/** The query-side type of a spec; the Postgres one carries the column's `name`. */
+	typeOf: (spec: { readonly type: CHType<string, any, any>; readonly options: object }) => CHType<string, any, any> = (spec) => spec.type,
 ): Table<Name, any, any, any> => {
 	const inputs = Object.entries(definition.columns)
 	const specs = inputs.filter((entry): entry is [string, { readonly type: CHType<string, any, any>; readonly options: object }] =>
 		isSpec(entry[1]),
 	)
 	const isComputed = (options: object) => computedOptions.some((key) => (options as Record<string, unknown>)[key] !== undefined)
-	const given = (options: object) => Object.values(options).some((value) => value !== undefined)
+	// `name` renames a column; it gives the column no default.
+	const given = (options: object) =>
+		Object.entries(options).some(([key, value]) => key !== "name" && value !== undefined)
 	return table(
 		name,
-		Object.fromEntries(inputs.map(([column, input]) => [column, isSpec(input) ? input.type : input])) as ColumnDefs,
+		Object.fromEntries(inputs.map(([column, input]) => [column, isSpec(input) ? typeOf(input) : input])) as ColumnDefs,
 		{
 			...(definition.tenantColumn !== undefined ? { tenantColumn: definition.tenantColumn } : undefined),
 			defaults: specs.filter(([, spec]) => given(spec.options) && !isComputed(spec.options)).map(([column]) => column),

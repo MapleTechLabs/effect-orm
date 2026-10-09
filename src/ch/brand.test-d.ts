@@ -74,8 +74,12 @@ CH.from(Dashboards).select("id").where(($) => [$.budget.gt(100)])
 // @ts-expect-error a plain-string column is not an OrgId column
 CH.from(Dashboards).innerJoin(Plain, "p", (main, joined) => main.org_id.eq(joined.org_id)).select("id")
 
-// A literal union stays a comparison on its primitive; the server checks the value.
+// A literal union compares against its own members, or a param of its primitive checked by the server.
 CH.from(Dashboards).select("id").where(($) => [$.status.eq("open"), $.status.eq(CH.param.string("s"))])
+// @ts-expect-error not a member of the union
+CH.from(Dashboards).select("id").where(($) => [$.status.eq("opne")])
+// @ts-expect-error nor in a list
+CH.from(Dashboards).select("id").where(($) => [$.status.in_("open", "opne")])
 // String operators still work on a branded string.
 CH.from(Dashboards).select("id").where(($) => [$.org_id.like("org_%")])
 

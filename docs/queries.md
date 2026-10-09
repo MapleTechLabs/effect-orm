@@ -17,7 +17,15 @@ _(Backed by `docs/queries.md > Queries are immutable`.)_
 
 ## `select`
 
-Two forms.
+Three forms.
+
+**Every column** — `select()` with no arguments reads every column of the FROM table, under
+its key, as drizzle's bare `select()` does:
+
+```ts
+CH.from(Events).select()
+// SELECT Name AS Name, DurationMs AS DurationMs, ... FROM events
+```
 
 **By column name** — output keys match the column names:
 
@@ -36,7 +44,9 @@ CH.from(Events).select(($) => ({
 }))
 ```
 
-The object keys become the SQL aliases _and_ the keys of the output row type. `select` is
+The object keys become the SQL aliases _and_ the keys of the output row type. Spreading `$`
+gives every column of the FROM table under its key, so `select(($) => ({ ...$, lowered:
+CH.lower($.Name) }))` reads them all plus one more; `returning` takes the same. `select` is
 required: compiling without one raises `QueryBuilderDefect`, which stays a defect — no request
 value can remove a `select()`.
 
@@ -114,6 +124,13 @@ Takes `[column, direction]` tuples, one per sort key:
 ```ts
 .orderBy(["count", "desc"], ["name", "asc"])
 // ORDER BY count DESC, name ASC
+```
+
+To sort by something not selected, pass a callback returning `[expression, direction]` pairs;
+it reads the source's columns as `where` does:
+
+```ts
+.orderBy(($) => [[$.Timestamp, "desc"], [CH.lower($.Name), "asc"]])
 ```
 
 Passing two bare strings, `.orderBy("count", "desc")`, is a type error.

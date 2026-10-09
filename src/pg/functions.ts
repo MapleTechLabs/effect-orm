@@ -11,7 +11,9 @@ import { Schema, type DateTime } from "effect"
 import { QueryBuilderDefect } from "../ch/errors"
 import { makeExpr, type Condition, type Expr } from "../ch/expr"
 import { schemaOf, withoutNull } from "../ch/define-fn"
-import { compile, str } from "../sql/sql-fragment"
+import { compile, known, str } from "../sql/sql-fragment"
+import { encodeLiteral } from "../ch/literal"
+import type { CHType } from "../ch/types"
 import { builtins } from "../ch/functions/builtin"
 import * as T from "./types"
 
@@ -131,3 +133,37 @@ export const coalesce = <A, Q1 = never, Q2 = never>(expr: Expr<A | null, Q1>, fa
 /** `expr ->> key`: a jsonb field as text, NULL when it is absent. */
 export const jsonText = <Q = never>(expr: Expr<unknown, Q>, key: string): Expr<string | null, Q> =>
 	makeExpr(scalar.lazy(() => `(${sql(expr)} ->> ${compile(str(key))})`), Schema.NullOr(Schema.String) as Schema.Codec<string | null, unknown>)
+
+/** `greatest(a, b, ...)`, decoding as `first` does. Postgres skips NULL arguments. */
+export const greatest = <A, Q = never>(first: Expr<A, Q>, ...rest: ReadonlyArray<Expr<A, Q>>): Expr<A, Q> =>
+	makeExpr(scalar.lazy(() => `greatest(${[first, ...rest].map(sql).join(", ")})`), schemaOf<A>(first))
+
+/** `least(a, b, ...)`, decoding as `first` does. Postgres skips NULL arguments. */
+export const least = <A, Q = never>(first: Expr<A, Q>, ...rest: ReadonlyArray<Expr<A, Q>>): Expr<A, Q> =>
+	makeExpr(scalar.lazy(() => `least(${[first, ...rest].map(sql).join(", ")})`), schemaOf<A>(first))
+
+/**
+ * `CASE WHEN c1 THEN v1 ... ELSE otherwise END`, decoding as `otherwise` does.
+ * Every branch has the result's type.
+ */
+export const caseWhen = <A, Q = never>(
+	branches: ReadonlyArray<readonly [Condition<Q>, Expr<A, Q>]>,
+	otherwise: Expr<A, Q>,
+): Expr<A, Q> =>
+	makeExpr(
+		scalar.lazy(
+			() => `CASE ${branches.map(([when, then]) => `WHEN ${sql(when)} THEN ${sql(then)}`).join(" ")} ELSE ${sql(otherwise)} END`,
+		),
+		schemaOf<A>(otherwise),
+	)
+
+/** A condition as a boolean value, to select it or `set` a column from it. */
+export const asBoolean = <Q = never>(condition: Condition<Q>): Expr<boolean, Q> =>
+	makeExpr(scalar.lazy(() => `(${sql(condition)})`), Schema.Boolean as Schema.Codec<boolean, unknown>)
+
+/**
+ * A value written as a column type writes it: encoded by its codec and bound,
+ * so `typedValue(T.columns.at, ms)` is a timestamptz wherever an expression goes.
+ */
+export const typedValue = <A>(type: CHType<string, A, any>, value: A): Expr<A> =>
+	makeExpr(known(() => encodeLiteral(type.literalSchema, value, "typedValue")), type.schema as Schema.Codec<A, unknown>)

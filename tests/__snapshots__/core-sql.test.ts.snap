@@ -583,6 +583,9 @@ exports[`core SQL (postgres) > and-or 1`] = `
 {
   "parameters": [
     "org_1",
+    "paid",
+    15,
+    "globex",
   ],
   "sql": "WITH "orders" AS (
 <orders fixture>
@@ -594,7 +597,7 @@ SELECT
           "orders"."Id" AS "id"
         FROM "orders"
         WHERE "orders"."OrgId" = $1
-          AND (("orders"."Status" = 'paid' AND "orders"."Amount" > 15) OR "orders"."Customer" = 'globex')
+          AND (("orders"."Status" = $2 AND "orders"."Amount" > $3) OR "orders"."Customer" = $4)
         ORDER BY "id" ASC",
 }
 `;
@@ -603,6 +606,7 @@ exports[`core SQL (postgres) > arithmetic 1`] = `
 {
   "parameters": [
     "org_1",
+    4,
   ],
   "sql": "WITH "orders" AS (
 <orders fixture>
@@ -618,7 +622,7 @@ SELECT
           "orders"."Amount" / 2 AS "divided"
         FROM "orders"
         WHERE "orders"."OrgId" = $1
-          AND "orders"."Id" = 4",
+          AND "orders"."Id" = $2",
 }
 `;
 
@@ -626,6 +630,10 @@ exports[`core SQL (postgres) > comparisons 1`] = `
 {
   "parameters": [
     "org_1",
+    "void",
+    5,
+    10,
+    20,
   ],
   "sql": "WITH "orders" AS (
 <orders fixture>
@@ -637,11 +645,11 @@ SELECT
           "orders"."Id" AS "id"
         FROM "orders"
         WHERE "orders"."OrgId" = $1
-          AND "orders"."Status" != 'void'
-          AND "orders"."Amount" > 5
-          AND "orders"."Amount" >= 10
-          AND "orders"."Amount" < 20
-          AND "orders"."Amount" <= 10",
+          AND "orders"."Status" != $2
+          AND "orders"."Amount" > $3
+          AND "orders"."Amount" >= $4
+          AND "orders"."Amount" < $5
+          AND "orders"."Amount" <= $4",
 }
 `;
 
@@ -649,6 +657,8 @@ exports[`core SQL (postgres) > cross-join 1`] = `
 {
   "parameters": [
     "org_1",
+    "org_1",
+    2,
   ],
   "sql": "WITH "orders" AS (
 <orders fixture>
@@ -662,8 +672,8 @@ SELECT
         FROM "orders"
         CROSS JOIN "customers" AS "c"
         WHERE "orders"."OrgId" = $1
-          AND "c"."OrgId" = 'org_1'
-          AND "orders"."Id" <= 2
+          AND "c"."OrgId" = $2
+          AND "orders"."Id" <= $3
         ORDER BY "id" ASC, "customer" ASC",
 }
 `;
@@ -672,6 +682,7 @@ exports[`core SQL (postgres) > cross-join-subquery 1`] = `
 {
   "parameters": [
     "org_1",
+    2,
   ],
   "sql": "WITH "orders" AS (
 <orders fixture>
@@ -694,7 +705,7 @@ SELECT
         FROM "customers"
         WHERE "customers"."OrgId" = $1) AS "k"
         WHERE "orders"."OrgId" = $1
-          AND "orders"."Id" <= 2
+          AND "orders"."Id" <= $2
         ORDER BY "id" ASC",
 }
 `;
@@ -703,6 +714,7 @@ exports[`core SQL (postgres) > cte 1`] = `
 {
   "parameters": [
     "org_1",
+    "paid",
   ],
   "sql": "WITH "orders" AS (
 <orders fixture>
@@ -722,7 +734,7 @@ SELECT
           "orders"."Amount" AS "Amount"
         FROM "orders"
         WHERE "orders"."OrgId" = $1
-          AND "orders"."Status" = 'paid'
+          AND "orders"."Status" = $2
 )
 SELECT
           sum("paid"."Amount") AS "total"
@@ -773,6 +785,7 @@ exports[`core SQL (postgres) > from-subquery 1`] = `
 {
   "parameters": [
     "org_1",
+    6,
   ],
   "sql": "SELECT
           "t"."customer" AS "customer",
@@ -790,7 +803,7 @@ SELECT
         FROM "orders"
         WHERE "orders"."OrgId" = $1
         GROUP BY 1, 2) AS "t"
-        WHERE "t"."total" > 6
+        WHERE "t"."total" > $2
         ORDER BY "total" DESC",
 }
 `;
@@ -798,6 +811,7 @@ SELECT
 exports[`core SQL (postgres) > group-having 1`] = `
 {
   "parameters": [
+    "paid",
     "org_1",
   ],
   "sql": "WITH "orders" AS (
@@ -809,12 +823,12 @@ exports[`core SQL (postgres) > group-having 1`] = `
 SELECT
           "orders"."Customer" AS "customer",
           count(*) AS "orders",
-          count(*) FILTER (WHERE "orders"."Status" = 'paid') AS "paid",
+          count(*) FILTER (WHERE "orders"."Status" = $1) AS "paid",
           sum("orders"."Amount") AS "total",
           min("orders"."Amount") AS "smallest",
           max("orders"."Amount") AS "largest"
         FROM "orders"
-        WHERE "orders"."OrgId" = $1
+        WHERE "orders"."OrgId" = $2
         GROUP BY 1
         HAVING count(*) >= 2
         ORDER BY "customer" ASC",
@@ -866,6 +880,7 @@ exports[`core SQL (postgres) > join-subqueries 1`] = `
 {
   "parameters": [
     "org_1",
+    "silver",
   ],
   "sql": "WITH "orders" AS (
 <orders fixture>
@@ -889,7 +904,7 @@ SELECT
           "customers"."Tier" AS "tier"
         FROM "customers"
         WHERE "customers"."OrgId" = $1
-          AND "customers"."Tier" != 'silver') AS "t" ON "customers"."Name" = "t"."name"
+          AND "customers"."Tier" != $2) AS "t" ON "customers"."Name" = "t"."name"
         LEFT JOIN (WITH "orders" AS (
 <orders fixture>
 ),
@@ -911,6 +926,7 @@ exports[`core SQL (postgres) > left-join 1`] = `
 {
   "parameters": [
     "org_1",
+    3,
   ],
   "sql": "WITH "orders" AS (
 <orders fixture>
@@ -924,7 +940,7 @@ SELECT
         FROM "orders"
         LEFT JOIN "customers" AS "c" ON ("orders"."Customer" = "c"."Name" AND "orders"."OrgId" = "c"."OrgId")
         WHERE "orders"."OrgId" = $1
-          AND "orders"."Id" >= 3
+          AND "orders"."Id" >= $2
         ORDER BY "id" ASC",
 }
 `;
@@ -954,6 +970,7 @@ exports[`core SQL (postgres) > locking 1`] = `
 {
   "parameters": [
     "org_1",
+    1,
   ],
   "sql": "WITH "orders" AS (
 <orders fixture>
@@ -965,7 +982,7 @@ SELECT
           "orders"."Id" AS "id"
         FROM "orders"
         WHERE "orders"."OrgId" = $1
-          AND "orders"."Id" = 1
+          AND "orders"."Id" = $2
         FOR UPDATE SKIP LOCKED",
 }
 `;
@@ -974,7 +991,9 @@ exports[`core SQL (postgres) > null-and-range 1`] = `
 {
   "parameters": [
     "org_1",
+    5,
     20,
+    3,
   ],
   "sql": "WITH "orders" AS (
 <orders fixture>
@@ -987,8 +1006,8 @@ SELECT
         FROM "orders"
         WHERE "orders"."OrgId" = $1
           AND "orders"."Note" IS NULL
-          AND "orders"."Amount" BETWEEN 5 AND $2
-          AND "orders"."Id" NOT BETWEEN 3 AND 3
+          AND "orders"."Amount" BETWEEN $2 AND $3
+          AND "orders"."Id" NOT BETWEEN $4 AND $4
         ORDER BY "id" ASC",
 }
 `;
@@ -997,6 +1016,8 @@ exports[`core SQL (postgres) > nulls-and-literals 1`] = `
 {
   "parameters": [
     "org_1",
+    2,
+    4,
   ],
   "sql": "WITH "orders" AS (
 <orders fixture>
@@ -1011,7 +1032,7 @@ SELECT
           'x''y' AS "label"
         FROM "orders"
         WHERE "orders"."OrgId" = $1
-          AND "orders"."Id" IN (2, 4)
+          AND "orders"."Id" IN ($2, $3)
         ORDER BY "id" ASC",
 }
 `;
@@ -1046,6 +1067,12 @@ exports[`core SQL (postgres) > patterns-and-lists 1`] = `
 {
   "parameters": [
     "org_1",
+    "%e%",
+    "i%",
+    "PA%",
+    "open",
+    3,
+    2,
   ],
   "sql": "WITH "orders" AS (
 <orders fixture>
@@ -1057,10 +1084,10 @@ SELECT
           "orders"."Id" AS "id"
         FROM "orders"
         WHERE "orders"."OrgId" = $1
-          AND ("orders"."Customer" LIKE '%e%' AND "orders"."Customer" NOT LIKE 'i%')
-          AND ("orders"."Status" ILIKE 'PA%' OR "orders"."Status" IN ('open'))
-          AND "orders"."Id" NOT IN (3)
-          AND NOT ("orders"."Id" = 2)
+          AND ("orders"."Customer" LIKE $2 AND "orders"."Customer" NOT LIKE $3)
+          AND ("orders"."Status" ILIKE $4 OR "orders"."Status" IN ($5))
+          AND "orders"."Id" NOT IN ($6)
+          AND NOT ("orders"."Id" = $7)
         ORDER BY "id" ASC",
 }
 `;
@@ -1084,6 +1111,7 @@ exports[`core SQL (postgres) > select-columns 1`] = `
 {
   "parameters": [
     "org_1",
+    "paid",
   ],
   "sql": "WITH "orders" AS (
 <orders fixture>
@@ -1096,7 +1124,7 @@ SELECT
           "orders"."Customer" AS "Customer"
         FROM "orders"
         WHERE "orders"."OrgId" = $1
-          AND "orders"."Status" = 'paid'
+          AND "orders"."Status" = $2
         ORDER BY "Id" ASC",
 }
 `;
@@ -1106,6 +1134,7 @@ exports[`core SQL (postgres) > selected-param 1`] = `
   "parameters": [
     true,
     "org_1",
+    1,
   ],
   "sql": "WITH "orders" AS (
 <orders fixture>
@@ -1118,7 +1147,7 @@ SELECT
           $1::boolean AS "flagged"
         FROM "orders"
         WHERE "orders"."OrgId" = $2
-          AND "orders"."Id" = 1",
+          AND "orders"."Id" = $3",
 }
 `;
 

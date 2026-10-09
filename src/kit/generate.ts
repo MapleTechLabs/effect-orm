@@ -6,7 +6,7 @@ import { join, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
 import { Effect, Schema } from "effect"
 import type { Layer } from "effect"
-import { fromRecord, isStagingName, type LoadedMigration, type MigrationInput } from "../migrate/source"
+import { fromRecord, isStagingName, STATEMENT_BREAKPOINT, type LoadedMigration, type MigrationInput } from "../migrate/source"
 import type { MigrationDriver } from "../migrate/driver"
 import { diffSchemas, type DiffResult, type Hint } from "../schema/diff"
 import { fromDrizzleSnapshot } from "../schema/drizzle"
@@ -39,6 +39,12 @@ export interface KitConfig {
 	readonly render?: RenderOptions
 	/** Needed by `migrate`, `status`, and `verify`. Build it from your `SqlClient`. */
 	readonly driver?: Layer.Layer<MigrationDriver, unknown>
+	/**
+	 * What a generated Postgres migration holds. `ops` (default) writes `migration.json`;
+	 * `sql` writes the rendered statements to `migration.sql`, split by
+	 * `--> statement-breakpoint`, so a tool that applies drizzle-kit folders applies it too.
+	 */
+	readonly emit?: "ops" | "sql"
 }
 
 /** Typed identity, for `effect-orm.config.ts`. */
@@ -151,6 +157,12 @@ export interface GenerateResult {
 	readonly written: string | undefined
 	readonly plan: ReadonlyArray<{ readonly label: string; readonly sql: ReadonlyArray<string> }>
 }
+
+/** Each op's statements under a comment naming its label, one statement per breakpoint. */
+const renderPgSqlFile = (ops: ReadonlyArray<PgMigrationOp>): string =>
+	`${ops
+		.flatMap((op) => renderPgOp(op).map((statement) => `-- ${labelOfPg(op)}\n${statement};`))
+		.join(`\n${STATEMENT_BREAKPOINT}\n`)}\n`
 
 /** `effect-orm generate`. */
 export const generate = (config: KitConfig, cwd: string, options: GenerateOptions = {}) =>
@@ -265,7 +277,9 @@ export const generate = (config: KitConfig, cwd: string, options: GenerateOption
 									? "-- Baseline: the schema as it stood when effect-orm took over this folder. Runs nothing.\n"
 									: "-- Custom SQL migration. Separate statements with a line holding only:\n-- --> statement-breakpoint\n",
 							)
-						: writeFile(join(staging, "migration.json"), `${JSON.stringify(file, null, "\t")}\n`),
+						: "dialect" in file && config.emit === "sql"
+							? writeFile(join(staging, "migration.sql"), renderPgSqlFile(file.ops))
+							: writeFile(join(staging, "migration.json"), `${JSON.stringify(file, null, "\t")}\n`),
 				`Cannot write ${dir}`,
 			)
 			yield* io(() => writeFile(join(staging, "snapshot.json"), serializeSnapshot(snapshot)), `Cannot write ${dir}`)

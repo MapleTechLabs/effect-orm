@@ -293,7 +293,9 @@ are not modeled yet; write them in a `--custom` migration, and declare a view yo
 (`ALTER COLUMN`), and a primary key, an index or a foreign key by dropping and re-creating it,
 so `generate` reports nothing as unsupported. A type change is labeled `rewrite`: Postgres
 rewrites the table under an exclusive lock. Drops still need confirmation, and renames still
-read as a drop and an add. Generated files carry `"dialect": "postgres"`.
+read as a drop and an add. Generated files carry `"dialect": "postgres"`. With `emit: "sql"` in
+the config, `generate` writes the rendered statements to `migration.sql` instead, each under a
+comment naming its label, so a tool that applies drizzle-kit folders applies the migration too.
 
 **Applying.** Each migration runs in one transaction with its ledger row, under a
 transaction-scoped advisory lock, so concurrent deploys wait for each other rather than

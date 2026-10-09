@@ -10,7 +10,8 @@ import { type Brand, DateTime, Result, Schema } from "effect"
 import type { SqlFragment } from "../sql/sql-fragment"
 import { raw, str, ident, compile, as_ as sqlAs, known } from "../sql/sql-fragment"
 import { activeSqlSyntax } from "../sql/sql-syntax"
-import { chDateTimeLiteral, CHFloatResult, CHNumber, string as chString, type CHType, type InferTS } from "./types"
+import { activeLiteralBinder } from "../sql/literal-binder"
+import { chDateTimeLiteral, CHFloatResult, CHNumber, string as chString, type CHType, type InferEncoded, type InferTS } from "./types"
 import { encodeColumnLiteral } from "./literal"
 import { QueryBuilderError } from "./errors"
 import { fail } from "./failure"
@@ -45,6 +46,19 @@ export type Widen<TSType> = TSType extends Brand.Brand<any>
 		: TSType extends number
 			? number
 			: TSType
+
+/**
+ * What a plain value compared with a column may be. A literal union stays
+ * itself, so `$.kind.eq("nope")` is a type error when `kind` is
+ * `"open" | "closed"`; anything else widens as `Widen` does. A param or
+ * expression of the primitive still compares (see `Operand`), for a value only
+ * known at run time.
+ */
+export type ComparableValue<TSType> = TSType extends string
+	? [Exclude<keyof TSType, keyof string>] extends [never]
+		? TSType
+		: Widen<TSType>
+	: Widen<TSType>
 
 // Params in the type
 //
@@ -174,10 +188,11 @@ export interface Expr<TSType, P = never> {
 	lt<Q = never>(other: Operand<TSType, Q>): Condition<P | Q>
 	lte<Q = never>(other: Operand<TSType, Q>): Condition<P | Q>
 
-	// String operations. A `Nullable(String)` matches like a `String`.
-	like(this: Expr<string | null>, pattern: string): Condition<P>
-	notLike(this: Expr<string | null>, pattern: string): Condition<P>
-	ilike(this: Expr<string | null>, pattern: string): Condition<P>
+	// String operations. A `Nullable(String)` matches like a `String`. The pattern is a
+	// string, bound on a dialect that binds params, or a param or expression of one.
+	like<Q = never>(this: Expr<string | null>, pattern: string | Expr<string, Q>): Condition<P | Q>
+	notLike<Q = never>(this: Expr<string | null>, pattern: string | Expr<string, Q>): Condition<P | Q>
+	ilike<Q = never>(this: Expr<string | null>, pattern: string | Expr<string, Q>): Condition<P | Q>
 
 	// NULL and ranges
 	/** `expr IS NULL`. */
@@ -191,8 +206,8 @@ export interface Expr<TSType, P = never> {
 
 	// IN / NOT IN. An empty list is false (`IN`) or true (`NOT IN`), written
 	// `1 = 0` / `1 = 1`, rather than the `IN ()` no database accepts.
-	in_(...values: Array<Comparable<Widen<NonNullable<TSType>>>>): Condition<P>
-	notIn(...values: Array<Comparable<Widen<NonNullable<TSType>>>>): Condition<P>
+	in_(...values: Array<Comparable<ComparableValue<NonNullable<TSType>>>>): Condition<P>
+	notIn(...values: Array<Comparable<ComparableValue<NonNullable<TSType>>>>): Condition<P>
 
 	// JSON represents non-finite division results as null. Other arithmetic
 	// propagates SQL NULL from either operand.
@@ -217,7 +232,7 @@ export interface Expr<TSType, P = never> {
  * `null`), or an expression of it.
  */
 export type Operand<TSType, Q = never> =
-	| Comparable<Widen<NonNullable<TSType>>>
+	| Comparable<ComparableValue<NonNullable<TSType>>>
 	| Expr<TSType, Q>
 	| Expr<Widen<TSType>, Q>
 
@@ -300,6 +315,17 @@ export function toFragment(value: unknown): SqlFragment {
  *  a compile. */
 const untypedLiteral = (value: boolean): string =>
 	activeSqlSyntax()?.literal(value, "an untyped boolean") ?? (value ? "1" : "0")
+
+/** A string value, bound when the compile binds values, else a quoted literal. */
+const boundString = (value: string): SqlFragment =>
+	known(() => {
+		const bind = activeLiteralBinder()
+		return bind !== undefined ? bind(value) : compile(str(value))
+	})
+
+/** A LIKE pattern: an expression as it renders, a string as `boundString`. */
+const likePattern = (pattern: string | Expr<string, any>): string =>
+	compile(typeof pattern === "string" ? boundString(pattern) : pattern.toFragment())
 
 const dateTimeLiteral = (value: DateTime.Utc): string =>
 	activeSqlSyntax()?.dateTimeLiteral(value) ?? compile(str(chDateTimeLiteral(value)))
@@ -423,9 +449,9 @@ export function makeExpr<T>(
 		notBetween: (low, high) =>
 			makeCond(known(() => `${compile(fragment)} NOT BETWEEN ${compile(operand(low))} AND ${compile(operand(high))}`)),
 
-		like: (pattern: string) => makeCond(known(() => `${compile(fragment)} LIKE ${compile(str(pattern))}`)),
-		notLike: (pattern: string) => makeCond(known(() => `${compile(fragment)} NOT LIKE ${compile(str(pattern))}`)),
-		ilike: (pattern: string) => makeCond(known(() => `${compile(fragment)} ILIKE ${compile(str(pattern))}`)),
+		like: (pattern) => makeCond(known(() => `${compile(fragment)} LIKE ${likePattern(pattern)}`)),
+		notLike: (pattern) => makeCond(known(() => `${compile(fragment)} NOT LIKE ${likePattern(pattern)}`)),
+		ilike: (pattern) => makeCond(known(() => `${compile(fragment)} ILIKE ${likePattern(pattern)}`)),
 
 		in_: (...values) => inCond(fragment, "IN", values.map((v) => () => operand(v))),
 		notIn: (...values) => inCond(fragment, "NOT IN", values.map((v) => () => operand(v))),
@@ -470,6 +496,17 @@ export function makeUntypedExpr<T = unknown>(
 const columnTypes = new WeakMap<Expr<any>, CHType<string, any, any>>()
 export const columnTypeOf = (expr: Expr<any>): CHType<string, any, any> | undefined => columnTypes.get(expr)
 
+/**
+ * A column read as the driver sends it, without its type's decoding: a jsonb
+ * document as `unknown`, a branded id as its string. For a reader that decodes
+ * stored values itself, say to tolerate an older document shape. Writes and
+ * every other read keep the column's type.
+ */
+export function undecoded<C extends CHType<string, any, any>>(column: ColumnRef<string, C>): Expr<InferEncoded<C>> {
+	// The value passes through as the driver sent it, which is what the column's wire type describes.
+	return makeExpr<InferEncoded<C>>(column.toFragment(), Schema.Unknown as Schema.Codec<InferEncoded<C>, unknown>)
+}
+
 // ColumnRef implementation
 
 export function makeColumnRef<Name extends string, ColType extends CHType<string, any>>(
@@ -495,7 +532,10 @@ export function makeColumnRef<Name extends string, ColType extends CHType<string
 	// `alias.Column` when qualified: the qualifier is quoted segment by segment,
 	// the column as one identifier (a ClickHouse `Nested` column has a dot).
 	const qualified = columnName !== undefined && name.endsWith(`.${columnName}`)
-	const fragment = qualified ? ident(columnName, name.slice(0, -columnName.length - 1)) : ident(name)
+	const sqlName = columnType?.sqlName
+	const fragment = qualified
+		? ident(sqlName ?? columnName, name.slice(0, -columnName.length - 1))
+		: ident(sqlName ?? name)
 	const base = makeExpr<InferTS<ColType>>(
 		fragment,
 		columnType?.schema as Schema.Codec<InferTS<ColType>, any> | undefined,
@@ -503,7 +543,11 @@ export function makeColumnRef<Name extends string, ColType extends CHType<string
 			? undefined
 			: (value) => known(() => encodeColumnLiteral(columnType, value, columnName ?? name)),
 	)
-	if (columnType !== undefined) columnTypes.set(base, columnType)
+	// Without `sqlName`: a query reading this column as a subquery's output sees it under its alias.
+	if (columnType !== undefined) {
+		const { sqlName: _, ...outputType } = columnType
+		columnTypes.set(base, sqlName === undefined ? columnType : outputType)
+	}
 	const isTenantColumn = tenantColumn !== undefined && (columnName ?? name) === tenantColumn
 	const baseEq = base.eq
 	const baseIn = base.in_
@@ -598,7 +642,7 @@ export function outerRef<T = string>(name: string): Expr<T> {
 }
 
 export function inList<T extends string>(expr: Expr<T>, values: readonly string[]): Condition {
-	return inCond(expr.toFragment(), "IN", values.map((v) => () => str(v)))
+	return inCond(expr.toFragment(), "IN", values.map((v) => () => boundString(v)))
 }
 
 export function inExprList<T>(expr: Expr<T>, values: readonly Expr<T>[]): Condition {
@@ -606,7 +650,7 @@ export function inExprList<T>(expr: Expr<T>, values: readonly Expr<T>[]): Condit
 }
 
 export function notInList(expr: Expr<string>, values: readonly string[]): Condition {
-	return inCond(expr.toFragment(), "NOT IN", values.map((v) => () => str(v)))
+	return inCond(expr.toFragment(), "NOT IN", values.map((v) => () => boundString(v)))
 }
 
 /**

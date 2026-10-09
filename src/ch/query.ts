@@ -32,6 +32,25 @@ import type { TenantScope } from "./compile"
 
 // Type utilities
 
+/**
+ * Proxy traps that let `{ ...$ }` spread an accessor into every column of the
+ * table, under its key: `returning(($) => ({ ...$, txid }))`. A joined table's
+ * alias is not a column and is left out.
+ */
+const spreadColumns = (columns: ColumnDefs | undefined, get: (column: string) => unknown) => ({
+	ownKeys: () => Object.keys(columns ?? {}),
+	getOwnPropertyDescriptor: (_target: object, prop: string | symbol) =>
+		typeof prop === "string" && columns !== undefined && Object.hasOwn(columns, prop)
+			? { enumerable: true, configurable: true, writable: false, value: get(prop) }
+			: undefined,
+})
+
+/** A select callback reading each named column under its own key. */
+const selectEvery =
+	(columns: ReadonlyArray<string>) =>
+	($: any): Record<string, any> =>
+		Object.fromEntries(columns.map((column) => [column, $[column]]))
+
 export type ColumnAccessor<Cols extends ColumnDefs> = {
 	readonly [K in keyof Cols & string]: ColumnRef<K, Cols[K]>
 }
@@ -113,6 +132,8 @@ export interface CHQueryState {
 	 *  scope — see `having()` on the interface. */
 	readonly havingFn?: ($: any) => ReadonlyArray<Condition | undefined>
 	readonly orderBySpecs: Array<[string, "asc" | "desc"]>
+	/** Set by the callback form of `orderBy`, which sorts by expressions. */
+	readonly orderByFn?: ($: any) => ReadonlyArray<readonly [Expr<any, any>, "asc" | "desc"]>
 	readonly limitValue?: number
 	readonly offsetValue?: number
 	readonly formatValue?: string
@@ -210,6 +231,9 @@ export interface CHQuery<
 	/** phantom */
 	readonly _phantom?: { cols: Cols; output: Output; joins: Joins; route: Route; params: (entries: Params) => void }
 
+	/** Select every column of the FROM table, as drizzle's bare `select()` does. Output keys are the column keys. */
+	select(): CHQuery<Cols, { readonly [K in keyof Cols]: InferTS<Cols[K]> }, Joins, Route, Params>
+
 	/** Select specific columns by name. Output keys match column names. */
 	select<K extends keyof Cols & string>(
 		...columns: K[]
@@ -248,6 +272,10 @@ export interface CHQuery<
 	): CHQuery<Cols, Output, Joins, Route, Params | ParamsIn<C[number]>>
 
 	orderBy(...specs: Array<OrderBySpec<Output>>): CHQuery<Cols, Output, Joins, Route, Params>
+	/** Sort by expressions of the source's columns, selected or not: `orderBy(($) => [[$.CreatedAt, "desc"]])`. */
+	orderBy<Q = never>(
+		fn: ($: JoinedColumnAccessor<Cols, Joins>) => ReadonlyArray<readonly [Expr<any, Q>, "asc" | "desc"]>,
+	): CHQuery<Cols, Output, Joins, Route, Params | Q>
 
 	/** At most `n` rows: a non-negative integer. */
 	limit<N extends number>(n: RowCount<N>): CHQuery<Cols, Output, Joins, Route, Params>
@@ -432,17 +460,18 @@ export function createColumnAccessor<Cols extends ColumnDefs>(
 	tenantColumn?: string,
 ): ColumnAccessor<Cols> {
 	const cache = new Map<string, ColumnRef<string, CHType<string, any>>>()
+	const get = (prop: string) => {
+		let ref = cache.get(prop)
+		if (!ref) {
+			ref = makeColumnRef(prop, undefined, tenantColumn, columns[prop])
+			cache.set(prop, ref)
+		}
+		return ref
+	}
 
-	return new Proxy({} as ColumnAccessor<Cols>, {
-		get(_target, prop) {
-			if (typeof prop !== "string") return undefined
-			let ref = cache.get(prop)
-			if (!ref) {
-				ref = makeColumnRef(prop, undefined, tenantColumn, columns[prop])
-				cache.set(prop, ref)
-			}
-			return ref
-		},
+	return new Proxy<ColumnAccessor<Cols>>({} as ColumnAccessor<Cols>, {
+		get: (_target, prop) => (typeof prop === "string" ? get(prop) : undefined),
+		...spreadColumns(columns, get),
 	})
 }
 
@@ -454,17 +483,18 @@ export function createQualifiedColumnAccessor(
 	columns?: ColumnDefs,
 ): ColumnAccessor<any> {
 	const cache = new Map<string, ColumnRef<string, CHType<string, any>>>()
+	const get = (prop: string) => {
+		let ref = cache.get(prop)
+		if (!ref) {
+			ref = makeColumnRef(`${alias}.${prop}`, prop, tenantColumn, columns?.[prop])
+			cache.set(prop, ref)
+		}
+		return ref
+	}
 
-	return new Proxy({} as ColumnAccessor<any>, {
-		get(_target, prop) {
-			if (typeof prop !== "string") return undefined
-			let ref = cache.get(prop)
-			if (!ref) {
-				ref = makeColumnRef(`${alias}.${prop}`, prop, tenantColumn, columns?.[prop])
-				cache.set(prop, ref)
-			}
-			return ref
-		},
+	return new Proxy<ColumnAccessor<any>>({} as ColumnAccessor<any>, {
+		get: (_target, prop) => (typeof prop === "string" ? get(prop) : undefined),
+		...spreadColumns(columns, get),
 	})
 }
 
@@ -486,7 +516,8 @@ export function createJoinedColumnAccessor<Cols extends ColumnDefs, Joins extend
 	const cache = new Map<string, any>()
 	const aliasSet = new Set(joinAliases)
 
-	return new Proxy({} as JoinedColumnAccessor<Cols, Joins>, {
+	const accessor: JoinedColumnAccessor<Cols, Joins> = new Proxy<JoinedColumnAccessor<Cols, Joins>>({} as JoinedColumnAccessor<Cols, Joins>, {
+		...spreadColumns(columns, (column) => (accessor as Record<string, unknown>)[column]),
 		get(_target, prop) {
 			if (typeof prop !== "string") return undefined
 			let cached = cache.get(prop)
@@ -506,6 +537,7 @@ export function createJoinedColumnAccessor<Cols extends ColumnDefs, Joins extend
 			return cached
 		},
 	})
+	return accessor
 }
 
 // Query builder implementation
@@ -537,18 +569,9 @@ function makeQuery<
 		_state: state,
 
 		select(...args: any[]): any {
+			if (args.length === 0) return makeQuery({ ...state, selectFn: selectEvery(Object.keys(state.columns)) })
 			// String overload: select("Col1", "Col2") → select($ => ({ Col1: $.Col1, Col2: $.Col2 }))
-			if (typeof args[0] === "string") {
-				const columns = args as string[]
-				return makeQuery({
-					...state,
-					selectFn: ($: any) => {
-						const result: Record<string, any> = {}
-						for (const col of columns) result[col] = $[col]
-						return result
-					},
-				})
-			}
+			if (typeof args[0] === "string") return makeQuery({ ...state, selectFn: selectEvery(args as string[]) })
 			// Callback overload: select($ => ({ ... }))
 			return makeQuery({ ...state, selectFn: args[0] })
 		},
@@ -565,8 +588,9 @@ function makeQuery<
 			return makeQuery({ ...state, havingFn: appendConditions(state.havingFn, fn) })
 		},
 
-		orderBy(...specs) {
-			return makeQuery({ ...state, orderBySpecs: specs as Array<[string, "asc" | "desc"]> })
+		orderBy(...specs: Array<any>): any {
+			if (typeof specs[0] === "function") return makeQuery({ ...state, orderBySpecs: [], orderByFn: specs[0] })
+			return makeQuery({ ...state, orderBySpecs: specs as Array<[string, "asc" | "desc"]>, orderByFn: undefined })
 		},
 
 		limit(n) {

@@ -38,6 +38,8 @@ const typed = PG.table("typed", {
 	Exact: PG.custom("int8", Schema.Union([Schema.BigInt, Schema.BigIntFromString])),
 	At: PG.timestamptz,
 	AtText: PG.timestamptz,
+	AtMillis: PG.timestamptzMillis,
+	AtMillisText: PG.timestamptzMillis,
 	// Compared only: string-typed, for the dateTimeString and dateTimeSeconds params.
 	AtString: PG.custom("timestamptz", Schema.String),
 	Doc: PG.jsonb(Schema.Struct({ region: Schema.String })),
@@ -61,6 +63,8 @@ const typedRow = `SELECT
 	9007199254740993::int8 AS "Exact",
 	'2026-01-01T00:00:00.25Z'::timestamptz AS "At",
 	'2026-01-01 00:00:00.25+00'::text AS "AtText",
+	'2026-01-01T00:00:00.25Z'::timestamptz AS "AtMillis",
+	'2026-01-01 00:00:00.25+00'::text AS "AtMillisText",
 	'2026-01-01T00:00:00.25Z'::timestamptz AS "AtString",
 	'{"region": "eu"}'::jsonb AS "Doc",
 	'12'::text AS "Branded",
@@ -173,6 +177,7 @@ export const postgresCases: readonly PostgresCase[] = [
 			"custom",
 			"brand",
 			"timestamptz",
+			"timestamptzMillis",
 			"jsonb",
 			"array",
 			"nullable",
@@ -194,6 +199,8 @@ export const postgresCases: readonly PostgresCase[] = [
 					"Exact",
 					"At",
 					"AtText",
+					"AtMillis",
+					"AtMillisText",
 					"Doc",
 					"Tags",
 					"Missing",
@@ -216,6 +223,8 @@ export const postgresCases: readonly PostgresCase[] = [
 				Exact: 9007199254740993n,
 				At: utc("2026-01-01T00:00:00.250Z"),
 				AtText: utc("2026-01-01T00:00:00.250Z"),
+				AtMillis: Date.parse("2026-01-01T00:00:00.250Z"),
+				AtMillisText: Date.parse("2026-01-01T00:00:00.250Z"),
 				Doc: { region: "eu" },
 				Tags: ["x", "y"],
 				Missing: null,
@@ -248,6 +257,37 @@ export const postgresCases: readonly PostgresCase[] = [
 				{ from: "2026-01-01 00:00:00", late: new Date("2026-01-01T00:00:00.900Z"), to: new Date("2026-01-01T00:00:01.500Z") },
 			),
 		expected: [{ region: "eu", absent: null }],
+	},
+	{
+		id: "conditionals-and-typed-values",
+		covers: pg("greatest", "least", "caseWhen", "asBoolean", "typedValue"),
+		build: () =>
+			PG.compileUnsafe(
+				typedRows().select(($) => ({
+					high: PG.greatest($.Int4, $.Int8, PG.typedValue(PG.int8, 6)),
+					low: PG.least($.Int4, $.Int8),
+					later: PG.greatest($.AtMillis, PG.typedValue(PG.timestamptzMillis, Date.parse("2026-01-02T00:00:00Z"))),
+					size: PG.caseWhen(
+						[
+							[$.Int8.gt(100), PG.typedValue(PG.text, "large")],
+							[$.Int8.gt(5), PG.typedValue(PG.text, "medium")],
+						],
+						PG.typedValue(PG.text, "small"),
+					),
+					big: PG.asBoolean($.Int8.gt(5)),
+					raw: PG.undecoded($.Doc),
+				})),
+			),
+		expected: [
+			{
+				high: 8,
+				low: 4,
+				later: Date.parse("2026-01-02T00:00:00Z"),
+				size: "medium",
+				big: true,
+				raw: { region: "eu" },
+			},
+		],
 	},
 	{
 		id: "compile-entry-points",

@@ -11,6 +11,7 @@
 // Object]` and `Tags = a,b` — SQL that is either an error or, worse, a bare
 // identifier that happens to parse.
 
+import { activeLiteralBinder } from "../sql/literal-binder"
 import { Result, Schema } from "effect"
 import { QueryBuilderError } from "./errors"
 import { quoteClickHouseString } from "../sql/sql-fragment"
@@ -90,7 +91,9 @@ export function sqlLiteral(value: unknown, context: string): string {
  * fails here — while building the SQL — instead of becoming part of it.
  */
 export function encodeLiteral<A>(schema: Schema.Codec<A, any>, value: unknown, context: string): string {
-	return (activeSqlSyntax()?.literal ?? sqlLiteral)(encodeValue(schema, value, context), context)
+	const wire = encodeValue(schema, value, context)
+	const bind = activeLiteralBinder()
+	return bind !== undefined ? bind(wire) : (activeSqlSyntax()?.literal ?? sqlLiteral)(wire, context)
 }
 
 /**

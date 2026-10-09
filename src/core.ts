@@ -32,6 +32,7 @@ export {
 	when,
 	whenTrue,
 	inList,
+	undecoded,
 	inExprList,
 	notInList,
 	not,

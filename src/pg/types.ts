@@ -96,6 +96,34 @@ const isoInstant = (epochMillis: number): string => new Date(epochMillis).toISOS
 
 export const PgTimestampLiteral: Schema.Codec<unknown, unknown> = timestampLiteral(isoInstant)
 
+/** A timestamptz as a driver sends it, read as epoch milliseconds. */
+const PgTimestamptzMillis: Schema.Codec<number, Date | string> = Schema.Union([
+	Schema.Date.pipe(
+		Schema.decodeTo(Schema.Finite, {
+			decode: SchemaGetter.transform((value: Date) => value.getTime()),
+			encode: SchemaGetter.transform((value: number) => new Date(value)),
+		}),
+	),
+	Schema.String.pipe(
+		Schema.check(isTimestamp),
+		Schema.decodeTo(Schema.Finite, {
+			decode: SchemaGetter.transform((value: string) => Date.parse(pgTimestampToIso(value))),
+			encode: SchemaGetter.transform((value: number) => isoInstant(value)),
+		}),
+	),
+])
+
+/** What a `timestamptzMillis` takes: epoch milliseconds, or anything a timestamptz does. */
+const PgTimestampMillisLiteral: Schema.Codec<unknown, unknown> = Schema.Union([
+	Schema.String.pipe(
+		Schema.decodeTo(Schema.Finite, {
+			decode: SchemaGetter.transform((value: string) => Date.parse(value)),
+			encode: SchemaGetter.transform((value: number) => isoInstant(value)),
+		}),
+	),
+	PgTimestampLiteral,
+]) as Schema.Codec<unknown, unknown>
+
 // Scalars
 
 export const text: PgType<"text", string> = custom("text", Schema.String)
@@ -112,6 +140,17 @@ export const timestamptz: PgType<"timestamptz", DateTime.Utc, Date | string> = c
 	"timestamptz",
 	PgTimestamptz,
 	PgTimestampLiteral,
+)
+
+/**
+ * A timestamptz read as epoch milliseconds, for code that keeps time as a
+ * number. Inserts and comparisons take milliseconds as well as a `Date`, a
+ * `DateTime.Utc` or a timestamp string.
+ */
+export const timestamptzMillis: PgType<"timestamptz", number, Date | string> = custom(
+	"timestamptz",
+	PgTimestamptzMillis,
+	PgTimestampMillisLiteral,
 )
 
 /**

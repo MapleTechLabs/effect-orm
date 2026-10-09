@@ -21,6 +21,7 @@
 // `sql.ident` values are recognised by identity (a private WeakSet), never by a
 // field, so an object parsed from request JSON cannot pass for one.
 
+import { activeLiteralBinder } from "../sql/literal-binder"
 import { fail } from "./failure"
 import { DateTime } from "effect"
 import { currentDialect } from "./dialect"
@@ -132,6 +133,9 @@ const renderValueRaw = (value: unknown): string => {
 	if (isExprLike(value) && "_paramName" in value && currentDialect().params._tag === "inline") {
 		return `(${compile(value.toFragment())})`
 	}
+	// A string is data more often than not (an id, an email, a JSON document): bound where the compile binds.
+	const bind = typeof value === "string" ? activeLiteralBinder() : undefined
+	if (bind !== undefined) return bind(value)
 	if (
 		isExprLike(value) ||
 		typeof value === "string" ||
