@@ -450,7 +450,7 @@ const Users = PG.table("users", {
 ### Column types
 
 `text`, `uuid`, `bool`, `int2`, `int4`, `int8`, `float4`, `float8`, `numeric`, `timestamptz`,
-`jsonb(schema?)`, `array(type)`, `nullable(type)`, `custom(sql, schema, literalSchema?)`,
+`timestamptzMillis` (a timestamptz read as epoch milliseconds), `jsonb(schema?)`, `array(type)`, `nullable(type)`, `custom(sql, schema, literalSchema?)`,
 `brand(type, schema)`. See [Postgres column types](./postgres.md#column-types).
 
 Types: `PgType` (a Postgres column type; a `CHType`), `PgArray`, `PgNullable`. Codecs:

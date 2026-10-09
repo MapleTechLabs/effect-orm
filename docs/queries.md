@@ -17,7 +17,15 @@ _(Backed by `docs/queries.md > Queries are immutable`.)_
 
 ## `select`
 
-Two forms.
+Three forms.
+
+**Every column** — `select()` with no arguments reads every column of the FROM table, under
+its key, as drizzle's bare `select()` does:
+
+```ts
+CH.from(Events).select()
+// SELECT Name AS Name, DurationMs AS DurationMs, ... FROM events
+```
 
 **By column name** — output keys match the column names:
 

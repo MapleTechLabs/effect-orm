@@ -46,6 +46,19 @@ export type Widen<TSType> = TSType extends Brand.Brand<any>
 			? number
 			: TSType
 
+/**
+ * What a plain value compared with a column may be. A literal union stays
+ * itself, so `$.kind.eq("nope")` is a type error when `kind` is
+ * `"open" | "closed"`; anything else widens as `Widen` does. A param or
+ * expression of the primitive still compares (see `Operand`), for a value only
+ * known at run time.
+ */
+export type ComparableValue<TSType> = TSType extends string
+	? [Exclude<keyof TSType, keyof string>] extends [never]
+		? TSType
+		: Widen<TSType>
+	: Widen<TSType>
+
 // Params in the type
 //
 // An expression remembers the `param.*` placeholders it contains, so a query
@@ -191,8 +204,8 @@ export interface Expr<TSType, P = never> {
 
 	// IN / NOT IN. An empty list is false (`IN`) or true (`NOT IN`), written
 	// `1 = 0` / `1 = 1`, rather than the `IN ()` no database accepts.
-	in_(...values: Array<Comparable<Widen<NonNullable<TSType>>>>): Condition<P>
-	notIn(...values: Array<Comparable<Widen<NonNullable<TSType>>>>): Condition<P>
+	in_(...values: Array<Comparable<ComparableValue<NonNullable<TSType>>>>): Condition<P>
+	notIn(...values: Array<Comparable<ComparableValue<NonNullable<TSType>>>>): Condition<P>
 
 	// JSON represents non-finite division results as null. Other arithmetic
 	// propagates SQL NULL from either operand.
@@ -217,7 +230,7 @@ export interface Expr<TSType, P = never> {
  * `null`), or an expression of it.
  */
 export type Operand<TSType, Q = never> =
-	| Comparable<Widen<NonNullable<TSType>>>
+	| Comparable<ComparableValue<NonNullable<TSType>>>
 	| Expr<TSType, Q>
 	| Expr<Widen<TSType>, Q>
 

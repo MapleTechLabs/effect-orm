@@ -89,6 +89,7 @@ literal that still contained it would fail the compile with `InvalidLiteral`.
 | `bool` | `boolean` | `boolean` | boolean |
 | `int2`, `int4`, `int8`, `float4`, `float8`, `numeric` | same | `number` | number, numeric string, `bigint` |
 | `timestamptz` | `timestamptz` | `DateTime.Utc` | `Date`, or text such as `2026-01-01 00:00:00+00` |
+| `timestamptzMillis` | `timestamptz` | epoch milliseconds (`number`) | the same |
 | `jsonb(schema?)` | `jsonb` | the schema's type (`unknown` by default) | a parsed value |
 | `array(type)` | `type[]` | `ReadonlyArray` | array |
 | `nullable(type)` | the same type | `T \| null` | the same, or `null` |
@@ -102,6 +103,10 @@ digits. Where exact digits matter, declare
 both as a `bigint`. A `timestamptz`
 compared against a `Date`, a `DateTime.Utc` or a string is written as an ISO-8601 instant,
 which no session time zone can reinterpret; a zoneless string is read as UTC.
+
+Comparisons with a literal-union column take only its members: with `status` typed
+`"open" | "closed"`, `$.status.eq("opne")` is a type error. A param of the primitive
+(`param.string`) still compares, for a value known only at run time.
 
 ## Functions
 

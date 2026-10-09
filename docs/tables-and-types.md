@@ -56,6 +56,10 @@ const Users = PG.table("users", {
 })
 ```
 
+A column's key is its name in SQL unless `PG.column` gives it another: `orgId: PG.column(PG.text,
+{ name: "org_id" })` is stored as `org_id` and read, written, filtered and indexed as `orgId`
+everywhere else, as drizzle's `text("org_id")` is. Rows decode under the key.
+
 A Postgres column is `NOT NULL` unless its type is `PG.nullable(...)`. See
 [Postgres](./postgres.md) for its types and [migrations](./migrations.md#postgres) for its
 indexes and foreign keys.

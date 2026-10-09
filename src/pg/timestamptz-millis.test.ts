@@ -31,7 +31,7 @@ describe("timestamptzMillis", () => {
 				yield* Db.run(
 					PG.insertInto(Jobs).values([
 						{ id: "a", runAt: t0 },
-						{ id: "b", runAt: new Date(t0 + 1000), doneAt: DateTime.makeUnsafe(t0 + 2000) },
+						{ id: "b", runAt: t0 + 1000, doneAt: t0 + 2000 },
 					]),
 				)
 				const rows = yield* Db.run(PG.from(Jobs).select().orderBy(["id", "asc"]))
@@ -40,14 +40,14 @@ describe("timestamptzMillis", () => {
 					{ id: "b", runAt: t0 + 1000, doneAt: t0 + 2000 },
 				])
 
-				const since = (value: unknown) =>
-					Db.run(PG.from(Jobs).select("id").where(($) => [$.runAt.gt(value as number)]))
+				// Typed as milliseconds; the codec also takes the other timestamp forms a driver or caller has.
+				const since = (value: number) => Db.run(PG.from(Jobs).select("id").where(($) => [$.runAt.gt(value)]))
 				for (const value of [t0, new Date(t0), DateTime.makeUnsafe(t0), "2026-01-01T00:00:00.250Z"]) {
-					expect(yield* since(value)).toEqual([{ id: "b" }])
+					expect(yield* since(value as number)).toEqual([{ id: "b" }])
 				}
 				expect(
-					yield* Db.run(PG.from(Jobs).select("id").where(($) => [$.runAt.lte(PG.param.dateTime("at"))]), {
-						at: new Date(t0),
+					yield* Db.run(PG.from(Jobs).select("id").where(($) => [$.runAt.lte(PG.param.of(Jobs.columns.runAt, "at"))]), {
+						at: t0,
 					}),
 				).toEqual([{ id: "a" }])
 
