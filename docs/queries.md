@@ -44,7 +44,9 @@ CH.from(Events).select(($) => ({
 }))
 ```
 
-The object keys become the SQL aliases _and_ the keys of the output row type. `select` is
+The object keys become the SQL aliases _and_ the keys of the output row type. Spreading `$`
+gives every column of the FROM table under its key, so `select(($) => ({ ...$, lowered:
+CH.lower($.Name) }))` reads them all plus one more; `returning` takes the same. `select` is
 required: compiling without one raises `QueryBuilderDefect`, which stays a defect — no request
 value can remove a `select()`.
 

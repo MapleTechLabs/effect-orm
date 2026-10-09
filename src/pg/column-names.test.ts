@@ -154,3 +154,18 @@ describe("column names", () => {
 		)
 	})
 })
+
+describe("spreading the accessor", () => {
+	it("reads every column under its key, beside computed ones", () => {
+		const compiled = PG.compileUnsafe(
+			PG.update(Members)
+				.set({ visitCount: 1 })
+				.where(($) => [$.orgId.eq("o1")])
+				.returning(($) => ({ ...$, txid: PG.sql(PG.text)`pg_current_xact_id()::xid::text` })),
+		)
+		expect(compiled.returning).toEqual(["id", "orgId", "teamId", "email", "visitCount", "joinedAt", "leftAt", "txid"])
+		expect(compiled.sql).toContain(`"member_id" AS "id"`)
+		const selected = PG.compileUnsafe(PG.from(Members).select(($) => ({ ...$, lowered: PG.lower($.email) })))
+		expect(selected.sql).toContain(`"members"."left_at" AS "leftAt"`)
+	})
+})

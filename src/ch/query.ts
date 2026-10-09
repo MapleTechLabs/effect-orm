@@ -32,6 +32,19 @@ import type { TenantScope } from "./compile"
 
 // Type utilities
 
+/**
+ * Proxy traps that let `{ ...$ }` spread an accessor into every column of the
+ * table, under its key: `returning(($) => ({ ...$, txid }))`. A joined table's
+ * alias is not a column and is left out.
+ */
+const spreadColumns = (columns: ColumnDefs | undefined, get: (column: string) => unknown) => ({
+	ownKeys: () => Object.keys(columns ?? {}),
+	getOwnPropertyDescriptor: (_target: object, prop: string | symbol) =>
+		typeof prop === "string" && columns !== undefined && Object.hasOwn(columns, prop)
+			? { enumerable: true, configurable: true, writable: false, value: get(prop) }
+			: undefined,
+})
+
 /** A select callback reading each named column under its own key. */
 const selectEvery =
 	(columns: ReadonlyArray<string>) =>
@@ -441,17 +454,18 @@ export function createColumnAccessor<Cols extends ColumnDefs>(
 	tenantColumn?: string,
 ): ColumnAccessor<Cols> {
 	const cache = new Map<string, ColumnRef<string, CHType<string, any>>>()
+	const get = (prop: string) => {
+		let ref = cache.get(prop)
+		if (!ref) {
+			ref = makeColumnRef(prop, undefined, tenantColumn, columns[prop])
+			cache.set(prop, ref)
+		}
+		return ref
+	}
 
-	return new Proxy({} as ColumnAccessor<Cols>, {
-		get(_target, prop) {
-			if (typeof prop !== "string") return undefined
-			let ref = cache.get(prop)
-			if (!ref) {
-				ref = makeColumnRef(prop, undefined, tenantColumn, columns[prop])
-				cache.set(prop, ref)
-			}
-			return ref
-		},
+	return new Proxy<ColumnAccessor<Cols>>({} as ColumnAccessor<Cols>, {
+		get: (_target, prop) => (typeof prop === "string" ? get(prop) : undefined),
+		...spreadColumns(columns, get),
 	})
 }
 
@@ -463,17 +477,18 @@ export function createQualifiedColumnAccessor(
 	columns?: ColumnDefs,
 ): ColumnAccessor<any> {
 	const cache = new Map<string, ColumnRef<string, CHType<string, any>>>()
+	const get = (prop: string) => {
+		let ref = cache.get(prop)
+		if (!ref) {
+			ref = makeColumnRef(`${alias}.${prop}`, prop, tenantColumn, columns?.[prop])
+			cache.set(prop, ref)
+		}
+		return ref
+	}
 
-	return new Proxy({} as ColumnAccessor<any>, {
-		get(_target, prop) {
-			if (typeof prop !== "string") return undefined
-			let ref = cache.get(prop)
-			if (!ref) {
-				ref = makeColumnRef(`${alias}.${prop}`, prop, tenantColumn, columns?.[prop])
-				cache.set(prop, ref)
-			}
-			return ref
-		},
+	return new Proxy<ColumnAccessor<any>>({} as ColumnAccessor<any>, {
+		get: (_target, prop) => (typeof prop === "string" ? get(prop) : undefined),
+		...spreadColumns(columns, get),
 	})
 }
 
@@ -495,7 +510,8 @@ export function createJoinedColumnAccessor<Cols extends ColumnDefs, Joins extend
 	const cache = new Map<string, any>()
 	const aliasSet = new Set(joinAliases)
 
-	return new Proxy({} as JoinedColumnAccessor<Cols, Joins>, {
+	const accessor: JoinedColumnAccessor<Cols, Joins> = new Proxy<JoinedColumnAccessor<Cols, Joins>>({} as JoinedColumnAccessor<Cols, Joins>, {
+		...spreadColumns(columns, (column) => (accessor as Record<string, unknown>)[column]),
 		get(_target, prop) {
 			if (typeof prop !== "string") return undefined
 			let cached = cache.get(prop)
@@ -515,6 +531,7 @@ export function createJoinedColumnAccessor<Cols extends ColumnDefs, Joins extend
 			return cached
 		},
 	})
+	return accessor
 }
 
 // Query builder implementation
