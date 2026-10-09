@@ -68,3 +68,20 @@ describe("bound literals", () => {
 		expect(ddl).toContain(`WHERE "active" = TRUE`)
 	})
 })
+
+describe("orderBy and inList", () => {
+	it("sorts by an expression that is not selected, and binds an inList", () => {
+		const compiled = PG.compileUnsafe(
+			PG.from(Users)
+				.select("email")
+				.where(($) => [PG.inList($.orgId, ["o1", "o2"])])
+				.orderBy(($) => [
+					[$.active, "desc"],
+					[PG.lower($.email), "asc"],
+				]),
+		)
+		expect(compiled.sql).toContain(`"org_id" IN ($1, $2)`)
+		expect(compiled.sql).toContain(`ORDER BY "users"."active" DESC, lower("users"."email") ASC`)
+		expect(compiled.parameters).toEqual(["o1", "o2"])
+	})
+})

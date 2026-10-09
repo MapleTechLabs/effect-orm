@@ -99,6 +99,15 @@ const orderByClause = (specs: ReadonlyArray<[string, "asc" | "desc"]>): Array<st
 		return `${quoteIdent(column)} ${direction.toUpperCase()}`
 	})
 
+/** The callback form of `orderBy`: each expression as it renders, then its direction. */
+const orderByExprs = (specs: ReadonlyArray<readonly [Expr<any, any>, "asc" | "desc"]>): Array<string> =>
+	specs.map(([expr, direction]) => {
+		if (!isExprLike(expr) || (direction !== "asc" && direction !== "desc")) {
+			return fail(new QueryBuilderDefect({ message: "CHQuery: orderBy(($) => ...) returns [expression, \"asc\" | \"desc\"] pairs" }), "")
+		}
+		return `${compileSqlFragment(expr.toFragment())} ${direction.toUpperCase()}`
+	})
+
 /**
  * A `limit` / `offset` value. It often comes from a request (a page size), so a
  * bad one is a failure, not a defect: `LIMIT -1` or `LIMIT NaN` is not SQL, and
@@ -923,7 +932,9 @@ function compileInner<
 				// rows are already aggregated, so the scan that produced them crossed
 				// tenants no matter what this filters out.
 				having: having.map(({ sql }) => raw(sql)),
-				orderBy: orderByClause(state.orderBySpecs).map(raw),
+				orderBy: state.orderByFn === undefined
+					? orderByClause(state.orderBySpecs).map(raw)
+					: orderByExprs(state.orderByFn($)).map(raw),
 				limit: rowCount("limit", state.limitValue),
 				offset: rowCount("offset", state.offsetValue),
 				format: options?.skipFormat ? undefined : formatClause(state.formatValue),

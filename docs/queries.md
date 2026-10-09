@@ -126,6 +126,13 @@ Takes `[column, direction]` tuples, one per sort key:
 // ORDER BY count DESC, name ASC
 ```
 
+To sort by something not selected, pass a callback returning `[expression, direction]` pairs;
+it reads the source's columns as `where` does:
+
+```ts
+.orderBy(($) => [[$.Timestamp, "desc"], [CH.lower($.Name), "asc"]])
+```
+
 Passing two bare strings, `.orderBy("count", "desc")`, is a type error.
 Untyped callers receive `QueryBuilderDefect`; use a tuple for each sort key.
 

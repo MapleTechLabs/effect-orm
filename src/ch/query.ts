@@ -132,6 +132,8 @@ export interface CHQueryState {
 	 *  scope — see `having()` on the interface. */
 	readonly havingFn?: ($: any) => ReadonlyArray<Condition | undefined>
 	readonly orderBySpecs: Array<[string, "asc" | "desc"]>
+	/** Set by the callback form of `orderBy`, which sorts by expressions. */
+	readonly orderByFn?: ($: any) => ReadonlyArray<readonly [Expr<any, any>, "asc" | "desc"]>
 	readonly limitValue?: number
 	readonly offsetValue?: number
 	readonly formatValue?: string
@@ -270,6 +272,10 @@ export interface CHQuery<
 	): CHQuery<Cols, Output, Joins, Route, Params | ParamsIn<C[number]>>
 
 	orderBy(...specs: Array<OrderBySpec<Output>>): CHQuery<Cols, Output, Joins, Route, Params>
+	/** Sort by expressions of the source's columns, selected or not: `orderBy(($) => [[$.CreatedAt, "desc"]])`. */
+	orderBy(
+		fn: ($: JoinedColumnAccessor<Cols, Joins>) => ReadonlyArray<readonly [Expr<any, any>, "asc" | "desc"]>,
+	): CHQuery<Cols, Output, Joins, Route, Params>
 
 	/** At most `n` rows: a non-negative integer. */
 	limit<N extends number>(n: RowCount<N>): CHQuery<Cols, Output, Joins, Route, Params>
@@ -582,8 +588,9 @@ function makeQuery<
 			return makeQuery({ ...state, havingFn: appendConditions(state.havingFn, fn) })
 		},
 
-		orderBy(...specs) {
-			return makeQuery({ ...state, orderBySpecs: specs as Array<[string, "asc" | "desc"]> })
+		orderBy(...specs: Array<any>) {
+			if (typeof specs[0] === "function") return makeQuery({ ...state, orderBySpecs: [], orderByFn: specs[0] })
+			return makeQuery({ ...state, orderBySpecs: specs as Array<[string, "asc" | "desc"]>, orderByFn: undefined })
 		},
 
 		limit(n) {

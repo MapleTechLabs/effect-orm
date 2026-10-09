@@ -316,12 +316,16 @@ export function toFragment(value: unknown): SqlFragment {
 const untypedLiteral = (value: boolean): string =>
 	activeSqlSyntax()?.literal(value, "an untyped boolean") ?? (value ? "1" : "0")
 
-/** A LIKE pattern: an expression as it renders, a string bound when the compile binds values. */
-const likePattern = (pattern: string | Expr<string, any>): string => {
-	if (typeof pattern !== "string") return compile(pattern.toFragment())
-	const bind = activeLiteralBinder()
-	return bind !== undefined ? bind(pattern) : compile(str(pattern))
-}
+/** A string value, bound when the compile binds values, else a quoted literal. */
+const boundString = (value: string): SqlFragment =>
+	known(() => {
+		const bind = activeLiteralBinder()
+		return bind !== undefined ? bind(value) : compile(str(value))
+	})
+
+/** A LIKE pattern: an expression as it renders, a string as `boundString`. */
+const likePattern = (pattern: string | Expr<string, any>): string =>
+	compile(typeof pattern === "string" ? boundString(pattern) : pattern.toFragment())
 
 const dateTimeLiteral = (value: DateTime.Utc): string =>
 	activeSqlSyntax()?.dateTimeLiteral(value) ?? compile(str(chDateTimeLiteral(value)))
@@ -627,7 +631,7 @@ export function outerRef<T = string>(name: string): Expr<T> {
 }
 
 export function inList<T extends string>(expr: Expr<T>, values: readonly string[]): Condition {
-	return inCond(expr.toFragment(), "IN", values.map((v) => () => str(v)))
+	return inCond(expr.toFragment(), "IN", values.map((v) => () => boundString(v)))
 }
 
 export function inExprList<T>(expr: Expr<T>, values: readonly Expr<T>[]): Condition {
@@ -635,7 +639,7 @@ export function inExprList<T>(expr: Expr<T>, values: readonly Expr<T>[]): Condit
 }
 
 export function notInList(expr: Expr<string>, values: readonly string[]): Condition {
-	return inCond(expr.toFragment(), "NOT IN", values.map((v) => () => str(v)))
+	return inCond(expr.toFragment(), "NOT IN", values.map((v) => () => boundString(v)))
 }
 
 /**
