@@ -204,7 +204,8 @@ Each `${value}` renders as the rest of the builder renders it:
 | a column, expression, or another template | its SQL |
 | a `param.*` | a placeholder: bound on Postgres, a literal on ClickHouse |
 | a builder query | `(subquery)`, compiled with the outer query, its tenant scope counted |
-| a string, number, boolean, `Date`, `DateTime.Utc`, `null` | the dialect's escaped literal |
+| a string | bound on Postgres (`$n`), the escaped literal on ClickHouse |
+| a number, boolean, `Date`, `DateTime.Utc`, `null` | the dialect's escaped literal |
 | `CH.sql.ident(name)` | the name quoted by the dialect; plain names only, dotted for `schema.table` |
 | `CH.sql.raw(text)` | the text as-is — never from input |
 | `CH.sql.join(values, separator?)` | each value rendered, joined by `", "` or `separator`; not parenthesized, so it fits `IN (${…})`; an empty list fails the compile |

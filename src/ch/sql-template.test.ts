@@ -21,8 +21,9 @@ describe("CH.sql", () => {
 		expect(compiled.sql).toContain('(pg_current_xact_id()::xid::text) AS "txid"')
 		expect(compiled.sql).toContain('("keys"."uses" + 1) AS "next"')
 		expect(compiled.sql).toContain(`("keys"."meta" @> $2::jsonb)`)
-		expect(compiled.sql).toContain(`("keys"."id" <> 'it''s')`)
-		expect(compiled.parameters).toEqual(["o", '{"a":1}'])
+		// A plain string is bound on Postgres, like a param.
+		expect(compiled.sql).toContain(`("keys"."id" <> $3)`)
+		expect(compiled.parameters).toEqual(["o", '{"a":1}', "it's"])
 		expect(compiled.rowSchemaSource).toBe("derived")
 		expect(compiled.tenantScope).toBe("single-tenant")
 
@@ -65,10 +66,10 @@ describe("CH.sql", () => {
 				]),
 			{ c: "z" },
 		)
-		expect(compiled.sql).toContain(`("keys"."org" IN ('a', 'b', $1))`)
-		expect(compiled.sql).toMatch(/\("keys"\."id" IN \(SELECT[\s\S]*"other"\."org" = \$1\)\)/)
+		expect(compiled.sql).toContain(`("keys"."org" IN ($1, $2, $3))`)
+		expect(compiled.sql).toMatch(/\("keys"\."id" IN \(SELECT[\s\S]*"other"\."org" = \$3\)\)/)
 		expect(compiled.sql).toContain(`((length("keys"."org")) > 2)`)
-		expect(compiled.parameters).toEqual(["z"])
+		expect(compiled.parameters).toEqual(["a", "b", "z"])
 		expect(compiled.tenantScope).toBe("cross-tenant")
 	})
 
