@@ -273,9 +273,9 @@ export interface CHQuery<
 
 	orderBy(...specs: Array<OrderBySpec<Output>>): CHQuery<Cols, Output, Joins, Route, Params>
 	/** Sort by expressions of the source's columns, selected or not: `orderBy(($) => [[$.CreatedAt, "desc"]])`. */
-	orderBy(
-		fn: ($: JoinedColumnAccessor<Cols, Joins>) => ReadonlyArray<readonly [Expr<any, any>, "asc" | "desc"]>,
-	): CHQuery<Cols, Output, Joins, Route, Params>
+	orderBy<Q = never>(
+		fn: ($: JoinedColumnAccessor<Cols, Joins>) => ReadonlyArray<readonly [Expr<any, Q>, "asc" | "desc"]>,
+	): CHQuery<Cols, Output, Joins, Route, Params | Q>
 
 	/** At most `n` rows: a non-negative integer. */
 	limit<N extends number>(n: RowCount<N>): CHQuery<Cols, Output, Joins, Route, Params>
@@ -588,7 +588,7 @@ function makeQuery<
 			return makeQuery({ ...state, havingFn: appendConditions(state.havingFn, fn) })
 		},
 
-		orderBy(...specs: Array<any>) {
+		orderBy(...specs: Array<any>): any {
 			if (typeof specs[0] === "function") return makeQuery({ ...state, orderBySpecs: [], orderByFn: specs[0] })
 			return makeQuery({ ...state, orderBySpecs: specs as Array<[string, "asc" | "desc"]>, orderByFn: undefined })
 		},

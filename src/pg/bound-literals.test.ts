@@ -85,3 +85,17 @@ describe("orderBy and inList", () => {
 		expect(compiled.parameters).toEqual(["o1", "o2"])
 	})
 })
+
+describe("orderBy params", () => {
+	it("accepts columns of any table and requires the params its expressions use", () => {
+		const byKeys = (keys: ReadonlyArray<"email" | "orgId">) =>
+			PG.from(Users).select("email").orderBy(($) => keys.map((key) => [$[key], "asc"] as const))
+		expect(PG.compileUnsafe(byKeys(["orgId", "email"])).sql).toContain(`ORDER BY "users"."org_id" ASC, "users"."email" ASC`)
+		const byParam = PG.from(Users)
+			.select("email")
+			.orderBy(($) => [[PG.coalesce($.email, PG.param.string("fallback")), "asc"]])
+		// @ts-expect-error the fallback param is required
+		expect(() => PG.compileUnsafe(byParam, {})).toThrow("fallback")
+		expect(PG.compileUnsafe(byParam, { fallback: "z" }).parameters).toEqual(["z"])
+	})
+})
