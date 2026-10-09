@@ -138,6 +138,20 @@ export const Dashboards = PG.table("dashboards", {
 			expect(await cli("generate", "--config", "ch.config.ts")).toBe(1)
 		})
 
+		it("writes migration.sql with emit: sql, which the next generate reads as its parent", async () => {
+			writeFileSync(join(dir, "pg1.ts"), pgModule())
+			writeFileSync(join(dir, "sql.config.ts"), `export default { dialect: "postgres", emit: "sql", schema: "./pg1.ts", out: "./migrations" }\n`)
+			expect(await cli("generate", "--name", "init", "--config", "sql.config.ts")).toBe(0)
+			const [first] = folders()
+			expect(readdirSync(join(dir, "migrations", first!)).sort()).toEqual(["migration.sql", "snapshot.json"])
+			const sql = readFileSync(join(dir, "migrations", first!, "migration.sql"), "utf8")
+			expect(sql).toMatch(/^-- metadata\nCREATE TABLE IF NOT EXISTS "dashboards"/)
+			expect(sql).toContain(`;\n--> statement-breakpoint\n-- metadata\nCREATE INDEX IF NOT EXISTS "dashboards_open_idx"`)
+			expect(await cli("generate", "--config", "sql.config.ts")).toBe(0)
+			expect(folders()).toHaveLength(1)
+			expect(await cli("check", "--config", "sql.config.ts")).toBe(0)
+		})
+
 		it("adopts a drizzle-kit folder: baseline from its last snapshot, then diff the definitions against it", async () => {
 			const legacy = join(dir, "migrations", "20260101000000_drizzle_init")
 			mkdirSync(legacy, { recursive: true })
