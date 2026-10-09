@@ -36,8 +36,9 @@ const query = PG.from(Requests)
 	.orderBy(["count", "desc"])
 
 export const compiled = PG.compileUnsafe(query, { orgId: "org_1", since: new Date("2026-01-01T00:00:00Z") })
-// compiled.sql:        ... WHERE "requests"."OrgId" = $1 AND "requests"."At" >= $2 ...
-// compiled.parameters: ["org_1", "2026-01-01T00:00:00.000Z"]
+// compiled.sql:        ... FILTER (WHERE "requests"."DurationMs" >= $1) ...
+//                      ... WHERE "requests"."OrgId" = $2 AND "requests"."At" >= $3 ...
+// compiled.parameters: [500, "org_1", "2026-01-01T00:00:00.000Z"]
 
 const db = new PGlite()
 // The CREATE TABLE comes from the definition itself; migrations.md shows the managed way.
