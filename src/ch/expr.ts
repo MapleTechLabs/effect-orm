@@ -495,7 +495,10 @@ export function makeColumnRef<Name extends string, ColType extends CHType<string
 	// `alias.Column` when qualified: the qualifier is quoted segment by segment,
 	// the column as one identifier (a ClickHouse `Nested` column has a dot).
 	const qualified = columnName !== undefined && name.endsWith(`.${columnName}`)
-	const fragment = qualified ? ident(columnName, name.slice(0, -columnName.length - 1)) : ident(name)
+	const sqlName = columnType?.sqlName
+	const fragment = qualified
+		? ident(sqlName ?? columnName, name.slice(0, -columnName.length - 1))
+		: ident(sqlName ?? name)
 	const base = makeExpr<InferTS<ColType>>(
 		fragment,
 		columnType?.schema as Schema.Codec<InferTS<ColType>, any> | undefined,
@@ -503,7 +506,11 @@ export function makeColumnRef<Name extends string, ColType extends CHType<string
 			? undefined
 			: (value) => known(() => encodeColumnLiteral(columnType, value, columnName ?? name)),
 	)
-	if (columnType !== undefined) columnTypes.set(base, columnType)
+	// Without `sqlName`: a query reading this column as a subquery's output sees it under its alias.
+	if (columnType !== undefined) {
+		const { sqlName: _, ...outputType } = columnType
+		columnTypes.set(base, sqlName === undefined ? columnType : outputType)
+	}
 	const isTenantColumn = tenantColumn !== undefined && (columnName ?? name) === tenantColumn
 	const baseEq = base.eq
 	const baseIn = base.in_

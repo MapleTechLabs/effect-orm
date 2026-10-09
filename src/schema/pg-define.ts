@@ -13,7 +13,7 @@ import type { Condition, Expr } from "../ch/expr"
 import { encodeColumnLiteral } from "../ch/literal"
 import { createColumnAccessor, type ColumnAccessor } from "../ch/query"
 import type { Table } from "../ch/table"
-import type { CHType, ColumnDefs, InferTS } from "../ch/types"
+import { columnSqlName, type CHType, type ColumnDefs, type InferTS } from "../ch/types"
 import { postgresDialect } from "../pg/dialect"
 import { externalTable, type DdlExpr, type DdlKey } from "./define"
 import { withRenderProblems, type DefinitionProblem, type ProblemSink } from "./problems"
@@ -41,11 +41,19 @@ const renderExpr = <Cols extends ColumnDefs>(expr: DdlExpr<Cols> | DdlPredicate<
 
 /** Key parts: a column name is written quoted, an expression as it renders. */
 const renderKeyParts = <Cols extends ColumnDefs>(key: DdlKey<Cols>, columns: Cols): ReadonlyArray<string> =>
-	typeof key === "function" ? key(createColumnAccessor(columns)).map(renderValue) : key.map(quoteIdent)
+	typeof key === "function"
+		? key(createColumnAccessor(columns)).map(renderValue)
+		: key.map((column) => quoteIdent(columnSqlName(columns, column)))
 
 // Columns
 
 export interface ColumnOptions<T extends CHType<string, any, any>> {
+	/**
+	 * The column's name in the database, when it differs from its key in
+	 * `columns`: `orgId: PG.column(PG.text, { name: "org_id" })` is read and
+	 * written as `$.orgId` and stored as `org_id`.
+	 */
+	readonly name?: string
 	/** A literal default, encoded through the column's own type. */
 	readonly default?: InferTS<T>
 	/** `DEFAULT <expr>`, for a computed default such as `"now()"`. */
@@ -85,12 +93,22 @@ export type ColumnsOf<I extends Record<string, ColumnInput>> = {
 
 /** Columns declared with `default`, `defaultExpr` or `identity`: an insert may leave them out. */
 export type DefaultedColumnsOf<I extends Record<string, ColumnInput>> = {
-	[K in keyof I]: I[K] extends ColumnSpec<any, infer Given> ? ([Given] extends [never] ? never : K) : never
+	[K in keyof I]: I[K] extends ColumnSpec<any, infer Given>
+		? [Exclude<Given, "name">] extends [never]
+			? never
+			: K
+		: never
 }[keyof I] &
 	string
 
 const isColumnSpec = (input: ColumnInput): input is ColumnSpec<CHType<string, any, any>, any> =>
 	"_tag" in input && input._tag === "PgColumnSpec"
+
+/** The query-side type of a column input, carrying its `name` as `sqlName`. */
+export const columnTypeOfInput = (input: ColumnInput): CHType<string, any, any> => {
+	if (!isColumnSpec(input)) return input
+	return input.options.name === undefined ? input.type : { ...input.type, sqlName: input.options.name }
+}
 
 // Indexes and foreign keys
 
@@ -154,15 +172,21 @@ export const foreignKey = <const Column extends string, FCols extends ColumnDefs
 	readonly onUpdate?: ReferentialAction
 	/** Default `<table>_<columns>_<foreign table>_<foreign columns>_fk`, the name drizzle-kit gives. */
 	readonly name?: string
-}): ForeignKeySpec<Column> => ({
-	_tag: "PgForeignKeySpec",
-	columns: spec.columns,
-	references: typeof spec.references === "string" ? spec.references : spec.references.name,
-	foreignColumns: spec.foreignColumns,
-	onDelete: (spec.onDelete?.toUpperCase() ?? "NO ACTION") as PgReferentialAction,
-	onUpdate: (spec.onUpdate?.toUpperCase() ?? "NO ACTION") as PgReferentialAction,
-	name: spec.name,
-})
+}): ForeignKeySpec<Column> => {
+	const references = spec.references
+	return {
+		_tag: "PgForeignKeySpec",
+		columns: spec.columns,
+		references: typeof references === "string" ? references : references.name,
+		foreignColumns:
+			typeof references === "string"
+				? spec.foreignColumns
+				: spec.foreignColumns.map((column) => columnSqlName(references.columns, column)),
+		onDelete: (spec.onDelete?.toUpperCase() ?? "NO ACTION") as PgReferentialAction,
+		onUpdate: (spec.onUpdate?.toUpperCase() ?? "NO ACTION") as PgReferentialAction,
+		name: spec.name,
+	}
+}
 
 // Tables
 
@@ -288,7 +312,13 @@ export function table<const Name extends string, const Columns extends Record<st
 	definition: TableDefinition<Columns> | ExternalTableDefinition<Columns>,
 ): PgSchemaTable<Name, ColumnsOf<Columns>, DefaultedColumnsOf<Columns>> | Table<Name, any, any, any> {
 	if ("external" in definition) {
-		return externalTable(name, definition, (input): input is ColumnSpec<CHType<string, any, any>> => isColumnSpec(input as ColumnInput), [])
+		return externalTable(
+			name,
+			definition,
+			(input): input is ColumnSpec<CHType<string, any, any>> => isColumnSpec(input as ColumnInput),
+			[],
+			(spec) => columnTypeOfInput(spec as ColumnSpec<CHType<string, any, any>>),
+		)
 	}
 	return withRenderProblems(name, () => buildTable(name, definition))
 }
@@ -301,20 +331,19 @@ function buildTable<const Name extends string, const Columns extends Record<stri
 	checkIdentifier(problems, name, name)
 	const inputs = Object.entries(definition.columns)
 	if (inputs.length === 0) problems.push({ object: name, message: "a table needs columns" })
-	const types = Object.fromEntries(
-		inputs.map(([column, input]) => [column, isColumnSpec(input) ? input.type : input]),
-	) as ColumnsOf<Columns>
+	const types = Object.fromEntries(inputs.map(([column, input]) => [column, columnTypeOfInput(input)])) as ColumnsOf<Columns>
+	const sqlName = (column: string) => columnSqlName(types, column)
 	const has = (column: string) => Object.hasOwn(types, column)
 
 	const columnEntities = inputs.map(([column, input], position): PgColumnEntity => {
-		checkIdentifier(problems, `${name}.${column}`, column)
+		checkIdentifier(problems, `${name}.${column}`, sqlName(column))
 		const spec: ColumnSpec<CHType<string, any, any>> = isColumnSpec(input)
 			? input
 			: { _tag: "PgColumnSpec", type: input as CHType<string, any, any>, options: {} }
 		return {
 			kind: "column",
 			table: name,
-			name: column,
+			name: sqlName(column),
 			position,
 			type: canonicalPgType(spec.type.sql),
 			notNull: spec.type._tag !== "Nullable",
@@ -339,7 +368,7 @@ function buildTable<const Name extends string, const Columns extends Record<stri
 		if (pkColumns.length === 0) problems.push({ object: name, message: "a primary key needs columns" })
 		for (const column of pkColumns) {
 			if (!has(column)) problems.push({ object: `${name} primary key`, message: `${column} is not a column` })
-			if (columnEntities.find((c) => c.name === column)?.notNull === false) {
+			if (columnEntities.find((c) => c.name === sqlName(column))?.notNull === false) {
 				problems.push({
 					object: `${name}.${column}`,
 					message: "a primary key column cannot be nullable; Postgres would make it NOT NULL anyway",
@@ -369,7 +398,10 @@ function buildTable<const Name extends string, const Columns extends Record<stri
 	})
 
 	const foreignKeyEntities = (definition.foreignKeys ?? []).map((spec): PgForeignKeyEntity => {
-		const fkName = spec.name ?? defaultForeignKeyName(name, spec.columns, spec.references, spec.foreignColumns)
+		const fkColumns = spec.columns.map(sqlName)
+		// A table referencing itself names its own keys; another table's were mapped by `foreignKey`.
+		const fkForeignColumns = spec.references === name ? spec.foreignColumns.map(sqlName) : [...spec.foreignColumns]
+		const fkName = spec.name ?? defaultForeignKeyName(name, fkColumns, spec.references, fkForeignColumns)
 		checkIdentifier(problems, `${name} foreign key`, fkName)
 		for (const column of spec.columns) {
 			if (!has(column)) problems.push({ object: `${name} foreign key ${fkName}`, message: `${column} is not a column` })
@@ -384,9 +416,9 @@ function buildTable<const Name extends string, const Columns extends Record<stri
 			kind: "foreign_key",
 			table: name,
 			name: fkName,
-			columns: [...spec.columns],
+			columns: fkColumns,
 			foreignTable: spec.references,
-			foreignColumns: [...spec.foreignColumns],
+			foreignColumns: fkForeignColumns,
 			onDelete: spec.onDelete,
 			onUpdate: spec.onUpdate,
 		}
@@ -395,9 +427,11 @@ function buildTable<const Name extends string, const Columns extends Record<stri
 	const tableEntity: PgTableEntity = {
 		kind: "table",
 		name,
-		primaryKey: pk === undefined ? null : { name: pkName, columns: [...pkColumns] },
+		primaryKey: pk === undefined ? null : { name: pkName, columns: pkColumns.map(sqlName) },
 	}
-	const defaults = columnEntities.filter((c) => c.default !== null || c.identity !== null).map((c) => c.name)
+	const defaults = inputs
+		.filter((_, position) => columnEntities[position]!.default !== null || columnEntities[position]!.identity !== null)
+		.map(([column]) => column)
 	return {
 		_tag: "Table",
 		name,

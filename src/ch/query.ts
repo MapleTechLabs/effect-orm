@@ -32,6 +32,12 @@ import type { TenantScope } from "./compile"
 
 // Type utilities
 
+/** A select callback reading each named column under its own key. */
+const selectEvery =
+	(columns: ReadonlyArray<string>) =>
+	($: any): Record<string, any> =>
+		Object.fromEntries(columns.map((column) => [column, $[column]]))
+
 export type ColumnAccessor<Cols extends ColumnDefs> = {
 	readonly [K in keyof Cols & string]: ColumnRef<K, Cols[K]>
 }
@@ -209,6 +215,9 @@ export interface CHQuery<
 	readonly _state: CHQueryState
 	/** phantom */
 	readonly _phantom?: { cols: Cols; output: Output; joins: Joins; route: Route; params: (entries: Params) => void }
+
+	/** Select every column of the FROM table, as drizzle's bare `select()` does. Output keys are the column keys. */
+	select(): CHQuery<Cols, { readonly [K in keyof Cols]: InferTS<Cols[K]> }, Joins, Route, Params>
 
 	/** Select specific columns by name. Output keys match column names. */
 	select<K extends keyof Cols & string>(
@@ -537,18 +546,9 @@ function makeQuery<
 		_state: state,
 
 		select(...args: any[]): any {
+			if (args.length === 0) return makeQuery({ ...state, selectFn: selectEvery(Object.keys(state.columns)) })
 			// String overload: select("Col1", "Col2") → select($ => ({ Col1: $.Col1, Col2: $.Col2 }))
-			if (typeof args[0] === "string") {
-				const columns = args as string[]
-				return makeQuery({
-					...state,
-					selectFn: ($: any) => {
-						const result: Record<string, any> = {}
-						for (const col of columns) result[col] = $[col]
-						return result
-					},
-				})
-			}
+			if (typeof args[0] === "string") return makeQuery({ ...state, selectFn: selectEvery(args as string[]) })
 			// Callback overload: select($ => ({ ... }))
 			return makeQuery({ ...state, selectFn: args[0] })
 		},

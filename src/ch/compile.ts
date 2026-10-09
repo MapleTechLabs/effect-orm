@@ -8,7 +8,7 @@
 // 4. Assembling into SqlQuery and calling the existing compileQuery()
 
 import { compiled, compiledUnsafe, fail } from "./failure"
-import { custom, dateTime, dateTime64, type CHType, type ColumnDefs } from "./types"
+import { columnSqlName, custom, dateTime, dateTime64, type CHType, type ColumnDefs } from "./types"
 import type { CHQuery, CHQueryState, NeedsSelect } from "./query"
 import type { CHUnionQuery } from "./union"
 import { isInsert, type CHInsert } from "./insert"
@@ -1575,7 +1575,7 @@ const onConflictClause = (
 				return fail(new QueryBuilderDefect({ message: `${where}: the conflict target must name columns of the table` }), "")
 			}
 			const predicate = conflict.targetWhere?.(createColumnAccessor(table.columns))
-			target = ` (${targetColumns.map(quoteIdent).join(", ")})${
+			target = ` (${targetColumns.map((column) => quoteIdent(columnSqlName(table.columns, column))).join(", ")})${
 				predicate === undefined ? "" : ` WHERE ${compileSqlFragment(predicate.toFragment())}`
 			}`
 		}
@@ -1713,7 +1713,7 @@ const setAssignments = (
 		}
 		const sql = cell(column, value, `${context} set`)
 		wrote(column, value, sql)
-		return [`${quoteIdent(column)} = ${sql}`]
+		return [`${quoteIdent(columnSqlName(table.columns, column))} = ${sql}`]
 	})
 	if (assignments.length === 0) {
 		return fail(new QueryBuilderError({ code: "InvalidArguments", message: `${where}: ${context} sets no columns` }),[])
@@ -1856,7 +1856,7 @@ function compileInsert(insert: CHInsert<any, any, any, any>, params: Record<stri
 
 	const returning = returningOf(table, insert._state.returningFn, where)
 	const rendered = renderParams(
-		`INSERT INTO ${quoteIdentPath(table.name)} (${columns.map(quoteIdent).join(", ")})${writeSettingsClause(table, insert._state.settings, where)}\n${source}${conflictSql}${returning?.sql ?? ""}`,
+		`INSERT INTO ${quoteIdentPath(table.name)} (${columns.map((column) => quoteIdent(columnSqlName(table.columns, column))).join(", ")})${writeSettingsClause(table, insert._state.settings, where)}\n${source}${conflictSql}${returning?.sql ?? ""}`,
 		values,
 		dialect,
 	)

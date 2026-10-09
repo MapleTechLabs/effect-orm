@@ -42,8 +42,17 @@ export interface CHType<Tag extends string, A, I = A> {
 	 * (`$.Attrs.get(k)`) needs `V` to know how the result decodes.
 	 */
 	readonly element?: CHType<string, unknown, unknown>
+	/**
+	 * The column's name in the database, when a table declares it under another
+	 * key (`PG.column(PG.text, { name: "org_id" })` read as `$.orgId`). Every
+	 * place that writes the column's identifier writes this instead of the key.
+	 */
+	readonly sqlName?: string
 	readonly _phantom?: A
 }
+
+/** The name a table's column has in the database: its `sqlName`, or its key. */
+export const columnSqlName = (columns: ColumnDefs, key: string): string => columns[key]?.sqlName ?? key
 
 const chType = <const Tag extends string, A, I>(
 	_tag: Tag,
