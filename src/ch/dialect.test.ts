@@ -74,7 +74,8 @@ describe("dialect params", () => {
 			.select(($) => ({ count: $.Count }))
 			.where(($) => [$.OrgId.eq("org"), $.Timestamp.gte(CH.param.dateTime("start"))])
 		const compiled = compileCHUnsafe(query, { start: new Date("2026-01-01T00:00:00.250Z") }, { dialect: numbered })
-		expect(compiled.parameters).toEqual(["2026-01-01 00:00:00.250"])
+		// The compared literal is bound too, as its wire value.
+		expect(compiled.parameters).toEqual(["org", "2026-01-01 00:00:00.250"])
 	})
 
 	it("numbered placeholders reuse one slot for a repeated param; positional ones bind it again", () => {

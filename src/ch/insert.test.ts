@@ -182,9 +182,9 @@ describe("insertInto", () => {
 			expect(compiled.sql).toBe(
 				'INSERT INTO "counters" ("org", "key", "count", "locked")\nVALUES ($1, $2, $3, $4)\n' +
 					'ON CONFLICT ("org", "key") DO UPDATE SET "count" = "counters"."count" + "excluded"."count", "locked" = $5 ' +
-					'WHERE "counters"."locked" = FALSE\nRETURNING "count" AS "count"',
+					'WHERE "counters"."locked" = $6\nRETURNING "count" AS "count"',
 			)
-			expect(compiled.parameters).toEqual(["o", "k", 1, false, true])
+			expect(compiled.parameters).toEqual(["o", "k", 1, false, true, false])
 		})
 
 		it("a SET that writes another tenant makes the insert cross-tenant", () => {

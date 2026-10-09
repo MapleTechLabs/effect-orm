@@ -69,8 +69,11 @@ describe("postgres dialect", () => {
 			.orderBy(["service", "asc"])
 		const compiled = PG.compileUnsafe(query, { orgId: "org_1" })
 
-		expect(compiled.sql).toContain(`"OrgId" = $1`)
-		expect(compiled.parameters).toEqual(["org_1"])
+		// Values are bound like params, in the order the statement reads them.
+		expect(compiled.sql).toContain(`FILTER (WHERE "events"."Ok" = $1)`)
+		expect(compiled.sql).toContain(`"OrgId" = $2`)
+		expect(compiled.sql).toContain(`"Service" IN ($3, $4)`)
+		expect(compiled.parameters).toEqual([false, "org_1", "api", "web"])
 		expect(compiled.tenantScope).toBe("single-tenant")
 		expect(await run(compiled)).toEqual([
 			{ service: "api", events: 2, failures: 1, total: 30, average: 15 },
@@ -162,8 +165,9 @@ describe("postgres dialect", () => {
 			.select(($) => ({ count: $.Count }))
 			.where(($) => [$.OrgId.eq(CH.param.string("orgId")), $.Service.eq(tricky), $.Service.like("it's \\\\%")])
 		const compiled = PG.compileUnsafe(byLiteral, { orgId: "org_1" })
-		expect(compiled.sql).toContain(`E'it''s \\\\ a \\x5F_PARAM_string_orgId__ value'`)
-		expect(compiled.parameters).toEqual(["org_1"])
+		// Bound, never written into the statement: no quote, backslash or marker to escape.
+		expect(compiled.sql).not.toContain("it''s")
+		expect(compiled.parameters).toEqual(["org_1", tricky, "it's \\\\%"])
 		expect(await run(compiled)).toEqual([{ count: 1 }])
 	})
 
@@ -178,7 +182,7 @@ describe("postgres dialect", () => {
 			.groupBy("region")
 			.orderBy(["region", "asc"])
 		const compiled = PG.compileUnsafe(query, { ok: true })
-		expect(compiled.parameters).toEqual([true])
+		expect(compiled.parameters).toEqual(["org_1", true, '{"region":"us"}'])
 		expect(await run(compiled)).toEqual([
 			{ region: "eu", regions: ["api"] },
 			{ region: null, regions: [tricky] },

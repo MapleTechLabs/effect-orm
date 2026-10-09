@@ -10,6 +10,7 @@ import { type Brand, DateTime, Result, Schema } from "effect"
 import type { SqlFragment } from "../sql/sql-fragment"
 import { raw, str, ident, compile, as_ as sqlAs, known } from "../sql/sql-fragment"
 import { activeSqlSyntax } from "../sql/sql-syntax"
+import { activeLiteralBinder } from "../sql/literal-binder"
 import { chDateTimeLiteral, CHFloatResult, CHNumber, string as chString, type CHType, type InferTS } from "./types"
 import { encodeColumnLiteral } from "./literal"
 import { QueryBuilderError } from "./errors"
@@ -187,10 +188,11 @@ export interface Expr<TSType, P = never> {
 	lt<Q = never>(other: Operand<TSType, Q>): Condition<P | Q>
 	lte<Q = never>(other: Operand<TSType, Q>): Condition<P | Q>
 
-	// String operations. A `Nullable(String)` matches like a `String`.
-	like(this: Expr<string | null>, pattern: string): Condition<P>
-	notLike(this: Expr<string | null>, pattern: string): Condition<P>
-	ilike(this: Expr<string | null>, pattern: string): Condition<P>
+	// String operations. A `Nullable(String)` matches like a `String`. The pattern is a
+	// string, bound on a dialect that binds params, or a param or expression of one.
+	like<Q = never>(this: Expr<string | null>, pattern: string | Expr<string, Q>): Condition<P | Q>
+	notLike<Q = never>(this: Expr<string | null>, pattern: string | Expr<string, Q>): Condition<P | Q>
+	ilike<Q = never>(this: Expr<string | null>, pattern: string | Expr<string, Q>): Condition<P | Q>
 
 	// NULL and ranges
 	/** `expr IS NULL`. */
@@ -314,6 +316,13 @@ export function toFragment(value: unknown): SqlFragment {
 const untypedLiteral = (value: boolean): string =>
 	activeSqlSyntax()?.literal(value, "an untyped boolean") ?? (value ? "1" : "0")
 
+/** A LIKE pattern: an expression as it renders, a string bound when the compile binds values. */
+const likePattern = (pattern: string | Expr<string, any>): string => {
+	if (typeof pattern !== "string") return compile(pattern.toFragment())
+	const bind = activeLiteralBinder()
+	return bind !== undefined ? bind(pattern) : compile(str(pattern))
+}
+
 const dateTimeLiteral = (value: DateTime.Utc): string =>
 	activeSqlSyntax()?.dateTimeLiteral(value) ?? compile(str(chDateTimeLiteral(value)))
 
@@ -436,9 +445,9 @@ export function makeExpr<T>(
 		notBetween: (low, high) =>
 			makeCond(known(() => `${compile(fragment)} NOT BETWEEN ${compile(operand(low))} AND ${compile(operand(high))}`)),
 
-		like: (pattern: string) => makeCond(known(() => `${compile(fragment)} LIKE ${compile(str(pattern))}`)),
-		notLike: (pattern: string) => makeCond(known(() => `${compile(fragment)} NOT LIKE ${compile(str(pattern))}`)),
-		ilike: (pattern: string) => makeCond(known(() => `${compile(fragment)} ILIKE ${compile(str(pattern))}`)),
+		like: (pattern) => makeCond(known(() => `${compile(fragment)} LIKE ${likePattern(pattern)}`)),
+		notLike: (pattern) => makeCond(known(() => `${compile(fragment)} NOT LIKE ${likePattern(pattern)}`)),
+		ilike: (pattern) => makeCond(known(() => `${compile(fragment)} ILIKE ${likePattern(pattern)}`)),
 
 		in_: (...values) => inCond(fragment, "IN", values.map((v) => () => operand(v))),
 		notIn: (...values) => inCond(fragment, "NOT IN", values.map((v) => () => operand(v))),

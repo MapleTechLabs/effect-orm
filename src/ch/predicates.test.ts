@@ -39,8 +39,8 @@ describe("null and range predicates", () => {
 			CH.from(Jobs).select("id").where(($) => [$.id.between(CH.param.int("lo"), 9), $.done_at.isNull()]),
 			{ lo: 1 },
 		)
-		expect(where(compiled.sql)).toBe('WHERE "jobs"."id" BETWEEN $1 AND 9\n          AND "jobs"."done_at" IS NULL')
-		expect(compiled.parameters).toEqual([1])
+		expect(where(compiled.sql)).toBe('WHERE "jobs"."id" BETWEEN $1 AND $2\n          AND "jobs"."done_at" IS NULL')
+		expect(compiled.parameters).toEqual([1, 9])
 	})
 })
 

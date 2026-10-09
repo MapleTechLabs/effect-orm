@@ -67,6 +67,7 @@ insert may leave it out: `PG.InsertRowOf<typeof Requests>` makes it optional. Se
 | Identifiers | Bare: `events.OrgId` | Quoted: `"events"."OrgId"` |
 | String literals | Backslash escapes: `'it\'s'` | Doubled quotes: `'it''s'` |
 | Params | Written in as literals; `parameters` empty | Bound as `$1`, `$2`, … in `parameters` |
+| Values compared with a column, `LIKE` patterns | Written in as literals | Bound too, one param per distinct value |
 | `param.bool` | `1` / `0` | `true` / `false` |
 | `param.dateTime` | `'2026-01-01 00:00:00'` (UTC, zoneless) | `'2026-01-01T00:00:00.000Z'` |
 | `GROUP BY` keys | Select aliases | Select-list positions (`GROUP BY 1`) |
@@ -76,6 +77,11 @@ insert may leave it out: `PG.InsertRowOf<typeof Requests>` makes it optional. Se
 Postgres reads a bare name in `GROUP BY` as an input column before a select alias, so
 `select({ Service: lower($.Service) }).groupBy("Service")` would group by the raw column. Writing
 the position instead keeps ClickHouse's meaning.
+
+A value compared with a column (`$.email.eq(email)`, `in_`, `between`, a `LIKE` pattern) is
+bound like a param, so the statement text carries no values: it stays out of logs and traces, and
+one query shape is one statement. Two exceptions stay literals: an `onConflict*` `targetWhere`,
+which Postgres matches against a partial index's predicate as written, and DDL.
 
 Every string that reaches the SQL as a literal is escaped for Postgres. A value that spells the
 param marker `__PARAM_` is written as an `E'…'` string with the marker hex-escaped, and a

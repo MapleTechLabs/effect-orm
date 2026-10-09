@@ -24,9 +24,9 @@ describe("update", () => {
 			{ org: "o" },
 		)
 		expect(compiled.sql).toBe(
-			'UPDATE "counters" SET "count" = "count" + 1, "meta" = $1\nWHERE "org" = $2\n  AND "key" = \'k\'\nRETURNING "count" AS "count"',
+			'UPDATE "counters" SET "count" = "count" + 1, "meta" = $1\nWHERE "org" = $2\n  AND "key" = $3\nRETURNING "count" AS "count"',
 		)
-		expect(compiled.parameters).toEqual(['{"a":1}', "o"])
+		expect(compiled.parameters).toEqual(['{"a":1}', "o", "k"])
 		expect(compiled.kind).toBe("update")
 		expect(compiled.returning).toEqual(["count"])
 		expect(compiled.tenantScope).toBe("single-tenant")
@@ -150,7 +150,7 @@ describe("deleteFrom", () => {
 				expect(error.message).toContain("would write every row")
 			}
 			expect(PG.compileUnsafe(CH.deleteFrom(Counters).where(($) => [CH.rawCond(""), $.key.eq("k")])).sql).toBe(
-				'DELETE FROM "counters"\nWHERE "key" = \'k\'',
+				'DELETE FROM "counters"\nWHERE "key" = $1',
 			)
 		}),
 	)

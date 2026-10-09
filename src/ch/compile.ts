@@ -18,6 +18,7 @@ import { createColumnAccessor, createQualifiedColumnAccessor, createJoinedColumn
 import { aliased, columnTypeOf, isExprLike, type Condition, type Expr, type ParamsSatisfied } from "./expr"
 import { raw, identPath, quoteIdent, quoteIdentPath, compile as compileSqlFragment, type SqlFragment } from "../sql/sql-fragment"
 import { splitTerminalClauses } from "../sql/terminal-clauses"
+import { activeLiteralBinder, withLiteralBinder } from "../sql/literal-binder"
 import { compileQuery, type SqlQuery } from "../sql/sql-query"
 import { track, untracked, type RenderTrack } from "../sql/render-tracker"
 import { PARAM_MARKER_PREFIX, PARAM_PLACEHOLDER_PATTERN, param, paramSchema, type ParamKind } from "./param"
@@ -649,13 +650,14 @@ export function compileCHRaw(
 	params?: Record<string, unknown>,
 	options?: any,
 ): CompiledQuery<any, any> {
-	return withDialect(options?.dialect ?? currentDialect(), () =>
+	const dialect = options?.dialect ?? currentDialect()
+	return withDialect(dialect, () => withBoundLiterals(dialect, () =>
 		isInsert(query)
 			? compileInsert(query, params ?? {})
 			: isUpdate(query) || isDelete(query)
 				? compileUpdateOrDelete(query, params ?? {})
 				: compileInner(query as CHQuery<any, any, any, any>, params ?? {}, options),
-	)
+	))
 }
 
 /**
@@ -1308,7 +1310,8 @@ export function compileUnionRaw<Output extends Record<string, any>>(
 	params?: object,
 	options?: { rowSchema?: CompiledQueryRowSchema<Output>; deferParams?: boolean; dialect?: Dialect },
 ): CompiledQuery<Output, undefined> {
-	return withDialect(options?.dialect ?? currentDialect(), () => compileUnionInner(union, params ?? {}, options))
+	const dialect = options?.dialect ?? currentDialect()
+	return withDialect(dialect, () => withBoundLiterals(dialect, () => compileUnionInner(union, params ?? {}, options)))
 }
 
 /** The recursion behind {@link compileUnionUnsafe}; see {@link compileInner}. */
@@ -1449,11 +1452,12 @@ function renderParams(
 	const style = dialect.params
 
 	const resolved = sql.replace(PARAM_PLACEHOLDER_PATTERN, (placeholder, kind: string, name: string) => {
-		if (!(name in params)) {
+		const literal = boundLiterals?.get(name)
+		if (!(name in params) && literal === undefined) {
 			missing.push(name)
 			return placeholder
 		}
-		const value = encodeParam(dialect, kind as ParamKind, name, params[name])
+		const value = literal !== undefined ? literal.wire : encodeParam(dialect, kind as ParamKind, name, params[name])
 		if (style._tag === "inline") return checkedLiteral(dialect, value, paramContext(kind, name))
 
 		const key = `${kind}\0${name}`
@@ -1540,6 +1544,40 @@ const insertWireValue = custom("insert value", Schema.Unknown)
 /** Prefix of the params an insert's literal values become. */
 const VALUE_PARAM = "$$v"
 
+/** Prefix of the params a compared value becomes on a dialect that binds. */
+const LITERAL_PARAM = "$$l"
+
+/** The values bound by the enclosing compile, by param name; see `withBoundLiterals`. */
+let boundLiterals: Map<string, { readonly wire: unknown }> | undefined
+
+/**
+ * Run a compile with its literal values bound, on a dialect that binds params:
+ * each value becomes a param of its own, the same value the same param, so the
+ * statement text carries no values and renders the same way every time it is
+ * rendered. A nested compile shares the outer one's values.
+ */
+function withBoundLiterals<A>(dialect: Dialect, body: () => A): A {
+	if (dialect.params._tag !== "bind" || activeLiteralBinder() !== undefined) return body()
+	const values = new Map<string, { readonly wire: unknown }>()
+	const names = new Map<string, string>()
+	const previous = boundLiterals
+	boundLiterals = values
+	try {
+		return withLiteralBinder((wire) => {
+			const key = `${typeof wire}\0${JSON.stringify(wire)}`
+			let name = names.get(key)
+			if (name === undefined) {
+				name = `${LITERAL_PARAM}${names.size}`
+				names.set(key, name)
+				values.set(name, { wire })
+			}
+			return compileSqlFragment(param.of(insertWireValue, name).toFragment())
+		}, body)
+	} finally {
+		boundLiterals = previous
+	}
+}
+
 const EMPTY_ROW = Schema.Struct({}) as unknown as CompiledQueryRowSchema<never>
 
 /**
@@ -1575,8 +1613,10 @@ const onConflictClause = (
 				return fail(new QueryBuilderDefect({ message: `${where}: the conflict target must name columns of the table` }), "")
 			}
 			const predicate = conflict.targetWhere?.(createColumnAccessor(table.columns))
+			// Inline, never bound: Postgres infers the partial unique index from this predicate's text.
+			const predicateSql = predicate === undefined ? undefined : withLiteralBinder(undefined, () => compileSqlFragment(predicate.toFragment()))
 			target = ` (${targetColumns.map((column) => quoteIdent(columnSqlName(table.columns, column))).join(", ")})${
-				predicate === undefined ? "" : ` WHERE ${compileSqlFragment(predicate.toFragment())}`
+				predicateSql === undefined ? "" : ` WHERE ${predicateSql}`
 			}`
 		}
 	} else if (conflict.targetWhere !== undefined) {
