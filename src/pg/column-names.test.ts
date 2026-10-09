@@ -5,7 +5,7 @@
 
 import { PgliteClient } from "@effect/sql-pglite"
 import { describe, expect, it, layer } from "@effect/vitest"
-import { DateTime, Effect, Layer } from "effect"
+import { DateTime, Effect, Exit, Layer, Schema } from "effect"
 import * as SqlClient from "effect/sql/SqlClient"
 import * as Db from "../database"
 import * as PG from "../postgres"
@@ -167,5 +167,25 @@ describe("spreading the accessor", () => {
 		expect(compiled.sql).toContain(`"member_id" AS "id"`)
 		const selected = PG.compileUnsafe(PG.from(Members).select(($) => ({ ...$, lowered: PG.lower($.email) })))
 		expect(selected.sql).toContain(`"members"."left_at" AS "leftAt"`)
+	})
+})
+
+describe("undecoded", () => {
+	it("reads a column as the driver sends it, typed as its wire form", async () => {
+		const Docs = PG.table("docs_undecoded", {
+			columns: {
+				id: PG.text,
+				body: PG.column(PG.nullable(PG.jsonb(Schema.Struct({ v: Schema.Number }))), { name: "body_json" }),
+			},
+			primaryKey: ["id"],
+		})
+		const query = PG.from(Docs).select(($) => ({ id: $.id, body: PG.undecoded($.body) }))
+		const compiled = PG.compileUnsafe(query)
+		expect(compiled.sql).toContain(`"docs_undecoded"."body_json" AS "body"`)
+		const rows = await Effect.runPromise(compiled.decodeRows([{ id: "a", body: { old: "shape" } }]))
+		expect(rows).toEqual([{ id: "a", body: { old: "shape" } }])
+		// The typed read refuses the same row.
+		const strict = PG.compileUnsafe(PG.from(Docs).select("id", "body"))
+		expect(Exit.isFailure(await Effect.runPromiseExit(strict.decodeRows([{ id: "a", body: { old: "shape" } }])))).toBe(true)
 	})
 })

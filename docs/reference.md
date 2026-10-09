@@ -110,6 +110,7 @@ time; see [Params and compilation](./params-and-compilation.md#what-each-kind-ac
 | `when(value, fn)`         | `Condition \| undefined`; skips `undefined`/`null`/`false` |
 | `whenTrue(flag, fn)`      | Boolean-gated variant                                      |
 | `inList(expr, values)`    | `expr IN ('a', 'b')`                                       |
+| `undecoded(column)`       | the column as the driver sends it, typed as its wire form  |
 | `inExprList(expr, exprs)` | Same for expression lists                                  |
 | `notInList(expr, values)` | `expr NOT IN ('a', 'b')`                                   |
 | `not(condition)`          | `NOT (…)`                                                  |
@@ -463,7 +464,9 @@ which normalizes Postgres timestamp text to ISO-8601.
 `count()`, `countDistinct(x)`, `countIf(c)`, `sum(x)`, `sumIf(x, c)`, `avg(x)`, `min(x)`,
 `max(x)`, `percentileCont(f, x)`, `arrayAgg(x)`, `dateTrunc(unit, ts)` (`DateTruncUnit` is the
 unit union), `dateBin(seconds, ts)`, `now()`, `lower(x)`, `upper(x)`, `length(x)`,
-`coalesce(x, fallback)`, `nullIf(x, value)`, `jsonText(x, key)`. See
+`coalesce(x, fallback)`, `nullIf(x, value)`, `jsonText(x, key)`, `greatest(a, ...)`, `least(a, ...)`,
+`caseWhen([[c, v], ...], otherwise)`, `asBoolean(c)` (a condition as a value) and
+`typedValue(type, value)` (a value bound as a column type writes it). See
 [Postgres functions](./postgres.md#functions) for the SQL each writes.
 
 ### Dialect

@@ -11,7 +11,7 @@ import type { SqlFragment } from "../sql/sql-fragment"
 import { raw, str, ident, compile, as_ as sqlAs, known } from "../sql/sql-fragment"
 import { activeSqlSyntax } from "../sql/sql-syntax"
 import { activeLiteralBinder } from "../sql/literal-binder"
-import { chDateTimeLiteral, CHFloatResult, CHNumber, string as chString, type CHType, type InferTS } from "./types"
+import { chDateTimeLiteral, CHFloatResult, CHNumber, string as chString, type CHType, type InferEncoded, type InferTS } from "./types"
 import { encodeColumnLiteral } from "./literal"
 import { QueryBuilderError } from "./errors"
 import { fail } from "./failure"
@@ -495,6 +495,17 @@ export function makeUntypedExpr<T = unknown>(
 // Retain column descriptors through direct projections into derived sources.
 const columnTypes = new WeakMap<Expr<any>, CHType<string, any, any>>()
 export const columnTypeOf = (expr: Expr<any>): CHType<string, any, any> | undefined => columnTypes.get(expr)
+
+/**
+ * A column read as the driver sends it, without its type's decoding: a jsonb
+ * document as `unknown`, a branded id as its string. For a reader that decodes
+ * stored values itself, say to tolerate an older document shape. Writes and
+ * every other read keep the column's type.
+ */
+export function undecoded<C extends CHType<string, any, any>>(column: ColumnRef<string, C>): Expr<InferEncoded<C>> {
+	// The value passes through as the driver sent it, which is what the column's wire type describes.
+	return makeExpr<InferEncoded<C>>(column.toFragment(), Schema.Unknown as Schema.Codec<InferEncoded<C>, unknown>)
+}
 
 // ColumnRef implementation
 

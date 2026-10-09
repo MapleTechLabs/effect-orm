@@ -259,6 +259,37 @@ export const postgresCases: readonly PostgresCase[] = [
 		expected: [{ region: "eu", absent: null }],
 	},
 	{
+		id: "conditionals-and-typed-values",
+		covers: pg("greatest", "least", "caseWhen", "asBoolean", "typedValue"),
+		build: () =>
+			PG.compileUnsafe(
+				typedRows().select(($) => ({
+					high: PG.greatest($.Int4, $.Int8, PG.typedValue(PG.int8, 6)),
+					low: PG.least($.Int4, $.Int8),
+					later: PG.greatest($.AtMillis, PG.typedValue(PG.timestamptzMillis, Date.parse("2026-01-02T00:00:00Z"))),
+					size: PG.caseWhen(
+						[
+							[$.Int8.gt(100), PG.typedValue(PG.text, "large")],
+							[$.Int8.gt(5), PG.typedValue(PG.text, "medium")],
+						],
+						PG.typedValue(PG.text, "small"),
+					),
+					big: PG.asBoolean($.Int8.gt(5)),
+					raw: PG.undecoded($.Doc),
+				})),
+			),
+		expected: [
+			{
+				high: 8,
+				low: 4,
+				later: Date.parse("2026-01-02T00:00:00Z"),
+				size: "medium",
+				big: true,
+				raw: { region: "eu" },
+			},
+		],
+	},
+	{
 		id: "compile-entry-points",
 		covers: pg("compile", "postgresDialect"),
 		build: () => {

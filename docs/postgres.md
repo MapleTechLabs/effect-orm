@@ -130,6 +130,14 @@ Comparisons with a literal-union column take only its members: with `status` typ
 | `lower`, `upper`, `length` | same | |
 | `coalesce(x, fallback)` | `coalesce(x, fallback)` | No longer nullable |
 | `jsonText(x, key)` | `(x ->> key)` | `null` when absent |
+| `greatest(a, ...)`, `least(a, ...)` | same | NULL arguments are skipped |
+| `caseWhen([[c, v], ...], otherwise)` | `CASE WHEN c THEN v ... ELSE otherwise END` | |
+| `asBoolean(c)` | `(c)` | A condition as a value, to select or `set` |
+| `typedValue(type, value)` | a bound param | Encoded as `type` writes it: `typedValue(T.columns.at, ms)` |
+
+`undecoded($.column)` reads a column without its codec: a jsonb document as `unknown`, a branded
+id as its string. Use it where the reader decodes stored values itself (to tolerate an older
+document shape, or to name the bad row in its own error); every other read stays typed.
 
 The shared operators (`eq`, `in_`, `like`, `ilike`, `and`, `or`, `not`, arithmetic, `lit`) work
 unchanged. `/postgres` exports only functions Postgres has, plus `nullIf`, which renders the
