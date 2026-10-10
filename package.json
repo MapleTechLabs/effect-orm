@@ -92,9 +92,13 @@
 		"prepublishOnly": "bun run test:release",
 		"test:clickhouse": "bun run build && bun scripts/test-clickhouse.ts",
 		"test:package": "bun run build && bun scripts/check-package.ts",
-		"test:release": "bun scripts/test-clickhouse.ts --release"
+		"test:release": "bun scripts/test-clickhouse.ts --release",
+		"changeset": "changeset",
+		"version-packages": "changeset version",
+		"release": "changeset publish"
 	},
 	"devDependencies": {
+		"@changesets/cli": "3.0.3",
 		"@clickhouse/client": "1.21.0",
 		"@effect/language-service": "^0.87.3",
 		"@effect/platform-bun": "4.0.0",

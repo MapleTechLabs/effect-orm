@@ -1,0 +1,54 @@
+name: Release
+
+on:
+    push:
+        branches: [main]
+    workflow_dispatch:
+
+concurrency: ${{ github.workflow }}-${{ github.ref }}
+
+permissions:
+    contents: write
+    pull-requests: write
+    id-token: write
+
+jobs:
+    release:
+        name: Version or publish
+        # A manual run on another branch must never reach `changeset publish`.
+        if: github.ref == 'refs/heads/main'
+        runs-on: ubuntu-latest
+        timeout-minutes: 20
+        services:
+            clickhouse:
+                image: clickhouse/clickhouse-server:26.8.2.7
+                env:
+                    CLICKHOUSE_USER: maple
+                    CLICKHOUSE_PASSWORD: maple
+                    CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+                ports:
+                    - 8123:8123
+                options: >-
+                    --health-cmd "clickhouse-client --user maple --password maple --query 'SELECT 1'"
+                    --health-interval 5s
+                    --health-timeout 5s
+                    --health-retries 20
+        steps:
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+            - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+            - run: bun install --frozen-lockfile
+            # With changesets pending, opens or updates the "Version Packages" PR.
+            # Once that PR is merged, publishes to npm; prepublishOnly runs the release checks first.
+            # npm authenticates through trusted publishing (OIDC), so no token is configured here.
+            - uses: changesets/action@ae32849d5ba541f9ae29e40e22a623bc13562f51 # v2.1.2
+              with:
+                  version-script: bun run version-packages
+                  publish-script: bun run release
+                  commit-message: "chore: version packages"
+                  pr-title: "chore: version packages"
+              env:
+                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+                  NPM_CONFIG_PROVENANCE: "true"
+                  EFFECT_ORM_CLICKHOUSE_URL: http://127.0.0.1:8123
+                  EFFECT_ORM_CLICKHOUSE_USER: maple
+                  EFFECT_ORM_CLICKHOUSE_PASSWORD: maple
