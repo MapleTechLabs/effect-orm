@@ -376,9 +376,10 @@ export const fromSqlClient = (sql: SqlClient.SqlClient, options: FromSqlClientOp
 			return yield* restoreCause<E>(exit.cause, bodyExit, depth)
 		}).pipe(
 			Effect.withSpan("effect_orm.transaction", {
+				// Semconv defines no transaction attributes, and `db.*` is reserved for it.
 				attributes: {
-					"db.transaction.isolation_level": options.isolationLevel ?? "default",
-					"db.transaction.access_mode": options.accessMode ?? "default",
+					...(options.isolationLevel !== undefined && { "effect_orm.transaction.isolation_level": options.isolationLevel }),
+					...(options.accessMode !== undefined && { "effect_orm.transaction.access_mode": options.accessMode }),
 				},
 			}),
 		) as Effect.Effect<A, E | DatabaseError | TransactionError, Exclude<R, Transaction>>
