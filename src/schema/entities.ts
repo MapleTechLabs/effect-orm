@@ -114,17 +114,23 @@ export type AnySchemaEntity = SchemaEntity | PgSchemaEntity
 
 /** A stable key per entity, unique within a snapshot: `<kind>:<name>`, or `<kind>:<table>.<name>` for a table's parts. */
 export const entityKey = (entity: AnySchemaEntity): string =>
-	"table" in entity ? `${entity.kind}:${entity.table}.${entity.name}` : `${entity.kind}:${entity.name}`
+	"table" in entity
+		? `${entity.kind}:${entity.table}.${entity.name}`
+		: entity.kind === "enum" && entity.schema !== null
+			? `${entity.kind}:${entity.schema}.${entity.name}`
+			: `${entity.kind}:${entity.name}`
 
 const kindOrder: Record<AnySchemaEntity["kind"], number> = {
-	table: 0,
-	column: 1,
-	index: 2,
-	foreign_key: 3,
-	materialized_view: 4,
+	enum: 0,
+	table: 1,
+	column: 2,
+	index: 3,
+	unique: 4,
+	foreign_key: 5,
+	materialized_view: 6,
 }
 
-/** Tables, then columns in declaration order, then indexes, foreign keys, views. Deterministic. */
+/** Enums, tables, then columns in declaration order, then indexes, unique constraints, foreign keys, views. Deterministic. */
 export const sortEntities = <E extends AnySchemaEntity>(entities: ReadonlyArray<E>): ReadonlyArray<E> =>
 	[...entities].sort((a, b) => {
 		const byKind = kindOrder[a.kind] - kindOrder[b.kind]

@@ -64,19 +64,24 @@ export {
 } from "./schema/snapshot"
 export {
 	PgColumnEntity,
+	PgEnumEntity,
 	PgForeignKeyEntity,
 	PgIdentity,
 	PgIndexEntity,
 	PgReferentialAction,
 	PgSchemaEntity,
 	PgTableEntity,
+	PgUniqueEntity,
 	canonicalPgType,
+	pgTypeName,
 } from "./schema/pg-entities"
 export {
 	PgMigrationFile,
 	PgMigrationOp,
 	labelOfPg,
 	pgIdent,
+	renderPgAddUnique,
+	renderPgCreateEnum,
 	renderPgOp,
 	renderPgSchema,
 	type PgOpLabel,

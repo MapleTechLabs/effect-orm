@@ -67,8 +67,51 @@ export const PgForeignKeyEntity = Schema.Struct({
 })
 export type PgForeignKeyEntity = typeof PgForeignKeyEntity.Type
 
-export const PgSchemaEntity = Schema.Union([PgTableEntity, PgColumnEntity, PgIndexEntity, PgForeignKeyEntity])
+/**
+ * An enum type (`CREATE TYPE ... AS ENUM`). `schema` is `null` for the schema
+ * migrations run in, which is how a column of the type spells it too.
+ */
+export const PgEnumEntity = Schema.Struct({
+	kind: Schema.Literal("enum"),
+	schema: Schema.NullOr(Schema.String),
+	name: Schema.String,
+	/** The labels, in sort order. */
+	values: Schema.Array(Schema.String),
+})
+export type PgEnumEntity = typeof PgEnumEntity.Type
+
+/** A `UNIQUE` constraint, as `ALTER TABLE ... ADD CONSTRAINT ... UNIQUE` creates it (not a unique index). */
+export const PgUniqueEntity = Schema.Struct({
+	kind: Schema.Literal("unique"),
+	table: Schema.String,
+	name: Schema.String,
+	columns: Schema.Array(Schema.String),
+	/** `NULLS NOT DISTINCT` (Postgres 15+): two rows with nulls in the key conflict. */
+	nullsNotDistinct: Schema.Boolean,
+})
+export type PgUniqueEntity = typeof PgUniqueEntity.Type
+
+export const PgSchemaEntity = Schema.Union([
+	PgEnumEntity,
+	PgTableEntity,
+	PgColumnEntity,
+	PgIndexEntity,
+	PgUniqueEntity,
+	PgForeignKeyEntity,
+])
 export type PgSchemaEntity = typeof PgSchemaEntity.Type
+
+const PLAIN_TYPE_NAME = /^[a-z_][a-z0-9_$]*$/
+
+/**
+ * How `format_type` writes an enum's name in a column type: bare when it is a
+ * plain lowercase identifier, double-quoted otherwise, and qualified by its
+ * schema when it has one.
+ */
+export const pgTypeName = (schema: string | null, name: string): string => {
+	const part = (id: string) => (PLAIN_TYPE_NAME.test(id) ? id : `"${id.replace(/"/g, '""')}"`)
+	return schema === null ? part(name) : `${part(schema)}.${part(name)}`
+}
 
 /** Postgres truncates longer identifiers silently, which would make every later comparison miss. */
 export const PG_MAX_IDENTIFIER = 63

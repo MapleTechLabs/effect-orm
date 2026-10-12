@@ -6,11 +6,27 @@
 // replayed against a hand-fixed database does not trip over its own objects.
 
 import { Schema } from "effect"
-import { PgColumnEntity, PgForeignKeyEntity, PgIndexEntity, PgTableEntity, type PgSchemaEntity } from "./pg-entities"
+import {
+	PgColumnEntity,
+	PgEnumEntity,
+	PgForeignKeyEntity,
+	PgIndexEntity,
+	PgTableEntity,
+	PgUniqueEntity,
+	type PgSchemaEntity,
+} from "./pg-entities"
 
 const PrimaryKey = Schema.NullOr(Schema.Struct({ name: Schema.String, columns: Schema.Array(Schema.String) }))
 
+/** An enum type, by name: `schema` is `null` for the schema migrations run in. */
+const EnumRef = { schema: Schema.NullOr(Schema.String), name: Schema.String }
+
 export const PgMigrationOp = Schema.Union([
+	Schema.Struct({ op: Schema.Literal("create_enum"), enum: PgEnumEntity }),
+	Schema.Struct({ op: Schema.Literal("drop_enum"), ...EnumRef }),
+	/** `ALTER TYPE ... ADD VALUE`, placed `BEFORE` an existing label, or appended when `before` is `null`. */
+	Schema.Struct({ op: Schema.Literal("add_enum_value"), ...EnumRef, value: Schema.String, before: Schema.NullOr(Schema.String) }),
+	Schema.Struct({ op: Schema.Literal("rename_enum_value"), ...EnumRef, from: Schema.String, to: Schema.String }),
 	Schema.Struct({ op: Schema.Literal("create_table"), table: PgTableEntity, columns: Schema.Array(PgColumnEntity) }),
 	Schema.Struct({ op: Schema.Literal("drop_table"), name: Schema.String }),
 	Schema.Struct({ op: Schema.Literal("add_column"), column: PgColumnEntity }),
@@ -20,6 +36,8 @@ export const PgMigrationOp = Schema.Union([
 	Schema.Struct({ op: Schema.Literal("set_primary_key"), table: Schema.String, from: PrimaryKey, to: PrimaryKey }),
 	Schema.Struct({ op: Schema.Literal("create_index"), index: PgIndexEntity }),
 	Schema.Struct({ op: Schema.Literal("drop_index"), table: Schema.String, name: Schema.String }),
+	Schema.Struct({ op: Schema.Literal("add_unique"), unique: PgUniqueEntity }),
+	Schema.Struct({ op: Schema.Literal("drop_unique"), table: Schema.String, name: Schema.String }),
 	Schema.Struct({ op: Schema.Literal("add_foreign_key"), foreignKey: PgForeignKeyEntity }),
 	Schema.Struct({ op: Schema.Literal("drop_foreign_key"), table: Schema.String, name: Schema.String }),
 ])
@@ -37,6 +55,25 @@ export type PgMigrationFile = typeof PgMigrationFile.Type
 export const pgIdent = (name: string): string => `"${name.replace(/"/g, '""')}"`
 
 const list = (names: ReadonlyArray<string>): string => names.map(pgIdent).join(", ")
+
+/** A string literal, quotes doubled. */
+const pgString = (value: string): string => `'${value.replace(/'/g, "''")}'`
+
+/** An enum's name as DDL writes it: always quoted, qualified when it has a schema. */
+const enumIdent = (ref: { readonly schema: string | null; readonly name: string }): string =>
+	ref.schema === null ? pgIdent(ref.name) : `${pgIdent(ref.schema)}.${pgIdent(ref.name)}`
+
+/**
+ * `CREATE TYPE ... AS ENUM`, skipped when the type exists: Postgres has no
+ * `IF NOT EXISTS` for it, and a type created by hand (behind `PG.custom`)
+ * before it was declared with `enumType` must not fail the migration. A type
+ * that exists with other labels is left as it is, and `verify` reports it.
+ */
+export const renderPgCreateEnum = (entity: PgEnumEntity): string =>
+	`DO $effect_orm$ BEGIN CREATE TYPE ${enumIdent(entity)} AS ENUM (${entity.values.map(pgString).join(", ")}); EXCEPTION WHEN duplicate_object THEN NULL; END $effect_orm$`
+
+export const renderPgAddUnique = (unique: PgUniqueEntity): string =>
+	`ALTER TABLE ${pgIdent(unique.table)} ADD CONSTRAINT ${pgIdent(unique.name)} UNIQUE${unique.nullsNotDistinct ? " NULLS NOT DISTINCT" : ""} (${list(unique.columns)})`
 
 export const renderPgColumnDefinition = (column: PgColumnEntity): string => {
 	const parts = [pgIdent(column.name), column.type]
@@ -68,15 +105,19 @@ export const renderPgAddForeignKey = (fk: PgForeignKeyEntity): string => {
 const alter = (table: string, action: string): string => `ALTER TABLE ${pgIdent(table)} ${action}`
 
 /**
- * Every CREATE statement for a schema: tables, then indexes, then foreign
- * keys, so every table a key references exists before the key.
+ * Every CREATE statement for a schema: enums, tables, unique constraints,
+ * indexes, then foreign keys, so every type a column uses exists before its
+ * table, and every table and unique key a foreign key references exists
+ * before the key.
  */
 export const renderPgSchema = (entities: ReadonlyArray<PgSchemaEntity>): ReadonlyArray<string> => {
 	const pick = <K extends PgSchemaEntity["kind"]>(kind: K) =>
 		entities.filter((e): e is Extract<PgSchemaEntity, { kind: K }> => e.kind === kind)
 	const columns = pick("column")
 	return [
+		...pick("enum").map(renderPgCreateEnum),
 		...pick("table").map((table) => renderPgCreateTable(table, columns.filter((c) => c.table === table.name))),
+		...pick("unique").map(renderPgAddUnique),
 		...pick("index").map(renderPgCreateIndex),
 		...pick("foreign_key").map(renderPgAddForeignKey),
 	]
@@ -89,6 +130,7 @@ export const labelOfPg = (op: PgMigrationOp): PgOpLabel => {
 	switch (op.op) {
 		case "drop_table":
 		case "drop_column":
+		case "drop_enum":
 			return "destructive"
 		case "alter_column":
 			return op.from.type === op.to.type ? "metadata" : "rewrite"
@@ -100,6 +142,14 @@ export const labelOfPg = (op: PgMigrationOp): PgOpLabel => {
 /** The statements one op runs, in order. */
 export const renderPgOp = (op: PgMigrationOp): ReadonlyArray<string> => {
 	switch (op.op) {
+		case "create_enum":
+			return [renderPgCreateEnum(op.enum)]
+		case "drop_enum":
+			return [`DROP TYPE IF EXISTS ${enumIdent(op)}`]
+		case "add_enum_value":
+			return [`ALTER TYPE ${enumIdent(op)} ADD VALUE IF NOT EXISTS ${pgString(op.value)}${op.before === null ? "" : ` BEFORE ${pgString(op.before)}`}`]
+		case "rename_enum_value":
+			return [`ALTER TYPE ${enumIdent(op)} RENAME VALUE ${pgString(op.from)} TO ${pgString(op.to)}`]
 		case "create_table":
 			return [renderPgCreateTable(op.table, op.columns)]
 		case "drop_table":
@@ -142,6 +192,10 @@ export const renderPgOp = (op: PgMigrationOp): ReadonlyArray<string> => {
 			return [renderPgCreateIndex(op.index)]
 		case "drop_index":
 			return [`DROP INDEX IF EXISTS ${pgIdent(op.name)}`]
+		case "add_unique":
+			return [renderPgAddUnique(op.unique)]
+		case "drop_unique":
+			return [alter(op.table, `DROP CONSTRAINT IF EXISTS ${pgIdent(op.name)}`)]
 		case "add_foreign_key":
 			return [renderPgAddForeignKey(op.foreignKey)]
 		case "drop_foreign_key":

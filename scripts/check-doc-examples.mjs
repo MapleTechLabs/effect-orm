@@ -109,6 +109,14 @@ assert.deepEqual(postgres.rows, [
   { route: "/checkout", count: 2, slow: 1, p50: 510 },
   { route: "/search", count: 1, slow: 0, p50: 40 },
 ])
+const enums = await import("./postgres-enums")
+const enumDdl = await Effect.runPromise(enums.ddl)
+assert.match(enumDdl[0], /CREATE TYPE "channel_type" AS ENUM \\('public', 'private', 'direct'\\)/)
+assert.equal(enumDdl.at(-1), 'ALTER TABLE "channels" ADD CONSTRAINT "channels_slug_unique" UNIQUE ("slug")')
+assert.deepEqual(enums.shared.parameters, ["public", "private"])
+assert.deepEqual(await Effect.runPromise(enums.shared.decodeRows([{ id: "c", type: "public" }])), [{ id: "c", type: "public" }])
+await assert.rejects(() => Effect.runPromise(enums.shared.decodeRows([{ id: "c", type: "secret" }])))
+assert.match(sql(enums.upsert), /ON CONFLICT \\("slug"\\) DO UPDATE SET/)
 const database = await import("./database-transaction")
 assert.deepEqual(database.balances, { from: 70, to: 30, refused: "InsufficientFunds" })
 console.log("Markdown example behavior checks passed")

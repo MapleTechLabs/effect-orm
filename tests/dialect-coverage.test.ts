@@ -172,7 +172,7 @@ export const postgresInventory = Object.keys(PG)
 	.sort()
 
 const ddl =
-	"DDL definition, not a query: rendered and diffed in src/schema/pg-schema.test.ts and applied to PGlite in src/migrate/pg-migrate.test.ts."
+	"DDL definition, not a query: rendered and diffed in src/schema/pg-schema.test.ts and pg-enums-uniques.test.ts, and applied to PGlite in src/migrate/pg-migrate.test.ts and pg-enums-uniques.test.ts."
 
 const postgresExemptions = {
 	"pg:PgNumber": "Wire codec behind every numeric type; the types fixture decodes it from number, bigint and string.",
@@ -182,6 +182,7 @@ const postgresExemptions = {
 	"pg:column": ddl,
 	"pg:index": ddl,
 	"pg:uniqueIndex": ddl,
+	"pg:unique": ddl,
 	"pg:foreignKey": ddl,
 	"pg:defaultForeignKeyName": ddl,
 }

@@ -60,9 +60,10 @@ A column's key is its name in SQL unless `PG.column` gives it another: `orgId: P
 { name: "org_id" })` is stored as `org_id` and read, written, filtered and indexed as `orgId`
 everywhere else, as drizzle's `text("org_id")` is. Rows decode under the key.
 
-A Postgres column is `NOT NULL` unless its type is `PG.nullable(...)`. See
-[Postgres](./postgres.md) for its types and [migrations](./migrations.md#postgres) for its
-indexes and foreign keys.
+A Postgres column is `NOT NULL` unless its type is `PG.nullable(...)`. An enum column's type is
+a `PG.enumType("status", ["open", "closed"])`, which `generate` creates as a type of its own. See
+[Postgres](./postgres.md) for its types and enums, and [migrations](./migrations.md#postgres) for
+its indexes, unique constraints and foreign keys.
 
 ## Keys, defaults, and tenancy
 
@@ -78,7 +79,9 @@ decide the insert row type, so it is derived from the DDL rather than declared t
 | `codec`, `comment`        | `CODEC(…)`, `COMMENT`  | unchanged                    |
 
 Postgres columns take `default`, `defaultExpr`, and `identity` (`"always"` or `"by default"`);
-each makes the column optional on insert. Postgres generated columns are not modeled yet.
+each makes the column optional on insert. They also take `unique` (`true`, a constraint name, or
+`{ name, nullsNotDistinct }`), a one-column `UNIQUE` constraint, which leaves the insert type
+alone. Postgres generated columns are not modeled yet.
 
 ```ts
 const Requests = CH.table("requests", {
@@ -134,7 +137,8 @@ const RoutesHourlyMv = CH.materializedView("routes_hourly_mv", {
 ```
 
 Postgres indexes are `PG.index` and `PG.uniqueIndex`, over column names or expressions, with
-`where` for a partial index; foreign keys are `PG.foreignKey`. Both are covered in
+`where` for a partial index; unique constraints are `PG.unique` in `uniqueConstraints`, and
+foreign keys are `PG.foreignKey`. All are covered in
 [Schema and migrations](./migrations.md#postgres).
 
 ## External tables
@@ -339,7 +343,8 @@ A brand is strict everywhere it is written or compared:
   param value that fails them is a `QueryBuilderError` from `compile`.
 
 A literal union (`PG.brand(PG.text, Schema.Literals(["open", "closed"]))`) is not a brand: it
-compares against any string, and the database checks the value.
+compares against its members, or a param of the primitive (`param.string`), which the database
+checks. A Postgres enum column, `PG.enumType(...)`, behaves the same way.
 
 `CH.custom("String", OrgId)` brands the same way, but replaces the wire codec with `OrgId` itself;
 prefer `brand` over a built-in type whose codec does work (numbers, timestamps).

@@ -235,7 +235,7 @@ export const generate = (config: KitConfig, cwd: string, options: GenerateOption
 				if (result.unsupported.length > 0) {
 					return yield* new KitError({
 						code: "unsupported",
-						message: "these changes need a table rebuild or a data rewrite, which generate does not write yet",
+						message: "these changes need a table or type rebuild, a data rewrite, or a migration of their own, which generate does not write",
 						details: result.unsupported.map((u) => `${u.entity}: ${u.message}`),
 					})
 				}
@@ -248,7 +248,7 @@ export const generate = (config: KitConfig, cwd: string, options: GenerateOption
 				if (result.missingHints.length > 0) {
 					return yield* new KitError({
 						code: "missing_hints",
-						message: "confirm data loss with --hints, or run in a terminal to be asked",
+						message: "confirm data loss (or an enum label rename) with --hints, or run in a terminal to be asked",
 						details: [JSON.stringify(result.missingHints)],
 					})
 				}

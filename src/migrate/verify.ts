@@ -34,6 +34,8 @@ export interface Drift {
 		| "identity"
 		| "default"
 		| "index"
+		| "unique"
+		| "enum"
 		| "foreign_key"
 		| "view_target"
 		| "view_body"

@@ -1,12 +1,15 @@
 // Every Postgres function and type fixture, executed on Postgres 17 (PGlite).
 import { PGlite } from "@electric-sql/pglite"
-import { afterAll, describe, expect, it } from "@effect/vitest"
+import { afterAll, beforeAll, describe, expect, it } from "@effect/vitest"
 import { Effect } from "effect"
-import { postgresCases } from "./dialect-cases.postgres"
+import { postgresCases, postgresSetup } from "./dialect-cases.postgres"
 import { runOn } from "./postgres-support"
 
 // PGlite 0.5 takes the session time zone from the host; the fixtures assume UTC.
 const db = new PGlite({ postgresqlconf: "timezone = 'UTC'" })
+beforeAll(async () => {
+	for (const statement of postgresSetup) await db.exec(statement)
+})
 afterAll(() => db.close())
 
 describe("postgres dialect fixtures", () => {

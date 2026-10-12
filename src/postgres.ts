@@ -21,14 +21,22 @@ export { nullIf } from "./ch/functions"
 export { postgresDialect }
 
 // Tables and their DDL. `table` is the only way to declare a table: it carries
-// the keys, indexes and foreign keys `effect-orm generate` diffs.
+// the keys, indexes, unique constraints and foreign keys `effect-orm generate`
+// diffs. `enumType` is a column type and a schema object both.
 export {
 	table,
 	column,
 	index,
 	uniqueIndex,
+	unique,
 	foreignKey,
 	defaultForeignKeyName,
+	enumType,
+	type EnumOptions,
+	type PgEnum,
+	type UniqueColumnOptions,
+	type UniqueOptions,
+	type UniqueSpec,
 	type ColumnInput,
 	type ColumnOptions,
 	type ColumnSpec,

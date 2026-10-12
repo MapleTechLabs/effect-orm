@@ -28,9 +28,18 @@ import type { MigrationOp } from "./ops"
 export const Hint = Schema.Union([
 	Schema.Struct({
 		type: Schema.Literal("confirm_data_loss"),
-		kind: Schema.Literals(["table", "column"]),
-		/** `table` or `table.column`. */
+		/** `enum`: dropping a Postgres enum type. */
+		kind: Schema.Literals(["table", "column", "enum"]),
+		/** `table`, `table.column`, or the enum's name. */
 		entity: Schema.String,
+	}),
+	/** A Postgres enum label renamed in place (`ALTER TYPE ... RENAME VALUE`): rows holding it now hold `to`. */
+	Schema.Struct({
+		type: Schema.Literal("confirm_rename"),
+		kind: Schema.Literal("enum_value"),
+		/** `<enum>.<old label>`. */
+		entity: Schema.String,
+		to: Schema.String,
 	}),
 ])
 export type Hint = typeof Hint.Type
@@ -48,7 +57,9 @@ export interface DiffResult<Op = MigrationOp> {
 	readonly unsupported: ReadonlyArray<UnsupportedChange>
 }
 
-const hintKey = (hint: Hint): string => `${hint.type}:${hint.kind}:${hint.entity}`
+/** Hints match on this; a rename's target is part of what was confirmed. */
+export const hintKey = (hint: Hint): string =>
+	`${hint.type}:${hint.kind}:${hint.entity}${hint.type === "confirm_rename" ? `>${hint.to}` : ""}`
 
 const byKind = <K extends SchemaEntity["kind"]>(entities: ReadonlyArray<SchemaEntity>, kind: K) =>
 	new Map(

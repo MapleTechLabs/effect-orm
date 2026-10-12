@@ -7,12 +7,24 @@
 // The first `generate` after it then shows, as ordinary ops, every place the
 // definitions and the database disagree.
 //
-// Only what the entity model holds converts: tables, columns, primary keys,
-// indexes, foreign keys in the `public` schema. Anything else (enums,
-// sequences, views, policies, check and unique constraints, identity and
-// generated columns, other schemas) is reported, and nothing is written.
+// Only what the entity model holds converts: enums, tables, columns, primary
+// keys, indexes, unique constraints and foreign keys in the `public` schema,
+// and enums in other schemas. Anything else (sequences, views, policies,
+// check constraints, generated columns, identities with custom sequences,
+// tables in other schemas) is reported, and nothing is written.
+//
+// `public` is read as the schema migrations run in, as drizzle-kit reads it:
+// a `public` enum is unqualified, so a column of it has the type `name`, as
+// `format_type` writes it.
 
-import { canonicalPgType, type PgIdentity, type PgReferentialAction, type PgSchemaEntity, type PgTableEntity } from "./pg-entities"
+import {
+	canonicalPgType,
+	pgTypeName,
+	type PgIdentity,
+	type PgReferentialAction,
+	type PgSchemaEntity,
+	type PgTableEntity,
+} from "./pg-entities"
 import { sortEntities } from "./entities"
 
 export interface DrizzleImport {
@@ -102,6 +114,10 @@ export const fromDrizzleSnapshot = (json: unknown): DrizzleImport => {
 			if (str(raw.name) !== "public") unsupported.push(`schema ${str(raw.name)}`)
 			continue
 		}
+		if (type === "enums") {
+			entities.push({ kind: "enum", schema: schema === "public" ? null : schema, name: str(raw.name), values: strings(raw.values) })
+			continue
+		}
 		if (schema !== "public") {
 			unsupported.push(`${where} (schema ${schema})`)
 			continue
@@ -114,7 +130,9 @@ export const fromDrizzleSnapshot = (json: unknown): DrizzleImport => {
 			}
 			case "columns": {
 				const table = str(raw.table)
-				if (raw.typeSchema !== null && raw.typeSchema !== undefined) unsupported.push(`${where}: an enum or custom type`)
+				// drizzle-kit sets `typeSchema` for an enum column; `type` is then the enum's bare name.
+				const typeSchema = raw.typeSchema === null || raw.typeSchema === undefined ? undefined : str(raw.typeSchema)
+				const baseType = typeSchema === undefined ? str(raw.type) : pgTypeName(typeSchema === "public" ? null : typeSchema, str(raw.type))
 				if (raw.generated !== null && raw.generated !== undefined) unsupported.push(`${where}: a generated column`)
 				const identity = identityOf(raw.identity, str(raw.table), str(raw.name), str(raw.type))
 				if (typeof identity === "string" && identity.startsWith("!")) unsupported.push(`${where}: ${identity.slice(1)}`)
@@ -126,7 +144,7 @@ export const fromDrizzleSnapshot = (json: unknown): DrizzleImport => {
 					table,
 					name: str(raw.name),
 					position,
-					type: canonicalPgType(`${str(raw.type)}${"[]".repeat(dimensions)}`),
+					type: typeSchema === undefined ? canonicalPgType(`${baseType}${"[]".repeat(dimensions)}`) : `${baseType}${"[]".repeat(dimensions)}`,
 					notNull: raw.notNull === true,
 					default: defaultOf(raw.default),
 					identity: identity === "always" || identity === "by default" ? identity : null,
@@ -149,6 +167,16 @@ export const fromDrizzleSnapshot = (json: unknown): DrizzleImport => {
 					method: typeof raw.method === "string" && raw.method.length > 0 ? raw.method.toLowerCase() : "btree",
 					columns: Array.isArray(raw.columns) ? raw.columns.map(indexPart) : [],
 					where: typeof raw.where === "string" && raw.where.length > 0 ? raw.where : null,
+				})
+				break
+			}
+			case "uniques": {
+				entities.push({
+					kind: "unique",
+					table: str(raw.table),
+					name: str(raw.name),
+					columns: strings(raw.columns),
+					nullsNotDistinct: raw.nullsNotDistinct === true,
 				})
 				break
 			}
