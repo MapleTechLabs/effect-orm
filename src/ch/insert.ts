@@ -273,6 +273,21 @@ export interface CHInsert<
 	crossTenant(): CHInsert<Cols, Defaulted, Computed, Output, Params>
 }
 
+/**
+ * Any insert, by what compiling and running one reads: its tag, its state, and
+ * the row and params its phantom carries. `compile` and `Database.run` take
+ * this rather than `CHInsert<any, ...>`, because TypeScript 5.x compares a
+ * concrete insert with `CHInsert<any, ...>` method by method, and the generic
+ * `onConflictDoUpdate` does not survive that (`ConflictTarget<any>` is any
+ * `string`; `any` is not `never`). TypeScript 7 accepts either.
+ */
+export interface AnyInsert<Output = any, Params = never> {
+	readonly _tag: "CHInsert"
+	/** @internal — runtime insert state */
+	readonly _state: CHInsertState
+	readonly _phantom?: { readonly output: Output; readonly params: (entries: Params) => void }
+}
+
 const makeInsert = <Cols extends ColumnDefs, Defaulted extends string, Computed extends string, Output>(
 	state: CHInsertState,
 ): CHInsert<Cols, Defaulted, Computed, Output, any> => ({

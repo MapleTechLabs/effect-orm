@@ -546,6 +546,31 @@ OFFSET 1",
 }
 `;
 
+exports[`core SQL (clickhouse) > union-cross-tenant 1`] = `
+{
+  "parameters": [],
+  "sql": "WITH orders AS (
+<orders fixture>
+),
+customers AS (
+<customers fixture>
+)
+SELECT
+          count() AS orders
+        FROM orders
+UNION ALL
+WITH orders AS (
+<orders fixture>
+),
+customers AS (
+<customers fixture>
+)
+SELECT
+          count() AS orders
+        FROM orders",
+}
+`;
+
 exports[`core SQL (clickhouse) > union-format 1`] = `
 {
   "parameters": [],
@@ -1211,5 +1236,34 @@ SELECT
 ORDER BY "total" DESC
 LIMIT 2
 OFFSET 1",
+}
+`;
+
+exports[`core SQL (postgres) > union-cross-tenant 1`] = `
+{
+  "parameters": [],
+  "sql": "(
+WITH "orders" AS (
+<orders fixture>
+),
+"customers" AS (
+<customers fixture>
+)
+SELECT
+          count(*) AS "orders"
+        FROM "orders"
+)
+UNION ALL
+(
+WITH "orders" AS (
+<orders fixture>
+),
+"customers" AS (
+<customers fixture>
+)
+SELECT
+          count(*) AS "orders"
+        FROM "orders"
+)",
 }
 `;

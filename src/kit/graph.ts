@@ -64,7 +64,7 @@ const changesBetween = (
 /** The table an entity belongs to, so two branches editing one table conflict. */
 const ownerOf = (key: string): string => {
 	const [kind, rest = ""] = key.split(":")
-	return kind === "column" || kind === "index" || kind === "foreign_key" ? `table:${rest.split(".")[0]}` : key
+	return kind === "column" || kind === "index" || kind === "unique" || kind === "foreign_key" ? `table:${rest.split(".")[0]}` : key
 }
 
 export const analyze = (migrations: ReadonlyArray<LoadedMigration>): Effect.Effect<GraphAnalysis> =>

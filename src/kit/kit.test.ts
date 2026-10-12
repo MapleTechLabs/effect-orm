@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
-import { afterEach, beforeEach, describe, expect, it } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { runCli } from "../kit"
 
 const src = resolve(import.meta.dirname, "..")
@@ -136,6 +136,51 @@ export const Dashboards = PG.table("dashboards", {
 
 			writeFileSync(join(dir, "ch.config.ts"), `export default { schema: "./pg2.ts", out: "./migrations" }\n`)
 			expect(await cli("generate", "--config", "ch.config.ts")).toBe(1)
+		})
+
+		it("generates enum types and unique constraints, asks to rename a label, and refuses to remove one", async () => {
+			const module = (labels: string) => `
+import * as PG from "${src}/postgres"
+
+export const Status = PG.enumType("ticket_status", [${labels}])
+export const Tickets = PG.table("tickets", {
+	columns: { id: PG.text, slug: PG.column(PG.text, { unique: true }), status: PG.column(Status, { default: "open" }) },
+	primaryKey: ["id"],
+})
+`
+			// A fresh module and config path per step, so the import cache does not hand back the last one.
+			let config = ""
+			const step = (file: string, labels: string) => {
+				writeFileSync(join(dir, `${file}.ts`), module(labels))
+				config = `${file}.config.ts`
+				pgConfig(`${file}.ts`, config)
+			}
+			const gen = (...args: Array<string>) => cli("generate", "--config", config, ...args)
+			// Refusals go to stderr.
+			const errors = vi.spyOn(console, "error").mockImplementation(() => undefined)
+			const stderr = () => errors.mock.calls.map((call) => call.join(" ")).join("\n")
+			step("e1", `"open", "closed"`)
+			expect(await gen("--name", "init")).toBe(0)
+			const [first] = folders()
+			const file = JSON.parse(readFileSync(join(dir, "migrations", first!, "migration.json"), "utf8"))
+			expect(file.ops.map((op: { op: string }) => op.op)).toEqual(["create_enum", "create_table", "add_unique"])
+
+			step("e2", `"open", "pending", "closed"`)
+			expect(await gen("--name", "pending")).toBe(0)
+			expect(lines.join("\n")).toContain(`[metadata] ALTER TYPE "ticket_status" ADD VALUE IF NOT EXISTS 'pending' BEFORE 'closed'`)
+
+			step("e3", `"open", "pending", "done"`)
+			expect(await gen("--name", "done")).toBe(2)
+			expect(stderr()).toContain('"type":"confirm_rename","kind":"enum_value","entity":"ticket_status.closed","to":"done"')
+			const hint = JSON.stringify([{ type: "confirm_rename", kind: "enum_value", entity: "ticket_status.closed", to: "done" }])
+			expect(await gen("--name", "done", "--hints", hint)).toBe(0)
+			expect(lines.join("\n")).toContain(`ALTER TYPE "ticket_status" RENAME VALUE 'closed' TO 'done'`)
+
+			step("e4", `"open", "done"`)
+			expect(await gen()).toBe(1)
+			expect(stderr()).toContain('ticket_status: removing "pending" needs the type rebuilt')
+			expect(await cli("check", "--config", config)).toBe(0)
+			errors.mockRestore()
 		})
 
 		it("writes migration.sql with emit: sql, which the next generate reads as its parent", async () => {

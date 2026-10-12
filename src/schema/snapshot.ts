@@ -16,22 +16,22 @@ import {
 	type SchemaEntity,
 	type Snapshot,
 } from "./entities"
-import type { PgSchemaTable } from "./pg-define"
-import type { PgSchemaEntity } from "./pg-entities"
+import { enumProblems, type PgEnum, type PgSchemaTable } from "./pg-define"
+import type { PgEnumEntity, PgSchemaEntity } from "./pg-entities"
 
 /** Anything a schema module may export that `generate` collects. */
-export type SchemaObject = SchemaTable<string, any> | MaterializedView<string> | PgSchemaTable<string, any>
+export type SchemaObject = SchemaTable<string, any> | MaterializedView<string> | PgSchemaTable<string, any> | PgEnum
 
 export const isSchemaObject = (value: unknown): value is SchemaObject =>
 	typeof value === "object" &&
 	value !== null &&
 	"ddl" in value &&
 	"_tag" in value &&
-	(value._tag === "Table" || value._tag === "MaterializedView")
+	(value._tag === "Table" || value._tag === "MaterializedView" || value._tag === "PgEnum")
 
 /** The dialect a definition was written for. */
 export const dialectOfObject = (object: SchemaObject): SchemaDialect =>
-	object._tag === "Table" && "dialect" in object.ddl ? object.ddl.dialect : "clickhouse"
+	object._tag === "PgEnum" ? "postgres" : object._tag === "Table" && "dialect" in object.ddl ? object.ddl.dialect : "clickhouse"
 
 /** Fail with every problem, or succeed with the sorted entities. */
 const validated = <E extends AnySchemaEntity>(
@@ -53,7 +53,7 @@ export const entitiesOf = (objects: ReadonlyArray<SchemaObject>): Effect.Effect<
 		if (object._tag === "Table") {
 			const ddl = object.ddl as SchemaTable<string, any>["ddl"]
 			entities.push(ddl.table, ...ddl.columns, ...ddl.indexes)
-		} else entities.push(object.ddl)
+		} else entities.push((object as MaterializedView<string>).ddl)
 	}
 	const seen = new Set<string>()
 	const names = new Map<string, string>()
@@ -88,23 +88,47 @@ export const entitiesOf = (objects: ReadonlyArray<SchemaObject>): Effect.Effect<
 }
 
 /**
- * The entities of a set of Postgres tables, validated as one schema: names are
- * unique, index and primary-key names do not collide (Postgres keeps them in
- * one namespace per schema), and every foreign key references a table and
- * columns of this schema.
+ * The entities of a set of Postgres tables and enums, validated as one schema:
+ * names are unique, index, unique-constraint and primary-key names do not
+ * collide (Postgres keeps them in one namespace per schema), an enum is
+ * declared one way, and every foreign key references a table and columns of
+ * this schema. Enums a table's columns use come with it, exported or not.
  */
 export const pgEntitiesOf = (objects: ReadonlyArray<SchemaObject>): Effect.Effect<ReadonlyArray<PgSchemaEntity>, SchemaDefinitionError> => {
 	const problems: ProblemSink = []
 	const tables: Array<PgSchemaTable<string, any>> = []
+	const enumSources: Array<PgEnumEntity> = []
 	for (const object of objects) {
-		problems.push(...object.problems)
 		if (dialectOfObject(object) !== "postgres") {
+			problems.push(...object.problems)
 			problems.push({ object: object.name, message: "is a ClickHouse definition; use entitiesOf" })
 			continue
 		}
-		tables.push(object as PgSchemaTable<string, any>)
+		if (object._tag === "PgEnum") {
+			enumSources.push(object.ddl.enum)
+			continue
+		}
+		problems.push(...object.problems)
+		const table = object as PgSchemaTable<string, any>
+		tables.push(table)
+		enumSources.push(...table.ddl.enums)
 	}
 	const entities: Array<PgSchemaEntity> = []
+	const enums = new Map<string, PgEnumEntity>()
+	for (const entity of enumSources) {
+		const key = entityKey(entity)
+		const other = enums.get(key)
+		if (other === undefined) {
+			enums.set(key, entity)
+			problems.push(...enumProblems(entity))
+		} else if (other.values.join("\u0000") !== entity.values.join("\u0000")) {
+			problems.push({
+				object: entity.schema === null ? entity.name : `${entity.schema}.${entity.name}`,
+				message: `is declared twice, with different values: ${JSON.stringify(other.values)} and ${JSON.stringify(entity.values)}`,
+			})
+		}
+	}
+	entities.push(...enums.values())
 	const relations = new Map<string, string>()
 	const claim = (name: string, what: string) => {
 		const other = relations.get(name)
@@ -113,11 +137,15 @@ export const pgEntitiesOf = (objects: ReadonlyArray<SchemaObject>): Effect.Effec
 		}
 		relations.set(name, what)
 	}
+	// A table is a type too (its row type), so an enum may not share its name.
+	const types = new Set([...enums.values()].filter((e) => e.schema === null).map((e) => e.name))
 	for (const { ddl } of tables) {
 		claim(ddl.table.name, `table ${ddl.table.name}`)
+		if (types.has(ddl.table.name)) problems.push({ object: ddl.table.name, message: "names both a table and an enum; Postgres keeps them in one namespace" })
 		if (ddl.table.primaryKey !== null) claim(ddl.table.primaryKey.name, `the primary key of ${ddl.table.name}`)
 		for (const index of ddl.indexes) claim(index.name, `an index on ${ddl.table.name}`)
-		entities.push(ddl.table, ...ddl.columns, ...ddl.indexes, ...ddl.foreignKeys)
+		for (const unique of ddl.uniques) claim(unique.name, `a unique constraint on ${ddl.table.name}`)
+		entities.push(ddl.table, ...ddl.columns, ...ddl.indexes, ...ddl.uniques, ...ddl.foreignKeys)
 	}
 	const columnsOf = new Map(tables.map(({ ddl }) => [ddl.table.name, new Set(ddl.columns.map((c) => c.name))]))
 	const seenConstraints = new Set<string>()

@@ -5,6 +5,7 @@ import { DateTime, Effect, Schema } from "effect"
 import { expect } from "vitest"
 import * as CH from "@maple-dev/effect-orm/clickhouse"
 import * as PG from "@maple-dev/effect-orm/postgres"
+import * as S from "@maple-dev/effect-orm/schema"
 import { postgresContext as ctx } from "./core-cases"
 
 export interface PostgresCase {
@@ -72,7 +73,29 @@ const typedRow = `SELECT
 	NULL::int4 AS "Missing"`
 const typedRows = () => CH.from(typed).withCTE("typed", typedRow)
 
+// An enum, created before the fixtures run. Its array arrives as text (`{ok,"it's"}`),
+// since the driver does not know the array type, and decodes through parsePgArrayLiteral.
+const Mood = PG.enumType("fixture_mood", ["ok", "meh", "it's"])
+const moods = PG.table("moods", { external: true, columns: { Mood, Moods: PG.array(Mood), Maybe: PG.nullable(Mood) } })
+const moodRow = `SELECT 'meh'::fixture_mood AS "Mood", ARRAY['ok', 'it''s']::fixture_mood[] AS "Moods", NULL::fixture_mood AS "Maybe"`
+
+/** Statements the fixtures need run once, before them. */
+export const postgresSetup: readonly string[] = [S.renderPgCreateEnum(Mood.ddl.enum)]
+
 export const postgresCases: readonly PostgresCase[] = [
+	{
+		id: "enums",
+		covers: pg("enumType", "parsePgArrayLiteral"),
+		build: () =>
+			PG.compileUnsafe(
+				CH.from(moods)
+					.withCTE("moods", moodRow)
+					.select("Mood", "Moods", "Maybe")
+					.where(($) => [$.Mood.in_("meh", "it's"), $.Moods.eq(["ok", "it's"])]),
+				{},
+			),
+		expected: [{ Mood: "meh", Moods: ["ok", "it's"], Maybe: null }],
+	},
 	{
 		id: "aggregates",
 		covers: pg("count", "countDistinct", "countIf", "sum", "sumIf", "avg", "min", "max", "percentileCont", "compileUnsafe"),

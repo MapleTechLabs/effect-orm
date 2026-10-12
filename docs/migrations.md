@@ -285,17 +285,59 @@ with `where` for a partial index and `using` for the access method. A foreign ke
 `name` gets drizzle-orm's, `<table>_<columns>_<foreign table>_<foreign columns>_fk`, shortened
 with drizzle-kit's hash to `<table>_<hash>_fk` when it would pass 63 characters. Types are
 stored as Postgres names them (`int4` is `integer`), so snapshots compare with the catalog and
-with drizzle-kit. Check and unique constraints, generated columns, enums, views, sequences and other schemas
-are not modeled yet; write them in a `--custom` migration, and declare a view you query as an
+with drizzle-kit.
+
+**Unique constraints.** `uniqueConstraints: [PG.unique(name, columns, { nullsNotDistinct? })]`
+on a table, or `unique` in `PG.column` for one column, declares a `UNIQUE` constraint: `ALTER
+TABLE ... ADD CONSTRAINT name UNIQUE (columns)`, which is what drizzle-kit writes for `unique()`
+and `.unique()`. It is not a unique index: Postgres backs it with an index of the same name, but
+drops it with `DROP CONSTRAINT`, and a foreign key may reference its columns. `unique: true`
+names the constraint `<table>_<column>_unique`, drizzle-orm's name; `unique: "name"` or `unique:
+{ name, nullsNotDistinct }` gives another (drizzle-kit v1 names a column's unnamed `.unique()`
+`<table>_<column>_key`, so say so when adopting one). `nullsNotDistinct` needs Postgres 15.
+`onConflictDoNothing` / `onConflictDoUpdate` take the constraint's columns as `target`, or `{
+constraint: name }`.
+
+**Enums.** `PG.enumType(name, labels)` is a column type and a schema object; see
+[Enums](./postgres.md#enums). Its `CREATE TYPE` comes before every table, and is skipped when
+the type already exists (Postgres has no `IF NOT EXISTS` for it), so an enum created by hand
+behind `PG.custom` can be declared with `enumType` later.
+
+Check constraints, generated columns, views, sequences and tables in other schemas are not
+modeled yet; write them in a `--custom` migration, and declare a view you query as an
 [external table](./tables-and-types.md#external-tables).
 
 **Generating.** Postgres changes a column's type, nullability, default or identity in place
-(`ALTER COLUMN`), and a primary key, an index or a foreign key by dropping and re-creating it,
-so `generate` reports nothing as unsupported. A type change is labeled `rewrite`: Postgres
-rewrites the table under an exclusive lock. Drops still need confirmation, and renames still
-read as a drop and an add. Generated files carry `"dialect": "postgres"`. With `emit: "sql"` in
-the config, `generate` writes the rendered statements to `migration.sql` instead, each under a
-comment naming its label, so a tool that applies drizzle-kit folders applies the migration too.
+(`ALTER COLUMN`), and a primary key, an index, a unique constraint or a foreign key by dropping
+and re-creating it. A type change is labeled `rewrite`: Postgres rewrites the table under an
+exclusive lock. Drops need confirmation, dropping an enum type included (`"kind": "enum"`), and
+renames of tables and columns still read as a drop and an add. Enum types are created first and
+dropped last, unique constraints are added before the foreign keys that reference them, and
+turning a `uniqueIndex` into a `unique` of the same name drops the index before adding the
+constraint. Generated files carry `"dialect": "postgres"`. With `emit: "sql"` in the config,
+`generate` writes the rendered statements to `migration.sql` instead, each under a comment
+naming its label, so a tool that applies drizzle-kit folders applies the migration too.
+
+Enum labels change as far as Postgres can change them in place:
+
+- **A new label** is `ALTER TYPE ... ADD VALUE`, with `BEFORE` the label it precedes, so the
+  order matches the definition.
+- **A renamed label**, the same labels in the same order but one replaced in place, is `ALTER
+  TYPE ... RENAME VALUE`. Rows holding the old label then hold the new one, so it asks for a
+  hint first: `{"type":"confirm_rename","kind":"enum_value","entity":"channel_type.direct","to":"dm"}`.
+- **Removing or reordering labels** needs a new type and every column moved to it. `generate`
+  reports it as unsupported and writes nothing; write that rebuild with `--custom`.
+
+A migration is one transaction, and Postgres does not let a transaction use a label it added
+(`unsafe use of new value`). So `generate` refuses a migration that adds a label and also
+uses it, in a default or a partial index's predicate: add the label, generate, then use it and
+generate again. Before Postgres 12, `ADD VALUE` cannot run in a transaction at all, so a
+migration that adds a label needs Postgres 12 or later.
+
+Moving an enum from `PG.custom("public.channel_type", ...)` to `PG.enumType("channel_type",
+...)` generates a `create_enum`, skipped since the type exists, and an `alter_column` per column
+from `public.channel_type` to `channel_type`, the same type under its unqualified name, which
+leaves the data as it is.
 
 **Applying.** Each migration runs in one transaction with its ledger row, under a
 transaction-scoped advisory lock, so concurrent deploys wait for each other rather than
@@ -307,10 +349,15 @@ CONCURRENTLY`, `ALTER TYPE ... ADD VALUE` before Postgres 12) cannot be in a mig
 
 **Drift.** `verify` builds the expected schema in a scratch schema, inside a transaction it
 always rolls back, and reads both catalogs with the same queries, so Postgres deparses both
-sides and `'open'` matches the stored `'open'::text`. It checks tables, columns (type, `NOT NULL`,
-default, identity), primary keys, indexes (uniqueness, method, keys, predicate) and foreign keys
-in the current schema. `Migrate.verify(migrations, { ignoreTables })` skips tables another tool
-owns.
+sides and `'open'` matches the stored `'open'::text`. The scratch schema is searched before the
+current one, so a type of the current schema resolves in both, and a column of it reads
+`channel_type`, its default `'public'::channel_type`, on both sides, however the definition
+qualified it. It checks enum types (labels, in order, read from `pg_enum`), tables, columns
+(type, `NOT NULL`, default, identity), primary keys, unique constraints (columns, `NULLS NOT
+DISTINCT`), indexes (uniqueness, method, keys, predicate) and foreign keys in the current
+schema. A unique constraint is never read as an index, nor an index as a constraint. An enum
+the snapshot does not declare is reported only if no column uses it, so a `PG.custom` enum still
+verifies. `Migrate.verify(migrations, { ignoreTables })` skips tables another tool owns.
 
 ### Adopting a drizzle-kit folder
 
@@ -319,8 +366,10 @@ split on `--> statement-breakpoint`. Its `snapshot.json` files are recognized as
 and set aside, so the folder runs as it is. Adoption is two steps:
 
 1. `effect-orm generate --baseline --from-drizzle` writes a migration that runs nothing, whose
-   snapshot is drizzle-kit's last one converted to entities. Anything the conversion cannot model
-   is listed and nothing is written. Without `--from-drizzle` the snapshot comes from your
+   snapshot is drizzle-kit's last one converted to entities: enums, tables, columns (enum columns
+   included), keys, indexes, unique constraints and foreign keys. Anything the conversion cannot
+   model (sequences, views, check constraints, policies, tables in other schemas) is listed and
+   nothing is written. Without `--from-drizzle` the snapshot comes from your
    `PG.table` definitions instead. Migrations before the baseline are legacy: they run, but
    nothing diffs against them, and a plain `generate` refuses to run until a baseline exists.
 2. On a database drizzle-kit (or anything else) already migrated, `effect-orm baseline <name>`

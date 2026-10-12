@@ -518,6 +518,15 @@ legacy: `check` accepts them, `generate` refuses to diff until `--baseline` (fro
 definitions, or `--from-drizzle` from drizzle-kit's last snapshot) starts the history.
 `Migrate.baseline` records already-applied migrations without running them.
 
-**Not done.** Check and unique constraints, enums, views, sequences beyond identity defaults,
-non-`public` schemas, `CREATE INDEX CONCURRENTLY` (needs a migration outside a transaction),
-rename detection, and `pull` / `push`.
+**Enums and unique constraints.** `PG.enumType` is a column type and a schema object; its
+`enum` entity sorts before tables, `create_enum` runs first and `drop_enum` last. Labels are
+added in place (`ADD VALUE ... BEFORE`), a label replaced in place is renamed (`RENAME VALUE`)
+behind a `confirm_rename` hint, and removing or reordering labels is unsupported. A migration is
+one transaction, so a label it adds cannot be used in it; the diff reports a default or
+predicate that would. Unique constraints are `unique` entities, kept apart from unique indexes
+all the way to `verify`, which reads them from `pg_constraint`. `verify` searches the current
+schema after the scratch one, so types of the current schema deparse unqualified on both sides.
+
+**Not done.** Check constraints, views, sequences beyond identity defaults, tables in non-`public`
+schemas, removing enum labels (a type rebuild), `CREATE INDEX CONCURRENTLY` (needs a migration
+outside a transaction), rename detection for tables and columns, and `pull` / `push`.

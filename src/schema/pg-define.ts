@@ -1,5 +1,5 @@
-// Postgres schema definitions: `table` from `/postgres` and its column, index and foreign
-// key helpers.
+// Postgres schema definitions: `table` from `/postgres` and its column, index,
+// unique constraint and foreign key helpers, and `enumType`.
 //
 // The Postgres counterpart of the ClickHouse `table`: the value IS a `Table`, so every
 // query API accepts it, and its DDL rides beside it on `ddl` as Postgres
@@ -7,6 +7,7 @@
 // rendered once, here, with the Postgres dialect. A definition that cannot
 // become DDL records a problem, and `pgEntitiesOf` fails with it.
 
+import { Schema } from "effect"
 import { compile as compileFragment } from "../sql/sql-fragment"
 import { withDialect } from "../ch/dialect"
 import type { Condition, Expr } from "../ch/expr"
@@ -14,18 +15,22 @@ import { encodeColumnLiteral } from "../ch/literal"
 import { createColumnAccessor, type ColumnAccessor } from "../ch/query"
 import type { Table } from "../ch/table"
 import { columnSqlName, type CHType, type ColumnDefs, type InferTS } from "../ch/types"
+import type { PgType } from "../pg/types"
 import { postgresDialect } from "../pg/dialect"
 import { externalTable, type DdlExpr, type DdlKey } from "./define"
 import { withRenderProblems, type DefinitionProblem, type ProblemSink } from "./problems"
 import {
 	canonicalPgType,
 	PG_MAX_IDENTIFIER,
+	pgTypeName,
 	type PgColumnEntity,
+	type PgEnumEntity,
 	type PgForeignKeyEntity,
 	type PgIdentity,
 	type PgIndexEntity,
 	type PgReferentialAction,
 	type PgTableEntity,
+	type PgUniqueEntity,
 } from "./pg-entities"
 
 const quoteIdent = (name: string): string => `"${name.replace(/"/g, '""')}"`
@@ -63,6 +68,18 @@ export interface ColumnOptions<T extends CHType<string, any, any>> {
 	 * out; with `"always"`, Postgres also rejects an insert that gives it.
 	 */
 	readonly identity?: PgIdentity
+	/**
+	 * A one-column `UNIQUE` constraint. `true` names it
+	 * `<table>_<column>_unique`, drizzle-orm's name; a string names it.
+	 */
+	readonly unique?: true | string | UniqueColumnOptions
+}
+
+export interface UniqueColumnOptions {
+	/** Default `<table>_<column>_unique`. */
+	readonly name?: string
+	/** `NULLS NOT DISTINCT` (Postgres 15+). */
+	readonly nullsNotDistinct?: boolean
 }
 
 /** `Given` records which options were set, so the table knows which columns an insert may leave out. */
@@ -94,7 +111,7 @@ export type ColumnsOf<I extends Record<string, ColumnInput>> = {
 /** Columns declared with `default`, `defaultExpr` or `identity`: an insert may leave them out. */
 export type DefaultedColumnsOf<I extends Record<string, ColumnInput>> = {
 	[K in keyof I]: I[K] extends ColumnSpec<any, infer Given>
-		? [Exclude<Given, "name">] extends [never]
+		? [Exclude<Given, "name" | "unique">] extends [never]
 			? never
 			: K
 		: never
@@ -188,6 +205,106 @@ export const foreignKey = <const Column extends string, FCols extends ColumnDefs
 	}
 }
 
+export interface UniqueOptions {
+	/** `NULLS NOT DISTINCT` (Postgres 15+): rows whose keys hold nulls conflict too. */
+	readonly nullsNotDistinct?: boolean
+}
+
+export interface UniqueSpec<Column extends string> {
+	readonly _tag: "PgUniqueSpec"
+	readonly name: string
+	readonly columns: ReadonlyArray<Column>
+	readonly options: UniqueOptions
+}
+
+/**
+ * A `UNIQUE` constraint: `ALTER TABLE ... ADD CONSTRAINT name UNIQUE (columns)`,
+ * what drizzle-kit writes for `unique()`. Postgres backs it with a unique index
+ * of the same name, but it is a constraint: drop it with `DROP CONSTRAINT`, and
+ * name it in `onConflictDoNothing({ target: { constraint } })`.
+ */
+export const unique = <const Column extends string>(
+	name: string,
+	columns: ReadonlyArray<Column>,
+	options: UniqueOptions = {},
+): UniqueSpec<Column> => ({ _tag: "PgUniqueSpec", name, columns, options })
+
+// Enums
+
+export interface EnumOptions {
+	/** The schema the type lives in. Omit it for the schema the migrations run in. */
+	readonly schema?: string
+}
+
+/**
+ * A Postgres enum type. It is a column type (rows decode to `Values`, and
+ * inserts and comparisons take only its labels) and a schema object
+ * (`generate` creates and alters the type, before any table that uses it).
+ */
+export interface PgEnum<Values extends string = string, Name extends string = string> extends PgType<"PgEnum", Values, string> {
+	/** The type's name, without its schema. */
+	readonly name: Name
+	/** The labels, in sort order. */
+	readonly values: ReadonlyArray<Values>
+	readonly ddl: { readonly dialect: "postgres"; readonly enum: PgEnumEntity }
+	/** What is wrong with the definition; `pgEntitiesOf` fails when any object has one. */
+	readonly problems: ReadonlyArray<DefinitionProblem>
+}
+
+/**
+ * `CREATE TYPE name AS ENUM (values...)`: `PG.enumType("channel_type", ["public", "private"])`.
+ * Use it as a column type, bare or in `PG.column`, `PG.nullable` and `PG.array`,
+ * and export it from a schema module, or let the tables that use it bring it.
+ */
+export const enumType = <const Name extends string, const Values extends readonly [string, ...Array<string>]>(
+	name: Name,
+	values: Values,
+	options: EnumOptions = {},
+): PgEnum<Values[number], Name> => {
+	const schema = options.schema ?? null
+	const entity: PgEnumEntity = { kind: "enum", schema, name, values: [...values] }
+	const literals = Schema.Literals(values) as unknown as Schema.Codec<Values[number], string>
+	return {
+		_tag: "PgEnum",
+		sql: pgTypeName(schema, name),
+		schema: literals,
+		literalSchema: literals as Schema.Codec<unknown, unknown>,
+		name,
+		values: [...values],
+		ddl: { dialect: "postgres", enum: entity },
+		problems: enumProblems(entity),
+	}
+}
+
+/** What is wrong with an enum: its names, and labels that are empty, repeated or too long. */
+export const enumProblems = (entity: PgEnumEntity): ReadonlyArray<DefinitionProblem> => {
+	const problems: ProblemSink = []
+	const object = entity.schema === null ? entity.name : `${entity.schema}.${entity.name}`
+	checkIdentifier(problems, object, entity.name)
+	if (entity.schema !== null) checkIdentifier(problems, object, entity.schema)
+	if (entity.values.length === 0) problems.push({ object, message: "an enum needs at least one value" })
+	const seen = new Set<string>()
+	for (const value of entity.values) {
+		if (seen.has(value)) problems.push({ object, message: `${JSON.stringify(value)} is listed twice` })
+		seen.add(value)
+		if (value.length === 0) problems.push({ object, message: "a label cannot be empty" })
+		if (new TextEncoder().encode(value).length > PG_MAX_IDENTIFIER) {
+			problems.push({ object, message: `${JSON.stringify(value)} is longer than ${PG_MAX_IDENTIFIER} bytes, the most a label holds` })
+		}
+	}
+	return problems
+}
+
+const isPgEnum = (type: CHType<string, any, any>): type is PgEnum => type._tag === "PgEnum" && "ddl" in type
+
+/** The enum a column type is, or holds through `nullable` / `array`. */
+export const enumOfType = (type: CHType<string, any, any>): PgEnum | undefined => {
+	for (let t: CHType<string, any, any> | undefined = type; t !== undefined; t = t.element) {
+		if (isPgEnum(t)) return t
+	}
+	return undefined
+}
+
 // Tables
 
 export interface TableDefinition<Columns extends Record<string, ColumnInput>> {
@@ -197,6 +314,8 @@ export interface TableDefinition<Columns extends Record<string, ColumnInput>> {
 		| ReadonlyArray<keyof Columns & string>
 		| { readonly columns: ReadonlyArray<keyof Columns & string>; readonly name?: string }
 	readonly indexes?: ReadonlyArray<IndexSpec<ColumnsOf<Columns>>>
+	/** `UNIQUE` constraints over several columns; one column can say `unique` in `PG.column`. */
+	readonly uniqueConstraints?: ReadonlyArray<UniqueSpec<keyof Columns & string>>
 	readonly foreignKeys?: ReadonlyArray<ForeignKeySpec<keyof Columns & string>>
 	/** The column carrying row-level tenancy; see docs/tenant-scoping.md. */
 	readonly tenantColumn?: keyof Columns & string
@@ -215,7 +334,10 @@ export interface TableDdl {
 	readonly table: PgTableEntity
 	readonly columns: ReadonlyArray<PgColumnEntity>
 	readonly indexes: ReadonlyArray<PgIndexEntity>
+	readonly uniques: ReadonlyArray<PgUniqueEntity>
 	readonly foreignKeys: ReadonlyArray<PgForeignKeyEntity>
+	/** The enum types its columns use, so a schema has them without exporting them. */
+	readonly enums: ReadonlyArray<PgEnumEntity>
 }
 
 export interface PgSchemaTable<Name extends string, Cols extends ColumnDefs, Defaulted extends string = string>
@@ -397,6 +519,42 @@ function buildTable<const Name extends string, const Columns extends Record<stri
 		}
 	})
 
+	const uniqueEntities: Array<PgUniqueEntity> = []
+	for (const [column, input] of inputs) {
+		const option = isColumnSpec(input) ? input.options.unique : undefined
+		if (option === undefined) continue
+		const config: UniqueColumnOptions = option === true ? {} : typeof option === "string" ? { name: option } : option
+		const uniqueName = config.name ?? `${name}_${sqlName(column)}_unique`
+		checkIdentifier(problems, `${name}.${column} unique`, uniqueName)
+		uniqueEntities.push({
+			kind: "unique",
+			table: name,
+			name: uniqueName,
+			columns: [sqlName(column)],
+			nullsNotDistinct: config.nullsNotDistinct === true,
+		})
+	}
+	for (const spec of definition.uniqueConstraints ?? []) {
+		checkIdentifier(problems, `${name} unique`, spec.name)
+		for (const column of spec.columns) {
+			if (!has(column)) problems.push({ object: `${name} unique ${spec.name}`, message: `${column} is not a column` })
+		}
+		if (spec.columns.length === 0) problems.push({ object: `${name} unique ${spec.name}`, message: "a unique constraint needs columns" })
+		uniqueEntities.push({
+			kind: "unique",
+			table: name,
+			name: spec.name,
+			columns: spec.columns.map(sqlName),
+			nullsNotDistinct: spec.options.nullsNotDistinct === true,
+		})
+	}
+
+	const enumEntities = new Map<string, PgEnumEntity>()
+	for (const [, input] of inputs) {
+		const found = enumOfType(isColumnSpec(input) ? input.type : input)
+		if (found !== undefined) enumEntities.set(found.sql, found.ddl.enum)
+	}
+
 	const foreignKeyEntities = (definition.foreignKeys ?? []).map((spec): PgForeignKeyEntity => {
 		const fkColumns = spec.columns.map(sqlName)
 		// A table referencing itself names its own keys; another table's were mapped by `foreignKey`.
@@ -443,7 +601,9 @@ function buildTable<const Name extends string, const Columns extends Record<stri
 			table: tableEntity,
 			columns: columnEntities,
 			indexes: indexEntities,
+			uniques: uniqueEntities,
 			foreignKeys: foreignKeyEntities,
+			enums: [...enumEntities.values()],
 		},
 		problems,
 	}

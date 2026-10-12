@@ -410,15 +410,20 @@ following. See [Postgres](./postgres.md).
 ### Tables and DDL
 
 ```ts
+const Role = PG.enumType("user_role", ["owner", "member"])
+
 const Users = PG.table("users", {
 	columns: {
 		id: PG.column(PG.int8, { identity: "always" }),
 		orgId: PG.text,
 		email: PG.text,
+		handle: PG.column(PG.text, { unique: true }),
+		role: PG.column(Role, { default: "member" }),
 		createdAt: PG.column(PG.timestamptz, { defaultExpr: "now()" }),
 	},
 	primaryKey: ["id"],
 	indexes: [PG.uniqueIndex("users_org_email_idx", ["orgId", "email"])],
+	uniqueConstraints: [PG.unique("users_org_handle_unique", ["orgId", "handle"])],
 	tenantColumn: "orgId",
 })
 ```
@@ -429,22 +434,33 @@ const Users = PG.table("users", {
 | `column`                | `(type, ColumnOptions) => ColumnSpec`                                              |
 | `index`                 | `(name, on, IndexOptions?) => IndexSpec`: columns, or a callback building expressions |
 | `uniqueIndex`           | The same, `UNIQUE`; with `where`, a partial unique index                           |
+| `unique`                | `(name, columns, UniqueOptions?) => UniqueSpec`: a `UNIQUE` constraint, for `uniqueConstraints` |
+| `enumType`              | `(name, labels, EnumOptions?) => PgEnum`: an enum type, both a column type and a schema object |
 | `foreignKey`            | `({ columns, references, foreignColumns, onDelete?, onUpdate?, name? }) => ForeignKeySpec`; `references` is a `Table` (its columns are checked) or a name |
 | `defaultForeignKeyName` | `(table, columns, foreignTable, foreignColumns) => string`: the name drizzle-kit gives, shortened past 63 characters as drizzle-kit does |
 
 **`TableDefinition`** — `columns` (required), `primaryKey` (column names, or
-`{ columns, name? }`), `indexes`, `foreignKeys`, `tenantColumn`.
+`{ columns, name? }`), `indexes`, `uniqueConstraints`, `foreignKeys`, `tenantColumn`.
 
 **`ExternalTableDefinition`** — `{ external: true, columns, tenantColumn? }`, as on
 `/clickhouse`: a view, a catalog table, one another tool migrates. No DDL.
 
 **`ColumnOptions`** — one of `default`, `defaultExpr`, `identity` (`"always"` or
-`"by default"`); any of them lets an insert leave the column out (`DefaultedColumnsOf`).
+`"by default"`); any of them lets an insert leave the column out (`DefaultedColumnsOf`). Also
+`name` (the column's name in SQL) and `unique` (`true`, a constraint name, or
+`UniqueColumnOptions`: `{ name?, nullsNotDistinct? }`), which names a one-column constraint
+`<table>_<column>_unique` by default.
+
+**`UniqueOptions`** — `nullsNotDistinct` (Postgres 15+).
+
+**`PgEnum`** — a `PgType` whose rows decode to its labels, with `name`, `values` (the labels),
+and the `ddl` and `problems` `generate` reads. **`EnumOptions`** — `schema`, for a type outside
+the schema migrations run in.
 
 **`IndexOptions`** — `where` (a `DdlPredicate`: SQL text or a callback returning a condition),
 `using` (the access method; default `btree`).
 
-**Types** — `ColumnInput`, `ColumnSpec`, `ColumnsOf`, `IndexSpec`, `ForeignKeySpec`,
+**Types** — `ColumnInput`, `ColumnSpec`, `ColumnsOf`, `IndexSpec`, `UniqueSpec`, `ForeignKeySpec`,
 `ReferentialAction` (drizzle's lowercase spelling or the catalog's), `TableDdl`, `PgSchemaTable`,
 `DdlExpr`, `DdlKey`. A definition that cannot render records a problem; `S.pgEntitiesOf` fails with it.
 
@@ -452,12 +468,13 @@ const Users = PG.table("users", {
 
 `text`, `uuid`, `bool`, `int2`, `int4`, `int8`, `float4`, `float8`, `numeric`, `timestamptz`,
 `timestamptzMillis` (a timestamptz read as epoch milliseconds), `jsonb(schema?)`, `array(type)`, `nullable(type)`, `custom(sql, schema, literalSchema?)`,
-`brand(type, schema)`. See [Postgres column types](./postgres.md#column-types).
+`brand(type, schema)`, and `enumType(name, labels)` above. See [Postgres column types](./postgres.md#column-types).
 
 Types: `PgType` (a Postgres column type; a `CHType`), `PgArray`, `PgNullable`. Codecs:
 `PgNumber` (a number, numeric string or `bigint`), `PgTimestampLiteral` (an instant written as
 ISO-8601), `timestampLiteral(format)` (the same with another format), and `pgTimestampToIso`,
-which normalizes Postgres timestamp text to ISO-8601.
+which normalizes Postgres timestamp text to ISO-8601. `parsePgArrayLiteral` reads a
+one-dimensional array literal (`{a,"b c",NULL}`), the form enum arrays arrive in.
 
 ### Functions
 
@@ -485,7 +502,7 @@ placeholders, double-quoted identifiers.
 | `SqlQuery`, `compileQuery`                                                                       | `/sql`            |
 | `ClickHouseStatement`, `parseStatement`, `renderStatement`, `withSettings`, `withFormat`         | `/sql`            |
 | `ClickHouseStatementFromString`, `splitTerminalClauses`, `maskLiteralsAndComments`               | `/sql`            |
-| Schema tooling: `isSchemaObject`, `makeSnapshot`, `renderSchema`, `diffSchemas`, `diffPgSchemas`, `fromDrizzleSnapshot`, snapshot and entity schemas | `/schema`         |
+| Schema tooling: `isSchemaObject`, `makeSnapshot`, `renderSchema`, `diffSchemas`, `diffPgSchemas`, `fromDrizzleSnapshot`, snapshot and entity schemas (`PgEnumEntity`, `PgUniqueEntity`, …), `Hint` | `/schema`         |
 | `run`, `status`, `verify`, `baseline`, `MigrationDriver` and the migrate errors                  | `/migrate`        |
 | `Database`, `run`, `sql`, `query`, `execute`, `transaction`, `requireTransaction`, `retryContention`, `Transaction` | `/database` |
 | `DatabaseError`, `TransactionCommitFailed`, `TransactionRollbackFailed` and the other transaction errors | `/database` |

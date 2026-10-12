@@ -25,7 +25,7 @@ const help = `effect-orm: schema migrations for ClickHouse and Postgres
   --config <path>                  Default: effect-orm.config.ts
   --json                           Machine-readable output
 
-Exit codes: 0 ok, 1 error, 2 missing hints (confirm data loss), 3 drift found.`
+Exit codes: 0 ok, 1 error, 2 missing hints (confirm data loss or an enum label rename), 3 drift found.`
 
 const options = {
 	config: { type: "string" },
@@ -59,7 +59,11 @@ const loadConfig = (path: string) =>
 const promptConfirm = (hint: Hint): Effect.Effect<boolean> =>
 	Effect.promise(async () => {
 		const rl = createInterface({ input: process.stdin, output: process.stdout })
-		const answer = await rl.question(`Drop ${hint.kind} ${hint.entity}? Its data will be lost. [y/N] `)
+		const answer = await rl.question(
+			hint.type === "confirm_rename"
+				? `Rename enum label ${hint.entity} to ${JSON.stringify(hint.to)}? Rows holding it will hold the new label. [y/N] `
+				: `Drop ${hint.kind} ${hint.entity}? ${hint.kind === "enum" ? "Postgres refuses while a column uses it." : "Its data will be lost."} [y/N] `,
+		)
 		rl.close()
 		return /^y(es)?$/i.test(answer.trim())
 	})

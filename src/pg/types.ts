@@ -177,11 +177,71 @@ export type PgNullable<T extends PgType<string, any, any>> = PgType<
 	InferEncoded<T> | null
 >
 
+/**
+ * A one-dimensional array literal (`{a,"b c",NULL}`) as its elements, or
+ * `undefined` for anything else. Drivers parse the arrays of built-in types
+ * themselves, but not of an enum: node-postgres and PGlite send `{a,b}`.
+ */
+export const parsePgArrayLiteral = (text: string): Array<string | null> | undefined => {
+	if (!text.startsWith("{") || !text.endsWith("}")) return undefined
+	const body = text.slice(1, -1)
+	const out: Array<string | null> = []
+	if (body.trim() === "") return out
+	let i = 0
+	for (;;) {
+		if (body[i] === '"') {
+			let value = ""
+			for (i++; i < body.length && body[i] !== '"'; i++) {
+				if (body[i] === "\\") i++
+				value += body[i] ?? ""
+			}
+			if (i >= body.length) return undefined
+			i++
+			out.push(value)
+		} else {
+			const end = body.indexOf(",", i)
+			const raw = body.slice(i, end < 0 ? body.length : end).trim()
+			if (raw.includes("{") || raw.includes('"')) return undefined
+			out.push(raw.toUpperCase() === "NULL" ? null : raw)
+			i = end < 0 ? body.length : end
+		}
+		if (i >= body.length) return out
+		if (body[i] !== ",") return undefined
+		i++
+	}
+}
+
+const isArrayLiteral = Schema.makeFilter(
+	(value: string) => (parsePgArrayLiteral(value) === undefined ? `\`${value}\` is not a one-dimensional array literal` : undefined),
+	{ title: "postgresArrayLiteral" },
+)
+
+/**
+ * An enum array as a driver sends it: an array, or its text form. Written as
+ * text, the first member, since a driver that does not know the type cannot
+ * serialize an array for it either.
+ */
+const enumArraySchema = (element: Schema.Codec<any, any>): Schema.Codec<any, any> =>
+	Schema.Union([
+		Schema.String.pipe(
+			Schema.check(isArrayLiteral),
+			Schema.decodeTo(Schema.Array(element), {
+				decode: SchemaGetter.transform((value: string) => parsePgArrayLiteral(value)!),
+				encode: SchemaGetter.transform((values: ReadonlyArray<string | null>) => `{${values.map((v) => (v === null ? "NULL" : `"${v.replace(/["\\]/g, "\\$&")}"`)).join(",")}}`),
+			}),
+		),
+		Schema.Array(element),
+	])
+
+/** Whether `e` is an enum, or a nullable one: its arrays arrive as text. */
+const isEnumElement = (e: PgType<string, any, any>): boolean =>
+	e._tag === "PgEnum" || (e._tag === "Nullable" && e.element?._tag === "PgEnum")
+
 export const array = <E extends PgType<string, any, any>>(e: E): PgArray<E> => ({
 	_tag: "Array",
 	sql: `${e.sql}[]`,
-	schema: Schema.Array(e.schema),
-	literalSchema: Schema.Array(e.literalSchema) as Schema.Codec<unknown, unknown>,
+	schema: isEnumElement(e) ? enumArraySchema(e.schema) : Schema.Array(e.schema),
+	literalSchema: (isEnumElement(e) ? enumArraySchema(e.literalSchema) : Schema.Array(e.literalSchema)) as Schema.Codec<unknown, unknown>,
 	element: e,
 }) as PgArray<E>
 

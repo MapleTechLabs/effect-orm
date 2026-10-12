@@ -61,3 +61,19 @@ void unwrapped
 // Settings are typed: an unknown isolation level does not compile.
 // @ts-expect-error not an isolation level
 void Db.transaction(Effect.void, { isolationLevel: "read uncommitted" })
+
+// Any concrete insert is a `Runnable`, and `compile` takes it, upserts included:
+// both take an insert by its tag, state and phantom, not by comparing its generic
+// methods, which TypeScript 5 rejects for `CHInsert<any, ...>`. (tests/package-consumer-ts5.mts
+// checks this against the built types with TypeScript 5 as well.)
+const Counters = PG.table("counters", { columns: { key: PG.text, count: PG.int4 }, primaryKey: ["key"] })
+const upsert = CH.insertInto(Counters)
+	.values({ key: "k", count: CH.param.int("count") })
+	.onConflictDoUpdate({ target: ["key"], set: { count: 1 } })
+	.returning("count")
+expectTypeOf(CH.insertInto(Counters).values({ key: "k", count: 1 })).toExtend<Db.Runnable>()
+expectTypeOf(upsert).toExtend<Db.Runnable>()
+expectTypeOf(Db.run(upsert, { count: 1 })).toEqualTypeOf<Effect.Effect<ReadonlyArray<{ readonly count: number }>, RunError, Db.Database>>()
+// @ts-expect-error the param is still required
+Db.run(upsert)
+expectTypeOf(PG.compileUnsafe(upsert, { count: 1 })).toEqualTypeOf<CH.CompiledQuery<{ readonly count: number }, undefined>>()

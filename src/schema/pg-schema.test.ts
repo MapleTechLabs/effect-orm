@@ -292,8 +292,8 @@ describe("fromDrizzleSnapshot", () => {
 	it("reports what it cannot model instead of dropping it", () => {
 		const { unsupported } = S.fromDrizzleSnapshot({
 			...drizzle,
-			ddl: [...drizzle.ddl, { name: "mood", values: ["a"], entityType: "enums", schema: "public" }],
+			ddl: [...drizzle.ddl, { name: "ticket_seq", entityType: "sequences", schema: "public" }, { name: "c", value: "x > 0", entityType: "checks", schema: "public", table: "dashboard_shares" }],
 		})
-		expect(unsupported).toEqual(["enums mood"])
+		expect(unsupported).toEqual(["sequences ticket_seq", "checks dashboard_shares.c"])
 	})
 })

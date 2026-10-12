@@ -3,7 +3,8 @@
 The same builder writes Postgres SQL. Queries, params, tenant scoping and row decoding work
 as they do for ClickHouse. `@maple-dev/effect-orm/postgres` is the one import for it: the
 builder, column types whose codecs read what Postgres drivers send, functions spelled the
-Postgres way, `table` with its keys, indexes and foreign keys, and a `compile` that defaults to
+Postgres way, `table` with its keys, indexes, unique constraints and foreign keys, `enumType`,
+and a `compile` that defaults to
 the Postgres dialect. Nothing from `/clickhouse` is needed.
 
 ```ts title="postgres-quickstart.ts"
@@ -59,7 +60,8 @@ await db.close()
 `@effect/sql-pg`'s `unsafe`. The builder never runs the query. `Id` is an identity column, so an
 insert may leave it out: `PG.InsertRowOf<typeof Requests>` makes it optional. See
 [Tables and column types](./tables-and-types.md) for column options and external tables, and
-[Schema and migrations](./migrations.md#postgres) for indexes, foreign keys, and `generate`.
+[Schema and migrations](./migrations.md#postgres) for indexes, unique constraints, foreign keys,
+and `generate`; [Enums](#enums) for enum types.
 
 ## What the dialect changes
 
@@ -98,6 +100,7 @@ literal that still contained it would fail the compile with `InvalidLiteral`.
 | `timestamptz` | `timestamptz` | `DateTime.Utc` | `Date`, or text such as `2026-01-01 00:00:00+00` |
 | `timestamptzMillis` | `timestamptz` | epoch milliseconds (`number`) | the same |
 | `jsonb(schema?)` | `jsonb` | the schema's type (`unknown` by default) | a parsed value |
+| `enumType(name, labels, { schema? })` | the enum type | one of its labels | string |
 | `array(type)` | `type[]` | `ReadonlyArray` | array |
 | `nullable(type)` | the same type | `T \| null` | the same, or `null` |
 | `custom(sql, schema, literalSchema?)` | anything | the schema's type | whatever the schema reads |
@@ -114,6 +117,70 @@ which no session time zone can reinterpret; a zoneless string is read as UTC.
 Comparisons with a literal-union column take only its members: with `status` typed
 `"open" | "closed"`, `$.status.eq("opne")` is a type error. A param of the primitive
 (`param.string`) still compares, for a value known only at run time.
+
+## Enums
+
+`PG.enumType(name, labels)` declares a Postgres enum type. The value is a column type, so rows
+decode to the union of its labels and inserts and comparisons take only those, and it is a
+schema object, so `generate` writes `CREATE TYPE ... AS ENUM` before any table that uses it and
+alters the type when its labels change. Use it bare, in `PG.column` with a `default`, or inside
+`PG.nullable` and `PG.array`:
+
+```ts title="postgres-enums.ts"
+import { Effect } from "effect"
+import * as PG from "@maple-dev/effect-orm/postgres"
+import * as S from "@maple-dev/effect-orm/schema"
+
+export const ChannelType = PG.enumType("channel_type", ["public", "private", "direct"])
+
+export const Channels = PG.table("channels", {
+	columns: {
+		id: PG.text,
+		org_id: PG.text,
+		slug: PG.column(PG.text, { unique: true }),
+		type: PG.column(ChannelType, { default: "public" }),
+		allowed: PG.nullable(PG.array(ChannelType)),
+	},
+	primaryKey: ["id"],
+	uniqueConstraints: [PG.unique("channels_org_slug_unique", ["org_id", "slug"])],
+})
+
+export type Channel = PG.SelectRowOf<typeof Channels>
+// { ...; readonly type: "public" | "private" | "direct"; readonly allowed: ReadonlyArray<...> | null }
+
+export const shared = PG.compileUnsafe(
+	PG.from(Channels)
+		.select("id", "type")
+		.where(($) => [$.type.in_("public", "private")]),
+	{},
+)
+
+export const upsert = PG.compileUnsafe(
+	PG.insertInto(Channels)
+		.values({ id: "c1", org_id: "o", slug: "general", type: "private" })
+		.onConflictDoUpdate({ target: ["slug"], set: { type: "private" } }),
+	{},
+)
+
+export const ddl = Effect.map(S.pgEntitiesOf([ChannelType, Channels]), (entities) => S.renderPgSchema(entities))
+// CREATE TYPE "channel_type" AS ENUM ('public', 'private', 'direct')   (skipped if it exists)
+// CREATE TABLE IF NOT EXISTS "channels" (... "type" channel_type NOT NULL DEFAULT 'public', ...)
+// ALTER TABLE "channels" ADD CONSTRAINT "channels_org_slug_unique" UNIQUE ("org_id", "slug")
+// ALTER TABLE "channels" ADD CONSTRAINT "channels_slug_unique" UNIQUE ("slug")
+```
+
+`ChannelType.values` lists the labels for application code. Exporting the enum from a schema
+module is optional: the tables that use it bring it along. Pass `{ schema: "auth" }` for a type
+in another schema; leave it out for the schema migrations run in (usually `public`), which is
+how columns of the type are spelled there.
+
+Drivers parse arrays of built-in types but not of an enum, whose array type they do not know:
+node-postgres and PGlite send `{public,private}` as text. An `array(enumType)` column reads
+either form, and writes its value as array text, which Postgres casts to the column's type.
+
+`PG.brand(PG.text, Schema.Literals([...]))` and `PG.custom("public.channel_type", ...)` still
+work for an enum `generate` does not manage; see [migrations](./migrations.md#postgres) for
+moving one to `enumType`.
 
 ## Functions
 
