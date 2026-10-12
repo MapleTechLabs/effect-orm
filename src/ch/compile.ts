@@ -11,7 +11,7 @@ import { compiled, compiledUnsafe, fail } from "./failure"
 import { columnSqlName, custom, dateTime, dateTime64, type CHType, type ColumnDefs } from "./types"
 import type { CHQuery, CHQueryState, NeedsSelect } from "./query"
 import type { CHUnionQuery } from "./union"
-import { isInsert, type CHInsert } from "./insert"
+import { isInsert, type AnyInsert, type CHInsert } from "./insert"
 import { isDelete, isUpdate, type CHDelete, type CHUpdate } from "./update"
 import type { Table } from "./table"
 import { createColumnAccessor, createQualifiedColumnAccessor, createJoinedColumnAccessor, sourceAlias } from "./query"
@@ -606,7 +606,7 @@ export function compileCH(
 
 /** A write statement: what `compile` takes besides a query. */
 export type CHWrite<Output, Params = never> =
-	| CHInsert<any, any, any, Output, Params>
+	| AnyInsert<Output, Params>
 	| CHUpdate<any, any, Output, "ready", Params>
 	| CHDelete<any, Output, "ready", Params>
 

@@ -53,6 +53,8 @@ const program = Effect.gen(function* () {
 			},
 			devDependencies: {
 				typescript: yield* version("typescript"),
+				// Consumers still on TypeScript 5 see the built types too; see the consumer's Runnable check.
+				"typescript-5": "npm:typescript@~5.9.3",
 				"@types/node": yield* version("@types/node"),
 			},
 		}),
@@ -78,6 +80,16 @@ const program = Effect.gen(function* () {
 		}),
 	)
 	yield* runCommand(path.join(temporary, "node_modules/.bin/tsc"), ["-p", "tsconfig.json"], temporary)
+	// The TypeScript 5 checks, alone in their own program (see the file's header), on both compilers.
+	yield* fs.copyFile(path.join(root, "tests/package-consumer-ts5.mts"), path.join(temporary, "consumer-ts5.mts"))
+	const ts5Config = path.join(temporary, "tsconfig.ts5.json")
+	yield* fs.writeFileString(
+		ts5Config,
+		yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))({ extends: "./tsconfig.json", include: ["consumer-ts5.mts"] }),
+	)
+	yield* runCommand(path.join(temporary, "node_modules/.bin/tsc"), ["-p", ts5Config], temporary)
+	yield* runCommand("node", [path.join(temporary, "node_modules/typescript-5/bin/tsc"), "-p", ts5Config], temporary)
+	yield* runCommand("node", ["consumer-ts5.mts"], temporary)
 	// The script runs on Bun; the published library must also work in Node.
 	yield* runCommand("node", ["consumer.mts"], temporary)
 	yield* runCommand(

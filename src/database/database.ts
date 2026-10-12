@@ -14,7 +14,7 @@ import { isSqlError } from "effect/sql/SqlError"
 import { compileCH, compileUnion, CompiledQueryDecodeError, type CompiledQuery } from "../ch/compile"
 import { noTransactions, type Dialect, type IsolationLevel, type TransactionSettings } from "../ch/dialect"
 import type { QueryBuilderError } from "../ch/errors"
-import type { CHInsert } from "../ch/insert"
+import type { AnyInsert } from "../ch/insert"
 import type { CHDelete, CHUpdate } from "../ch/update"
 import type { CHQuery, NeedsSelect } from "../ch/query"
 import type { CHUnionQuery, QueryParams } from "../ch/union"
@@ -45,7 +45,7 @@ export type StatementInput = SqlTemplate | Statement
 export type Runnable =
 	| CHQuery<any, any, any, any>
 	| CHUnionQuery<any>
-	| CHInsert<any, any, any, any>
+	| AnyInsert
 	| CHUpdate<any, any, any>
 	| CHDelete<any, any>
 	| CompiledQuery<any, any>
