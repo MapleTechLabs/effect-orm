@@ -1,5 +1,16 @@
 # @maple-dev/effect-orm
 
+## 0.6.0
+
+### Minor Changes
+
+- a379869: Tenant scoping is now opt-in and enforceable. `fromSqlClient` / `layerSqlClient` take `requireTenantScope: true`, which refuses an undeclared `"cross-tenant"` statement with a `TenantScopeViolation` defect. Compiled queries carry `crossTenantDeclared` when the opt-out was explicit, and unions, inserts, updates and deletes gain `.crossTenant()`. `rawCompiledQuery`'s `tenantScope` is now optional and defaults to `"cross-tenant"`.
+- e26a29d: Postgres enum types and unique constraints are first-class. `PG.enumType(name, labels, { schema? })` is a column type (rows decode to its labels; inserts and comparisons take only them; `nullable` and `array` wrap it, and enum arrays decode from the text form drivers send) and a schema object: `generate` creates the type before the tables that use it, adds labels with `ADD VALUE ... BEFORE`, renames one behind a `confirm_rename` hint, asks before dropping the type, and reports removing or reordering labels, or using a label in the migration that adds it, as unsupported. `PG.unique(name, columns, { nullsNotDistinct? })` in a table's `uniqueConstraints`, or `unique` in `PG.column` (named `<table>_<column>_unique` by default), declares an `ADD CONSTRAINT ... UNIQUE` constraint, diffed as a constraint rather than an index. `verify` reads enums from `pg_enum` and unique constraints from `pg_constraint`, and resolves types of the current schema during its scratch rebuild, so `PG.custom("public.x", ...)` enums no longer report false drift. `generate --baseline --from-drizzle` converts drizzle-kit enums, enum columns and unique constraints.
+
+### Patch Changes
+
+- 852429b: A concrete insert is assignable to `Runnable` (from `/database`) and accepted by `compile` under TypeScript 5.x again. Both took `CHInsert<any, ...>`, which TypeScript 5 compares method by method, and the generic `onConflictDoUpdate` failed that comparison; they now take an insert by its tag, state and phantom (`AnyInsert`). A workaround such as `type Runnable = Orm.Runnable | { readonly _tag: "CHInsert" }` can be removed.
+
 ## 0.4.0
 
 - **Breaking:** definitions never throw. `CH.table`, `PG.table`, `CH.materializedView`,
