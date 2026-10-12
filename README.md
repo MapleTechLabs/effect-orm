@@ -1,5 +1,9 @@
 # @maple-dev/effect-orm
 
+> [!WARNING]
+> **Alpha.** The API is still changing and minor releases may break it. Pin an exact version,
+> read the [changelog](./CHANGELOG.md) before upgrading, and expect rough edges.
+
 Type-safe ClickHouse and Postgres queries, result decoding, and reproducible benchmarks for Effect and TypeScript.
 
 Formerly `@maple-dev/effect-clickhouse`.
@@ -57,9 +61,6 @@ const Events = CH.table("events", {
 	},
 	engine: CH.engine.mergeTree(),
 	orderBy: ["OrgId", "Timestamp"],
-	// Optional: name the column carrying row-level tenancy and every compiled
-	// query reports whether it pinned it. See docs/tenant-scoping.md.
-	tenantColumn: "OrgId",
 })
 
 // 2. Build a query
@@ -102,7 +103,6 @@ const Requests = PG.table("requests", {
 		at: PG.column(PG.timestamptz, { defaultExpr: "now()" }),
 	},
 	primaryKey: ["id"],
-	tenantColumn: "org_id",
 })
 
 const byRoute = PG.from(Requests)
@@ -116,6 +116,22 @@ PG.compileUnsafe(byRoute, { orgId: "org_123" }).parameters // -> ["org_123"]
 A table that this schema does not own (a system table, a table function, a view) is declared
 with `external: true` and no DDL: `CH.table("system.one", { external: true, columns: {} })`.
 See [Tables and column types](./docs/tables-and-types.md).
+
+## Multi-tenant tables (optional)
+
+If several tenants share a table, declare which column holds the tenant and turn on enforcement:
+
+```ts
+const Events = CH.table("events", { columns: { OrgId: CH.string /* ... */ }, /* ... */ tenantColumn: "OrgId" })
+
+const DatabaseLive = Db.layerSqlClient({ dialect: CH.clickhouseDialect, requireTenantScope: true })
+```
+
+Every compiled query then knows whether it is pinned to one tenant, and the database refuses one
+that is not, so a forgotten `OrgId` filter fails instead of returning another tenant's rows. A
+query that should span tenants says so with `.crossTenant()`. Without `requireTenantScope`,
+`tenantColumn` only labels queries and nothing is refused. Skip all of this if your tables are not
+shared. See [Tenant scoping](./docs/tenant-scoping.md).
 
 ## Decoding results
 

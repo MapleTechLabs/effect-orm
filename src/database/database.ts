@@ -24,6 +24,7 @@ import {
 	TransactionClosed,
 	TransactionCommitFailed,
 	TransactionOptionsRejected,
+	TenantScopeViolation,
 	TransactionRollbackFailed,
 	TransactionUnsupported,
 	type TransactionError,
@@ -152,6 +153,14 @@ export interface FromSqlClientOptions {
 	 * into one span or log line per request.
 	 */
 	readonly observe?: (statement: Statement) => Effect.Effect<void>
+	/**
+	 * Refuse, as a `TenantScopeViolation` defect, any compiled statement whose
+	 * `tenantScope` is `"cross-tenant"` unless it was declared with
+	 * `.crossTenant()`. Off by default. Plain SQL given to `query` and
+	 * `execute` has no scope to check and is not refused; see
+	 * docs/tenant-scoping.md.
+	 */
+	readonly requireTenantScope?: boolean
 }
 
 // Whether the transaction a fiber's context belongs to is still open. Keyed by
@@ -217,8 +226,22 @@ export const fromSqlClient = (sql: SqlClient.SqlClient, options: FromSqlClientOp
 				: observe(statement),
 		)
 
+	// A plain Statement has no scope, so only a compiled one can be refused.
+	const checkScope = <S extends Statement & Partial<Pick<CompiledQuery<unknown>, "tenantScope" | "crossTenantDeclared">>>(
+		statement: S,
+	): Effect.Effect<S> =>
+		options.requireTenantScope === true && statement.tenantScope === "cross-tenant" && statement.crossTenantDeclared !== true
+			? Effect.die(
+					new TenantScopeViolation({
+						message:
+							"this statement is not confined to one tenant; filter the tenant column with eq or a one-value in_, or declare it with .crossTenant()",
+						sql: statement.sql,
+					}),
+				)
+			: Effect.succeed(statement)
+
 	const resolve = (statement: StatementInput): Effect.Effect<Statement, DatabaseError> =>
-		isSqlTemplate(statement) ? renderTemplate(statement, dialect) : Effect.succeed(statement)
+		isSqlTemplate(statement) ? renderTemplate(statement, dialect) : checkScope(statement)
 
 	const rows = (statement: Statement) =>
 		guard(statement).pipe(
@@ -283,7 +306,7 @@ export const fromSqlClient = (sql: SqlClient.SqlClient, options: FromSqlClientOp
 	// does: through `command`, which a ClickHouse client needs for a statement
 	// with no result set.
 	const run: DatabaseApi["run"] = (runnable, params) =>
-		Effect.flatMap(compileFor(runnable, params ?? {}), (compiled) =>
+		Effect.flatMap(Effect.flatMap(compileFor(runnable, params ?? {}), checkScope), (compiled) =>
 			compiled.kind !== "select" && compiled.returning === undefined
 				? Effect.as(execute(compiled), [])
 				: Effect.flatMap(rows(compiled), (wire) => compiled.decodeRows(wire)),

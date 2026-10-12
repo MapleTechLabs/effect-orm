@@ -65,6 +65,17 @@ export class TransactionClosed extends Schema.TaggedError<TransactionClosed>()("
 	sql: Schema.String,
 }) {}
 
+/**
+ * A database with `requireTenantScope` was handed a compiled statement that
+ * reads or writes across tenants without saying so: a forgotten tenant
+ * filter, or a `rawCompiledQuery` that asserted no scope. It is a defect, as
+ * the bug is in the query, not in the data. See docs/tenant-scoping.md.
+ */
+export class TenantScopeViolation extends Schema.TaggedError<TenantScopeViolation>()(
+	"@maple-dev/effect-orm/TenantScopeViolation",
+	{ message: Schema.String, sql: Schema.String },
+) {}
+
 export type TransactionError =
 	| TransactionUnsupported
 	| TransactionOptionsRejected

@@ -7,9 +7,13 @@ compiled.tenantScope // "single-tenant" | "cross-tenant" | "untenanted"
 ```
 
 `"single-tenant"` means the query pins itself to one tenant. `"cross-tenant"` means it reads whatever
-the credentials can see. The builder only _computes and reports_ this — it never blocks a
-query. The intended use is that your executor refuses `"cross-tenant"` on its ordinary read path,
-so a forgotten tenant filter fails loudly instead of quietly returning another tenant's rows.
+the credentials can see. The builder only _computes and reports_ this; it never blocks a query by
+itself. Turn on [`requireTenantScope`](#enforcing-it) on your `Database` (or check the field in
+your own executor) so a forgotten tenant filter fails loudly instead of quietly returning another
+tenant's rows.
+
+All of this is optional. If no table declares a `tenantColumn`, every query is `"untenanted"` and
+none of this page applies.
 
 > **Read this page before relying on the field.** It answers a narrow question precisely, and
 > silently answers `"cross-tenant"` for everything outside that narrowness.
@@ -155,10 +159,15 @@ CH.from(Events)
 
 `crossTenant()` forces `"cross-tenant"` regardless of the predicates, and it wins over everything
 else. The point is to distinguish "this query deliberately spans tenants" from "someone forgot
-the filter" — two states that are otherwise identical from the outside. Use it to document admin and
-internal-rollup queries. Both cases produce the same `tenantScope` string; an executor cannot
-distinguish an explicit opt-out from a missing filter using that field alone. Keep privileged
-execution paths separately authorized.
+the filter", two states that are otherwise identical from the outside. Use it to document admin and
+internal-rollup queries. Both produce the same `tenantScope` string; the compiled query also
+carries `crossTenantDeclared: true` when the opt-out was explicit, which is what
+[`requireTenantScope`](#enforcing-it) checks. Keep privileged execution paths separately
+authorized.
+
+Unions, inserts, updates and deletes have `.crossTenant()` too. Only the statement you run
+counts: a `.crossTenant()` subquery or CTE makes the outer query `"cross-tenant"`, and the outer
+query declares it again.
 
 _(Backed by `docs/tenant-scoping.md > crossTenant() is the explicit opt-out`.)_
 
@@ -179,10 +188,28 @@ _(Backed by `docs/tenant-scoping.md > route is carried onto the compiled query`.
 
 ## Handwritten SQL
 
-`rawCompiledQuery` requires `tenantScope` explicitly, since a raw string cannot be
-inspected. Whatever you pass is taken at face value — which is why it also requires a
+`rawCompiledQuery` cannot inspect a string, so its `tenantScope` is whatever you pass, and
+`"cross-tenant"` when you pass nothing. Passing `"cross-tenant"` explicitly counts as declaring it;
+leaving it out does not, so `requireTenantScope` refuses unannotated raw SQL. It also requires a
 `reason` and a `justification` naming why the query isn't a builder query at all. See
 [Extending](./extending.md#handwritten-queries-rawcompiledquery).
+
+## Enforcing it
+
+```ts
+const DatabaseLive = Db.layerSqlClient({ dialect: CH.clickhouseDialect, requireTenantScope: true })
+```
+
+With `requireTenantScope`, `run` dies with a `TenantScopeViolation` defect for any statement that
+is `"cross-tenant"` without `crossTenantDeclared`. `"single-tenant"` and `"untenanted"` run. It is
+a defect rather than an error because the bug is in the query: no caller should catch it and
+carry on. `query` and `execute` apply the same check to a compiled query, but SQL written with
+`Db.sql` has no scope to check and runs as it is, so keep tenant-table reads in the builder.
+
+It is off by default, and without it `tenantColumn` only labels compiled queries.
+
+_(Backed by `Database on PGlite > requireTenantScope refuses an undeclared cross-tenant statement
+and runs everything else`.)_
 
 ## Scope is not authorization
 

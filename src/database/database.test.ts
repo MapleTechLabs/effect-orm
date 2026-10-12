@@ -602,6 +602,42 @@ layer(Live, { excludeTestServices: true })("Database on PGlite", (it) => {
 			expect(yield* ids(table)).toEqual([2, 3])
 		}),
 	)
+
+	it.effect("requireTenantScope refuses an undeclared cross-tenant statement and runs everything else", () =>
+		Effect.gen(function* () {
+			const name = yield* freshTable
+			yield* Db.execute(Db.sql`ALTER TABLE ${Db.sql.identifier(name)} ADD COLUMN org text`)
+			const Items = CH.table(name, { id: PG.int4, org: PG.text }, { tenantColumn: "org" })
+			const Plain = CH.table(name, { id: PG.int4 })
+			const strict = Db.fromSqlClient(yield* SqlClient.SqlClient, { dialect: postgresDialect, requireTenantScope: true })
+			const refused = (effect: Effect.Effect<unknown, unknown>) =>
+				Effect.map(Effect.exit(effect), (exit) => {
+					assert(Exit.isFailure(exit))
+					expect(Cause.squash(exit.cause)).toBeInstanceOf(Db.TenantScopeViolation)
+				})
+
+			yield* strict.run(CH.insertInto(Items).values([{ id: 1, org: "a" }]))
+			yield* refused(strict.run(CH.insertInto(Items).values([{ id: 2, org: "a" }, { id: 3, org: "b" }])))
+			yield* strict.run(CH.insertInto(Items).values([{ id: 2, org: "a" }, { id: 3, org: "b" }]).crossTenant())
+
+			expect(yield* strict.run(CH.from(Items).select("id").where(($) => [$.org.eq("a")]).orderBy(["id", "asc"]))).toEqual([
+				{ id: 1 },
+				{ id: 2 },
+			])
+			yield* refused(strict.run(CH.from(Items).select("id")))
+			yield* refused(strict.query(PG.compileUnsafe(CH.from(Items).select("id"))))
+			expect(yield* strict.run(CH.from(Items).select("id").crossTenant())).toHaveLength(3)
+			// No declared tenant column: nothing to leak, so nothing to refuse.
+			expect(yield* strict.run(CH.from(Plain).select("id"))).toHaveLength(3)
+			// Plain SQL carries no scope.
+			expect(yield* strict.query(Db.sql`SELECT id FROM ${Db.sql.identifier(name)}`)).toHaveLength(3)
+
+			yield* refused(strict.run(CH.deleteFrom(Items).allRows()))
+			yield* strict.run(CH.deleteFrom(Items).where(($) => [$.org.eq("b")]))
+			yield* strict.run(CH.deleteFrom(Items).allRows().crossTenant())
+		}),
+	)
+
 })
 
 describe("sql templates per dialect", () => {

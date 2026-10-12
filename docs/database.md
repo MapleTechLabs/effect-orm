@@ -80,7 +80,7 @@ Calling `withdraw(1, 30)` outside `transfer` does not compile: `requireTransacti
 
 | Export | What it is |
 | --- | --- |
-| `fromSqlClient(sql, options)` | A `DatabaseApi` over a client. `options.dialect` is required |
+| `fromSqlClient(sql, options)` | A `DatabaseApi` over a client. `options.dialect` is required; `options.requireTenantScope` refuses unscoped queries ([Tenant scoping](./tenant-scoping.md#enforcing-it)) |
 | `layerSqlClient(options)` | A `Database` layer over the `SqlClient` in context |
 | `Database` | The service |
 | `run(query, params?)` | Compile a query for the database's dialect, run it, decode its rows |

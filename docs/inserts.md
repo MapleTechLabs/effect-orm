@@ -18,7 +18,6 @@ const ApiKeys = PG.table("api_keys", {
 		note: PG.nullable(PG.text),
 	},
 	primaryKey: ["id"],
-	tenantColumn: "org_id",
 })
 
 const insertKey = PG.insertInto(ApiKeys).values({
@@ -79,7 +78,6 @@ const Events = CH.table("events", {
 	columns: { OrgId: CH.string, Id: CH.column(CH.uint64, { default: 0 }), At: CH.dateTime },
 	engine: CH.engine.mergeTree(),
 	orderBy: ["OrgId", "At"],
-	tenantColumn: "OrgId",
 })
 
 CH.compileUnsafe(
@@ -110,13 +108,11 @@ const Spans = CH.table("spans", {
 	columns: { OrgId: CH.string, Name: CH.string, Ms: CH.uint64 },
 	engine: CH.engine.mergeTree(),
 	orderBy: ["OrgId", "Name"],
-	tenantColumn: "OrgId",
 })
 const Daily = CH.table("daily", {
 	columns: { OrgId: CH.string, Name: CH.string, Total: CH.uint64 },
 	engine: CH.engine.summingMergeTree(),
 	orderBy: ["OrgId", "Name"],
-	tenantColumn: "OrgId",
 })
 
 CH.insertInto(Daily).select(
@@ -229,6 +225,10 @@ An `INSERT ... SELECT` into a tenant table is `"single-tenant"` when the SELECT 
 takes its tenant from a tenant column of the source or from the same param that pins the SELECT.
 Into a table without a tenant column, the insert has the SELECT's scope: what it reads. A table
 without a tenant column gives `"untenanted"`.
+
+A batch that mixes tenants on purpose, such as an ingest flush, declares it with
+`insertInto(table).values(rows).crossTenant()`, so a database with `requireTenantScope` runs it.
+`update` and `deleteFrom` have `.crossTenant()` too. See [Tenant scoping](./tenant-scoping.md).
 
 ## Failures
 

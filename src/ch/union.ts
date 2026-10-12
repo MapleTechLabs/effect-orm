@@ -15,6 +15,8 @@ interface CHUnionState {
 	readonly outerLimitValue?: number
 	readonly outerOffsetValue?: number
 	readonly formatValue?: string
+	/** Set by `crossTenant()`. */
+	readonly crossTenant?: boolean
 }
 
 // CHUnionQuery interface
@@ -33,6 +35,13 @@ export interface CHUnionQuery<Output extends Record<string, any> = {}, Params = 
 	offset<N extends number>(n: RowCount<N>): CHUnionQuery<Output, Params>
 
 	format(fmt: "JSON" | "JSONEachRow"): CHUnionQuery<Output, Params>
+
+	/**
+	 * Declare that this union deliberately spans tenants, forcing
+	 * `tenantScope: "cross-tenant"` and setting `crossTenantDeclared`. A
+	 * database with `requireTenantScope` runs it; see docs/tenant-scoping.md.
+	 */
+	crossTenant(): CHUnionQuery<Output, Params>
 }
 
 /** Extract the Output type from a CHUnionQuery. */
@@ -62,6 +71,10 @@ function makeUnionQuery<Output extends Record<string, any>>(state: CHUnionState)
 
 		format(fmt) {
 			return makeUnionQuery({ ...state, formatValue: fmt })
+		},
+
+		crossTenant() {
+			return makeUnionQuery({ ...state, crossTenant: true })
 		},
 	}
 }

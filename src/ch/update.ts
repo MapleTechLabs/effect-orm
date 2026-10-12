@@ -41,6 +41,8 @@ interface WriteState {
 	readonly allRows?: boolean
 	readonly returningFn?: ($: any) => Record<string, Expr<any>>
 	readonly settings?: Readonly<Record<string, InsertSettingValue>>
+	/** Set by `crossTenant()`. */
+	readonly crossTenant?: boolean
 }
 
 /** @internal — runtime update state */
@@ -111,6 +113,13 @@ export interface CHUpdate<
 	returning<S extends Record<string, Expr<any>>>(
 		fn: ($: ColumnAccessor<Cols>) => S,
 	): CHUpdate<Cols, Computed, InferOutput<S>, Ready, Params | ParamsIn<S[keyof S]>>
+
+	/**
+	 * Declare that this update deliberately spans tenants, forcing
+	 * `tenantScope: "cross-tenant"` and setting `crossTenantDeclared`. A
+	 * database with `requireTenantScope` runs it; see docs/tenant-scoping.md.
+	 */
+	crossTenant(): CHUpdate<Cols, Computed, Output, Ready, Params>
 }
 
 export interface CHDelete<
@@ -144,6 +153,13 @@ export interface CHDelete<
 	returning<S extends Record<string, Expr<any>>>(
 		fn: ($: ColumnAccessor<Cols>) => S,
 	): CHDelete<Cols, InferOutput<S>, Ready, Params | ParamsIn<S[keyof S]>>
+
+	/**
+	 * Declare that this delete deliberately spans tenants, forcing
+	 * `tenantScope: "cross-tenant"` and setting `crossTenantDeclared`. A
+	 * database with `requireTenantScope` runs it; see docs/tenant-scoping.md.
+	 */
+	crossTenant(): CHDelete<Cols, Output, Ready, Params>
 }
 
 /**
@@ -176,6 +192,7 @@ const writeClauses = <State extends WriteState, Self>(state: State, make: (state
 	allRows: () => make({ ...state, allRows: true }),
 	settings: (settings: Readonly<Record<string, InsertSettingValue>>) => make({ ...state, settings: { ...settings } }),
 	returning: (...args: ReadonlyArray<unknown>) => make({ ...state, returningFn: returningFnOf(state.table)(args) }),
+	crossTenant: () => make({ ...state, crossTenant: true }),
 })
 
 const makeUpdate = (state: CHUpdateState): CHUpdate<any, any, any, any, any> => ({

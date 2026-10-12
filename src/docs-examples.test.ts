@@ -749,6 +749,43 @@ describe("docs/tenant-scoping.md", () => {
 		expect(compileCHUnsafe(query, {}).tenantScope).toBe("cross-tenant")
 	})
 
+	it("crossTenant() is recorded, and only an explicit opt-out counts", () => {
+		const declared = compileCHUnsafe(CH.from(Events).select(($) => ({ name: $.Name })).crossTenant(), {})
+		const forgotten = compileCHUnsafe(CH.from(Events).select(($) => ({ name: $.Name })), {})
+		expect(declared.crossTenantDeclared).toBe(true)
+		expect(forgotten.tenantScope).toBe("cross-tenant")
+		expect(forgotten.crossTenantDeclared).toBeUndefined()
+
+		const scoped = CH.from(Events)
+			.select(($) => ({ name: $.Name }))
+			.where(($) => [$.OrgId.eq("org_123")])
+		const union = compileUnionUnsafe(CH.unionAll(scoped, scoped).crossTenant(), {})
+		expect(union.tenantScope).toBe("cross-tenant")
+		expect(union.crossTenantDeclared).toBe(true)
+
+		const Logs = CH.table("logs", { OrgId: T.string, Name: T.string }, { tenantColumn: "OrgId" })
+		const batch = CH.insertInto(Logs).values([
+			{ OrgId: "org_a", Name: "a" },
+			{ OrgId: "org_b", Name: "b" },
+		])
+		expect(compileCHUnsafe(batch, {}).crossTenantDeclared).toBeUndefined()
+		expect(compileCHUnsafe(batch.crossTenant(), {}).crossTenantDeclared).toBe(true)
+		expect(compileCHUnsafe(CH.deleteFrom(Logs).allRows().crossTenant(), {}).crossTenantDeclared).toBe(true)
+	})
+
+	it("rawCompiledQuery defaults to an undeclared cross-tenant scope", () => {
+		const unannotated = CH.rawCompiledQuery({ sql: "SELECT 1", reason: "test-fixture", justification: "a test" })
+		expect(unannotated.tenantScope).toBe("cross-tenant")
+		expect(unannotated.crossTenantDeclared).toBeUndefined()
+		const declared = CH.rawCompiledQuery({
+			sql: "SELECT 1",
+			tenantScope: "cross-tenant",
+			reason: "test-fixture",
+			justification: "a test",
+		})
+		expect(declared.crossTenantDeclared).toBe(true)
+	})
+
 	it("route is carried onto the compiled query", () => {
 		const query = CH.from(Events)
 			.select(($) => ({ name: $.Name }))

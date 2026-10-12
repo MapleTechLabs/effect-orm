@@ -203,6 +203,14 @@ interface CompiledQueryBase<Output> {
 	readonly parameters: ReadonlyArray<unknown>
 	readonly tenantScope: TenantScope
 	/**
+	 * Set when the author asked for `"cross-tenant"`: `.crossTenant()` on the
+	 * statement that runs, or an explicit `tenantScope: "cross-tenant"` on
+	 * `rawCompiledQuery`. A query that is cross-tenant only because nothing
+	 * scoped it leaves this unset, which is what an executor enforcing tenant
+	 * scope refuses.
+	 */
+	readonly crossTenantDeclared?: true
+	/**
 	 * Where the query's row schema came from, or `"none"` if it has none.
 	 *
 	 * Lets a catalog sweep see the queries that decode nothing — a missing
@@ -404,6 +412,7 @@ const makeCompiledQuery = <Output, Route extends string | undefined>(
 	dialect?: string,
 	kind: CompiledQueryBase<Output>["kind"] = "select",
 	returning?: ReadonlyArray<string>,
+	crossTenantDeclared = false,
 ): CompiledQuery<Output, Route> => {
 	let cachedDecodeRow: ((row: unknown) => Effect.Effect<Output, unknown, never>) | undefined
 	let decoderBuilt = false
@@ -469,6 +478,7 @@ const makeCompiledQuery = <Output, Route extends string | undefined>(
 		...(returning !== undefined ? { returning } : undefined),
 		parameters,
 		tenantScope,
+		...(crossTenantDeclared ? { crossTenantDeclared: true } : undefined),
 		// Resolved eagerly only here, where the getter is already memoised by
 		// `decodeRow`/`encodeRow` below; reading it does not build a second one.
 		get rowSchema() {
@@ -509,7 +519,9 @@ const makeCompiledQuery = <Output, Route extends string | undefined>(
  * Prefer `compile(CH.from(...))`. `tenantScope` here is taken at face value —
  * there is no query AST to inspect, only a string — which is exactly why this
  * is the one place tenant scope can be *asserted* rather than derived, and why
- * every use has to name a `reason` and say why in a `justification`.
+ * every use has to name a `reason` and say why in a `justification`. Left out,
+ * it is `"cross-tenant"`: unknown SQL is the refused case under
+ * `requireTenantScope`, and irrelevant to a database without it.
  *
  * DDL, migrations, and another engine's file formats don't reach this function
  * at all; they never produce a `CompiledQuery`.
@@ -520,7 +532,7 @@ export const rawCompiledQuery = <
 	Reason extends string = string,
 >(args: {
 	readonly sql: string
-	readonly tenantScope: TenantScope
+	readonly tenantScope?: TenantScope
 	readonly reason: Reason
 	/** One sentence, at the call site, on why this instance qualifies. */
 	readonly justification: string
@@ -534,7 +546,7 @@ export const rawCompiledQuery = <
 	makeCompiledQuery(
 		args.sql,
 		[],
-		args.tenantScope,
+		args.tenantScope ?? "cross-tenant",
 		args.rowSchema === undefined ? "none" : "declared",
 		() => args.rowSchema,
 		args.route,
@@ -543,6 +555,8 @@ export const rawCompiledQuery = <
 		undefined,
 		args.dialect,
 		args.kind,
+		undefined,
+		args.tenantScope === "cross-tenant",
 	)
 
 /** What a failed compile returns while the failure it recorded waits for the entry point. */
@@ -980,6 +994,9 @@ function compileInner<
 					? undefined
 					: compareRowSchemas(options.rowSchema, derivedSchema),
 				currentDialect().name,
+				"select",
+				undefined,
+				state.crossTenant === true,
 			),
 			tenantScope === "single-tenant" ? scope.bound : undefined,
 		)
@@ -1364,7 +1381,9 @@ function compileUnionInner<Output extends Record<string, any>, Params extends Re
 	// UNION ALL is a disjunction: one unscoped branch leaks every tenant into the
 	// result regardless of how tightly the others are filtered.
 	const tenantScope: TenantScope =
-		bounds.size <= 1 &&
+		state.crossTenant === true
+			? "cross-tenant"
+			: bounds.size <= 1 &&
 		subQueries.length > 0 &&
 		subQueries.every((q) => q.tenantScope === "single-tenant")
 			? "single-tenant"
@@ -1430,6 +1449,9 @@ function compileUnionInner<Output extends Record<string, any>, Params extends Re
 				? undefined
 				: compareRowSchemas(options.rowSchema, derivedSchema),
 			currentDialect().name,
+			"select",
+			undefined,
+			state.crossTenant === true,
 		),
 		tenantScope === "single-tenant" ? [...bounds][0] : undefined,
 	)
@@ -1674,13 +1696,14 @@ const writeCompiledQuery = (
 	tenantScope: TenantScope,
 	tenantBound: string | undefined,
 	returning: ReturnType<typeof returningOf>,
+	crossTenant: boolean | undefined,
 ): CompiledQuery<any, undefined> => {
 	const returnedSchema = returning !== undefined && "schema" in returning.derived ? returning.derived.schema : undefined
 	return withTenantBound(
 		makeCompiledQuery<any, undefined>(
 			rendered.sql,
 			rendered.parameters,
-			tenantScope,
+			crossTenant === true ? "cross-tenant" : tenantScope,
 			returning === undefined || returnedSchema !== undefined ? "derived" : "none",
 			() => (returning === undefined ? EMPTY_ROW : returnedSchema),
 			undefined,
@@ -1690,8 +1713,9 @@ const writeCompiledQuery = (
 			currentDialect().name,
 			kind,
 			returning?.aliases,
+			crossTenant === true,
 		),
-		tenantBound,
+		crossTenant === true ? undefined : tenantBound,
 	)
 }
 
@@ -1924,7 +1948,7 @@ function compileInsert(insert: CHInsert<any, any, any, any>, params: Record<stri
 		},
 		reads,
 	)
-	return writeCompiledQuery(rendered, "insert", own.scope, own.bound, returning)
+	return writeCompiledQuery(rendered, "insert", own.scope, own.bound, returning, insert._state.crossTenant)
 }
 
 /** The VALUES rows' columns, in table order, after checking every key. */
@@ -2058,5 +2082,5 @@ function compileUpdateOrDelete(
 				: `UPDATE ${target} SET ${assignments.join(", ")}`
 	const rendered = renderParams(`${head}${whereSql}${returning?.sql ?? ""}${settings}`, values, dialect)
 	const scope = withReads({ scope: tenantScope, bound: tenantScope === "single-tenant" ? tenantBound : undefined }, reads)
-	return writeCompiledQuery(rendered, kind, scope.scope, scope.bound, returning)
+	return writeCompiledQuery(rendered, kind, scope.scope, scope.bound, returning, state.crossTenant)
 }

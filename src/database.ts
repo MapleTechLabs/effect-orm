@@ -30,6 +30,7 @@ export {
 } from "./database/database"
 export {
 	DatabaseError,
+	TenantScopeViolation,
 	TransactionClosed,
 	TransactionCommitFailed,
 	TransactionOptionsRejected,

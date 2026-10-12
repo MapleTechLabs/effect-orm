@@ -191,6 +191,8 @@ export interface CHInsertState {
 	readonly returningFn?: ($: any) => Record<string, Expr<any>>
 	/** Set by `onConflictDoNothing` / `onConflictDoUpdate`. */
 	readonly conflict?: ConflictClause
+	/** Set by `crossTenant()`. */
+	readonly crossTenant?: boolean
 }
 
 export interface CHInsert<
@@ -262,6 +264,13 @@ export interface CHInsert<
 	onConflictDoUpdate<S extends ConflictSet<Cols, Computed>, W = never>(
 		options: OnConflictDoUpdate<Cols, Computed, S, W>,
 	): CHInsert<Cols, Defaulted, Computed, Output, Params | ParamsIn<S[keyof S]> | W>
+
+	/**
+	 * Declare that this insert, such as a batch of rows from many tenants, deliberately spans tenants, forcing
+	 * `tenantScope: "cross-tenant"` and setting `crossTenantDeclared`. A
+	 * database with `requireTenantScope` runs it; see docs/tenant-scoping.md.
+	 */
+	crossTenant(): CHInsert<Cols, Defaulted, Computed, Output, Params>
 }
 
 const makeInsert = <Cols extends ColumnDefs, Defaulted extends string, Computed extends string, Output>(
@@ -290,6 +299,7 @@ const makeInsert = <Cols extends ColumnDefs, Defaulted extends string, Computed 
 	onConflictDoNothing: (options = {}) => makeInsert({ ...state, conflict: { action: "nothing", ...options } }),
 	onConflictDoUpdate: (options: OnConflictDoUpdate<any, any, any, any>) =>
 		makeInsert({ ...state, conflict: { action: "update", ...options } }),
+	crossTenant: () => makeInsert({ ...state, crossTenant: true }),
 })
 
 /**

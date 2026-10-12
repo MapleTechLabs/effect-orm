@@ -266,10 +266,12 @@ const compiled = CH.rawCompiledQuery<{ readonly name: string }>({
 })
 ```
 
-`tenantScope` is **required** — it cannot be inferred from a string, and whatever you assert is
-taken at face value. That is the whole hazard: this is the one place tenant scope is asserted
-rather than derived, so a query that forgot its tenant predicate would be positively _claimed_
-as scoped and sail through an executor's gate.
+`tenantScope` cannot be inferred from a string, and whatever you assert is taken at face value.
+Left out, it is `"cross-tenant"`, which only matters if you use
+[tenant enforcement](./tenant-scoping.md#enforcing-it); skip it if your tables are not shared.
+Asserting it is the hazard: this is the one place tenant scope is asserted rather than derived,
+so a query that forgot its tenant predicate would be positively _claimed_ as scoped and sail
+through an executor's gate.
 
 `reason` and `justification` are therefore required too. What counts as a legitimate reason is a policy
 of your codebase, not of this package, so `reason` is any string — pin it to a union of your own
@@ -283,7 +285,7 @@ type RawSqlReason =
 
 const rawQuery = <Output>(args: {
 	sql: string
-	tenantScope: CH.TenantScope
+	tenantScope?: CH.TenantScope
 	reason: RawSqlReason
 	justification: string
 	// Not `Schema.Schema<Output>`, which leaves `DecodingServices` open and so is
