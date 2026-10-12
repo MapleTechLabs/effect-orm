@@ -55,7 +55,7 @@ export interface CoreCase {
 	readonly expectedBy?: Partial<Record<Target, readonly unknown[]>>
 	/** ClickHouse output format, for the `format` cases. */
 	readonly format?: "JSON" | "JSONEachRow"
-	readonly metadata?: { readonly route: string; readonly tenantScope: CH.TenantScope }
+	readonly metadata?: { readonly route?: string; readonly tenantScope: CH.TenantScope }
 	/** Dialects that must refuse to compile this case, and the error they give. */
 	readonly rejects?: Partial<Record<DialectName, RegExp>>
 }
@@ -580,6 +580,19 @@ export const coreCases: readonly CoreCase[] = [
 					.crossTenant(),
 			),
 		expected: [{ orders: 5 }],
+	},
+	{
+		id: "union-cross-tenant",
+		covers: u("crossTenant"),
+		metadata: { tenantScope: "cross-tenant" },
+		build: (ctx) =>
+			ctx.compileUnion(
+				CH.unionAll(
+					ctx.from(ctx.orders).select(() => ({ orders: ctx.fn.count() })),
+					ctx.from(ctx.orders).select(() => ({ orders: ctx.fn.count() })),
+				).crossTenant(),
+			),
+		expected: [{ orders: 5 }, { orders: 5 }],
 	},
 	{
 		id: "format",

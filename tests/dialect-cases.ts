@@ -560,7 +560,7 @@ export const dialectCases: readonly DialectCase[] = [
 	),
 	{
 		id: "union-pagination",
-		covers: ["union:orderBy", "union:limit", "union:offset", "union:format"],
+		covers: ["union:orderBy", "union:limit", "union:offset", "union:format", "union:crossTenant"],
 		build: () =>
 			CH.compileUnionUnsafe(
 				CH.unionAll(
@@ -570,7 +570,8 @@ export const dialectCases: readonly DialectCase[] = [
 					.orderBy(["n", "desc"])
 					.limit(1)
 					.offset(1)
-					.format("JSONEachRow"),
+					.format("JSONEachRow")
+					.crossTenant(),
 				{},
 			),
 		expected: [{ n: 1 }],
