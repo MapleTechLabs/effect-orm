@@ -21,3 +21,29 @@ export const Accounts = PG.table("accounts", { columns: { id: PG.int4, org: PG.t
 export const accountsByOrg = PG.from(Accounts)
 	.select(($) => ({ id: $.id }))
 	.where(($) => [$.org.eq(PG.param.string("org"))])
+
+// An optional filter (`when`, `whenTrue`) and a param named by a union carry
+// `OptionalParamEntry` / `OptionalParams`.
+export const eventsMaybeByName = (name: string | undefined) =>
+	CH.from(Events)
+		.select(($) => ({ appId: $.appId }))
+		.where(($) => [CH.when(name, () => $.name.eq(CH.param.string("name")))])
+export const eventsByAppOptional = CH.from(Events)
+	.select(($) => ({ name: $.name }))
+	.where(($) => [CH.whenTrue(true, () => $.appId.eq(CH.param.int("appId")))])
+
+export const byUnionNamedParam = (byApp: boolean) =>
+	CH.from(Events)
+		.select(($) => ({ name: $.name }))
+		.where(($) => [$.appId.eq(CH.param.int(byApp ? "appId" : "fallbackAppId"))])
+
+// Joins, CTEs, subqueries and unions over parameterized queries.
+export const Sessions = CH.table("sessions", { external: true, columns: { appId: CH.uint32, id: CH.string } })
+export const joined = CH.from(Events)
+	.innerJoin(Sessions, "s", (e, s) => e.appId.eq(s.appId))
+	.select(($) => ({ name: $.name }))
+	.where(($) => [$.appId.eq(CH.param.int("appId"))])
+export const Recent = CH.table("recent", { external: true, columns: { name: CH.string } })
+export const withRecent = CH.from(Recent).withCTE("recent", eventsByApp).select(($) => ({ name: $.name }))
+export const fromSub = CH.fromQuery(eventsByApp, "sub").select(($) => ({ name: $.name }))
+export const both = CH.unionAll(eventsByApp, CH.from(Events).select(($) => ({ name: $.name })))
