@@ -95,7 +95,16 @@ export {
 	fromQuery,
 	fromUnion,
 } from "./ch/query"
-export { type ParamsSatisfied } from "./ch/expr"
+// The param types a consumer's exported query or `defineFn` helper names in its
+// declarations. Without them public, `tsc --declaration` fails with TS4023 /
+// TS2742 pointing into a hashed internal chunk.
+export {
+	type OptionalParamEntry,
+	type OptionalParams,
+	type ParamEntry,
+	type ParamsIn,
+	type ParamsSatisfied,
+} from "./ch/expr"
 
 export {
 	type CHInsert,

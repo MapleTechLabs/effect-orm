@@ -186,6 +186,13 @@ decoded type of a column), `InferEncoded` (its wire type), `ColumnDefs`, `Nullab
 over a query's output takes `CHQuery<…, Output> & NeedsSelect<Output>` so it can pass the query on
 to `compile`.
 
+**Params a query carries** — `ParamEntry<Name, Value>` (one `param.*` a query needs, in its type),
+`OptionalParamEntry<Name, Value>` and `OptionalParams<P>` (the same for a param under `when` /
+`whenTrue`, or one whose name is a union, which the params object may leave out) and
+`ParamsIn<X>` (the params an expression or argument list carries). You rarely write them, but
+`tsc --declaration` names them when a package exports a query with a param or a `defineFn` helper,
+so they are public.
+
 **Everything else** — `Table` (what `from` and the write builders accept; every `table` value is
 one), `Expr`, `ColumnRef`, `Condition`, `Comparable` (what a value of a type may be compared
 against), `MapValueOf`, `Subquery`, `ParamMarker`, `ParamKind`, `CHQuery`, `CHUnionQuery`,
