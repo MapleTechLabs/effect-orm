@@ -42,6 +42,9 @@ See [Getting started](./docs/getting-started.md) for source builds and examples.
 newer Effect 4 releases without opting into Effect 5. Effect 3 and the Effect 4
 prereleases are incompatible.
 
+The package is ESM. CommonJS code can `require()` every entry point on Node 20.19+
+or 22.12+ (`require(esm)`), the same way it loads Effect 4.
+
 ## Quick start
 
 One import per database. Each holds the whole query builder plus that database's column
