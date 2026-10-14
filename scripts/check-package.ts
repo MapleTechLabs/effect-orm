@@ -90,6 +90,23 @@ const program = Effect.gen(function* () {
 	yield* runCommand(path.join(temporary, "node_modules/.bin/tsc"), ["-p", ts5Config], temporary)
 	yield* runCommand("node", [path.join(temporary, "node_modules/typescript-5/bin/tsc"), "-p", ts5Config], temporary)
 	yield* runCommand("node", ["consumer-ts5.mts"], temporary)
+	// Exported queries and helpers must survive declaration emit, which is what a
+	// package that shares its query definitions runs.
+	yield* fs.copyFile(
+		path.join(root, "tests/package-consumer-declarations.mts"),
+		path.join(temporary, "consumer-declarations.mts"),
+	)
+	const declarationConfig = path.join(temporary, "tsconfig.declarations.json")
+	yield* fs.writeFileString(
+		declarationConfig,
+		yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))({
+			extends: "./tsconfig.json",
+			compilerOptions: { noEmit: false, declaration: true, emitDeclarationOnly: true, outDir: "declarations" },
+			include: ["consumer-declarations.mts"],
+		}),
+	)
+	yield* runCommand(path.join(temporary, "node_modules/.bin/tsc"), ["-p", declarationConfig], temporary)
+	yield* runCommand("node", [path.join(temporary, "node_modules/typescript-5/bin/tsc"), "-p", declarationConfig], temporary)
 	// The script runs on Bun; the published library must also work in Node.
 	yield* runCommand("node", ["consumer.mts"], temporary)
 	// And from CommonJS, through `require(esm)`: every entry, from the real tarball.
