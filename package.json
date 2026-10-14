@@ -35,51 +35,63 @@
 	"exports": {
 		"./clickhouse": {
 			"types": "./dist/clickhouse.d.mts",
-			"import": "./dist/clickhouse.mjs"
+			"import": "./dist/clickhouse.mjs",
+			"default": "./dist/clickhouse.mjs"
 		},
 		"./expr": {
 			"types": "./dist/expr.d.mts",
-			"import": "./dist/expr.mjs"
+			"import": "./dist/expr.mjs",
+			"default": "./dist/expr.mjs"
 		},
 		"./sql": {
 			"types": "./dist/sql.d.mts",
-			"import": "./dist/sql.mjs"
+			"import": "./dist/sql.mjs",
+			"default": "./dist/sql.mjs"
 		},
 		"./postgres": {
 			"types": "./dist/postgres.d.mts",
-			"import": "./dist/postgres.mjs"
+			"import": "./dist/postgres.mjs",
+			"default": "./dist/postgres.mjs"
 		},
 		"./schema": {
 			"types": "./dist/schema.d.mts",
-			"import": "./dist/schema.mjs"
+			"import": "./dist/schema.mjs",
+			"default": "./dist/schema.mjs"
 		},
 		"./tinybird": {
 			"types": "./dist/tinybird.d.mts",
-			"import": "./dist/tinybird.mjs"
+			"import": "./dist/tinybird.mjs",
+			"default": "./dist/tinybird.mjs"
 		},
 		"./migrate": {
 			"types": "./dist/migrate.d.mts",
-			"import": "./dist/migrate.mjs"
+			"import": "./dist/migrate.mjs",
+			"default": "./dist/migrate.mjs"
 		},
 		"./database": {
 			"types": "./dist/database.d.mts",
-			"import": "./dist/database.mjs"
+			"import": "./dist/database.mjs",
+			"default": "./dist/database.mjs"
 		},
 		"./kit": {
 			"types": "./dist/kit.d.mts",
-			"import": "./dist/kit.mjs"
+			"import": "./dist/kit.mjs",
+			"default": "./dist/kit.mjs"
 		},
 		"./benchmark": {
 			"types": "./dist/benchmark/index.d.mts",
-			"import": "./dist/benchmark/index.mjs"
+			"import": "./dist/benchmark/index.mjs",
+			"default": "./dist/benchmark/index.mjs"
 		},
 		"./benchmark/http": {
 			"types": "./dist/benchmark/http.d.mts",
-			"import": "./dist/benchmark/http.mjs"
+			"import": "./dist/benchmark/http.mjs",
+			"default": "./dist/benchmark/http.mjs"
 		},
 		"./benchmark/cli": {
 			"types": "./dist/benchmark/cli.d.mts",
-			"import": "./dist/benchmark/cli.mjs"
+			"import": "./dist/benchmark/cli.mjs",
+			"default": "./dist/benchmark/cli.mjs"
 		}
 	},
 	"publishConfig": {

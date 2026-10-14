@@ -92,6 +92,9 @@ const program = Effect.gen(function* () {
 	yield* runCommand("node", ["consumer-ts5.mts"], temporary)
 	// The script runs on Bun; the published library must also work in Node.
 	yield* runCommand("node", ["consumer.mts"], temporary)
+	// And from CommonJS, through `require(esm)`: every entry, from the real tarball.
+	yield* fs.copyFile(path.join(root, "tests/package-consumer.cjs"), path.join(temporary, "consumer.cjs"))
+	yield* runCommand("node", ["consumer.cjs"], temporary)
 	yield* runCommand(
 		path.join(temporary, "node_modules/.bin/ch-bench"),
 		["schema", "--json"],
