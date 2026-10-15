@@ -7,6 +7,7 @@ import { readFile } from "node:fs/promises"
 import * as Migrate from "../migrate"
 import { Hints, type Hint } from "../schema/diff"
 import { check, generate, KitError, readMigrations, type KitConfig } from "./generate"
+import { pull } from "./pull"
 
 const help = `effect-orm: schema migrations for ClickHouse and Postgres
 
@@ -14,6 +15,9 @@ const help = `effect-orm: schema migrations for ClickHouse and Postgres
            [--hints <json>] [--hints-file <path>]
            [--baseline [--from-drizzle]]  Start the history of a folder another tool wrote: a migration that runs
                                    nothing, with the current schema (or drizzle-kit's last snapshot) as its snapshot
+  pull [--out <path>] [--tables a,b] [--force]
+                                   Write table definitions from the database (ClickHouse). Default --out: the
+                                   config's schema module, when it names one. Then run generate --baseline
   check                            Validate the migrations folder (snapshot chain, branch conflicts)
   migrate [--strict]               Apply pending migrations (needs config.driver)
   status                           Applied, pending, partial, or changed, per migration
@@ -36,6 +40,9 @@ const options = {
 	hints: { type: "string" },
 	"hints-file": { type: "string" },
 	strict: { type: "boolean" },
+	out: { type: "string" },
+	tables: { type: "string" },
+	force: { type: "boolean" },
 	ran: { type: "boolean" },
 	"not-ran": { type: "boolean" },
 	json: { type: "boolean" },
@@ -112,6 +119,28 @@ const program = (args: ReadonlyArray<string>, print: (line: string) => void) =>
 						? ["No schema changes, nothing to write."]
 						: [`Wrote ${result.written}`, ...result.plan.flatMap((step) => step.sql.map((sql) => `  [${step.label}] ${sql.replace(/\n/g, "\n    ")}`))],
 				)
+				return 0
+			}
+			case "pull": {
+				const modules = typeof config.schema === "string" ? [config.schema] : config.schema
+				const target = parsed.values.out ?? (modules.length === 1 ? modules[0] : undefined)
+				if (target === undefined) {
+					return yield* new KitError({ code: "config", message: "the config names several schema modules; say which to write with --out" })
+				}
+				const tables = parsed.values.tables?.split(",").map((t) => t.trim()).filter((t) => t.length > 0)
+				if (tables !== undefined && tables.length === 0) {
+					return yield* new KitError({ code: "config", message: "--tables takes a comma-separated list of table names" })
+				}
+				const result = yield* pull(config, cwd, {
+					out: target,
+					...(tables !== undefined ? { tables } : undefined),
+					...(parsed.values.force === true ? { force: true } : undefined),
+				})
+				out(result, () => [
+					`Wrote ${result.written}: ${result.tables.length} tables${result.external.length > 0 ? `, ${result.external.length} external (${result.external.join(", ")})` : ""}.`,
+					...(result.review.length > 0 ? ["Review:", ...result.review.map((line) => `  ${line}`)] : []),
+					"Next: effect-orm generate --baseline, to start the migration history from this schema.",
+				])
 				return 0
 			}
 			case "check": {

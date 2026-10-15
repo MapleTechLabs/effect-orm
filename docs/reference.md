@@ -515,7 +515,7 @@ placeholders, double-quoted identifiers.
 | `DatabaseError`, `TransactionCommitFailed`, `TransactionRollbackFailed` and the other transaction errors | `/database` |
 | `withQuerySummary`, `QuerySummary` — the `db.query.summary` of the statements an effect runs, for spans | `/database` |
 | `ClickhouseHttpClient`, `layer`, `make`, `ClickhouseHttpClientConfig` — a ClickHouse `SqlClient` over `fetch`, for Workers | `/clickhouse-http` |
-| `defineConfig`, `generate`, `check`, `loadSchema`, `readMigrations`, `analyze`, `KitError`       | `/kit`            |
+| `defineConfig`, `generate`, `check`, `pull`, `loadSchema`, `readMigrations`, `analyze`, `KitError` | `/kit`            |
 | `defineSuite`, `query`, `caseFromCompiled`, `runSuite`, `compareRuns`, `compareBudgets`          | `/benchmark`      |
 | `Suite`, `RunOutput`, `BenchmarkError` and benchmark contracts                                   | `/benchmark`      |
 | `makeHttpClient`, `makeHttpTransport`, `httpConfigFromEnv`                                       | `/benchmark/http` |

@@ -1,0 +1,717 @@
+{
+	"database": "probe",
+	"tables": [
+		{
+			"name": "_effect_orm_migrations",
+			"engine": "MergeTree",
+			"engine_full": "MergeTree ORDER BY name SETTINGS index_granularity = 8192",
+			"sorting_key": "name",
+			"partition_key": "",
+			"primary_key": "name",
+			"sampling_key": "",
+			"as_select": "",
+			"comment": ""
+		},
+		{
+			"name": "coll",
+			"engine": "VersionedCollapsingMergeTree",
+			"engine_full": "VersionedCollapsingMergeTree(Sign, Ver) ORDER BY K SETTINGS index_granularity = 8192",
+			"sorting_key": "K, Ver",
+			"partition_key": "",
+			"primary_key": "K",
+			"sampling_key": "",
+			"as_select": "",
+			"comment": ""
+		},
+		{
+			"name": "dist",
+			"engine": "Distributed",
+			"engine_full": "Distributed('default', 'probe', 't')",
+			"sorting_key": "",
+			"partition_key": "",
+			"primary_key": "",
+			"sampling_key": "",
+			"as_select": "",
+			"comment": "events table"
+		},
+		{
+			"name": "mem",
+			"engine": "Memory",
+			"engine_full": "Memory",
+			"sorting_key": "",
+			"partition_key": "",
+			"primary_key": "",
+			"sampling_key": "",
+			"as_select": "",
+			"comment": ""
+		},
+		{
+			"name": "notuple",
+			"engine": "MergeTree",
+			"engine_full": "MergeTree ORDER BY tuple() SETTINGS index_granularity = 8192",
+			"sorting_key": "",
+			"partition_key": "",
+			"primary_key": "",
+			"sampling_key": "",
+			"as_select": "",
+			"comment": ""
+		},
+		{
+			"name": "plain",
+			"engine": "MergeTree",
+			"engine_full": "MergeTree ORDER BY (`my-col`, Id) SETTINGS index_granularity = 8192",
+			"sorting_key": "`my-col`, Id",
+			"partition_key": "",
+			"primary_key": "`my-col`, Id",
+			"sampling_key": "",
+			"as_select": "",
+			"comment": ""
+		},
+		{
+			"name": "sink",
+			"engine": "Null",
+			"engine_full": "`Null`",
+			"sorting_key": "",
+			"partition_key": "",
+			"primary_key": "",
+			"sampling_key": "",
+			"as_select": "",
+			"comment": ""
+		},
+		{
+			"name": "t",
+			"engine": "ReplacingMergeTree",
+			"engine_full": "ReplacingMergeTree(Ts) PARTITION BY toDate(Ts) PRIMARY KEY (OrgId, H) ORDER BY (OrgId, H, toStartOfHour(Ts), Name) SAMPLE BY H TTL toDate(Ts) + toIntervalDay(30) SETTINGS index_granularity = 4096, storage_policy = 'default'",
+			"sorting_key": "OrgId, H, toStartOfHour(Ts), Name",
+			"partition_key": "toDate(Ts)",
+			"primary_key": "OrgId, H",
+			"sampling_key": "H",
+			"as_select": "",
+			"comment": "events table"
+		},
+		{
+			"name": "totals",
+			"engine": "SummingMergeTree",
+			"engine_full": "SummingMergeTree ORDER BY (OrgId, Name) SETTINGS index_granularity = 8192",
+			"sorting_key": "OrgId, Name",
+			"partition_key": "",
+			"primary_key": "OrgId, Name",
+			"sampling_key": "",
+			"as_select": "",
+			"comment": ""
+		},
+		{
+			"name": "totals_mv",
+			"engine": "MaterializedView",
+			"engine_full": "",
+			"sorting_key": "",
+			"partition_key": "",
+			"primary_key": "",
+			"sampling_key": "",
+			"as_select": "SELECT OrgId, Name, count() AS C FROM probe.t GROUP BY OrgId, Name",
+			"comment": ""
+		},
+		{
+			"name": "v",
+			"engine": "View",
+			"engine_full": "",
+			"sorting_key": "",
+			"partition_key": "",
+			"primary_key": "",
+			"sampling_key": "",
+			"as_select": "SELECT OrgId FROM probe.t",
+			"comment": ""
+		}
+	],
+	"columns": [
+		{
+			"table": "_effect_orm_migrations",
+			"name": "name",
+			"type": "String",
+			"default_kind": "",
+			"default_expression": "",
+			"compression_codec": "",
+			"comment": "",
+			"position": 1
+		},
+		{
+			"table": "coll",
+			"name": "K",
+			"type": "String",
+			"default_kind": "",
+			"default_expression": "",
+			"compression_codec": "",
+			"comment": "",
+			"position": 1
+		},
+		{
+			"table": "coll",
+			"name": "Sign",
+			"type": "Int8",
+			"default_kind": "",
+			"default_expression": "",
+			"compression_codec": "",
+			"comment": "",
+			"position": 2
+		},
+		{
+			"table": "coll",
+			"name": "Ver",
+			"type": "UInt32",
+			"default_kind": "",
+			"default_expression": "",
+			"compression_codec": "",
+			"comment": "",
+			"position": 3
+		},
+		{
+			"table": "dist",
+			"name": "OrgId",
+			"type": "LowCardinality(String)",
+			"default_kind": "",
+			"default_expression": "",
+			"compression_codec": "",
+			"comment": "",
+			"position": 1
+		},
+		{
+			"table": "dist",
+			"name": "Ts",
+			"type": "DateTime64(3)",
+			"default_kind": "",
+			"default_expression": "",
+			"compression_codec": "CODEC(Delta(8), ZSTD(1))",
+			"comment": "",
+			"position": 2
+		},
+		{
+			"table": "dist",
+			"name": "Name",
+			"type": "String",
+			"default_kind": "DEFAULT",
+			"default_expression": "'x'",
+			"compression_codec": "",
+			"comment": "the name",
+			"position": 3
+		},
+		{
+			"table": "dist",
+			"name": "N",
+			"type": "Nullable(UInt64)",
+			"default_kind": "",
+			"default_expression": "",
+			"compression_codec": "",
+			"comment": "",
+			"position": 4
+		},
+		{
+			"table": "dist",
+			"name": "M",
+			"type": "Map(String, Array(Float64))",
+			"default_kind": "",
+			"default_expression": "",
+			"compression_codec": "",
+			"comment": "",
+			"position": 5
+		},
+		{
+			"table": "dist",
+			"name": "E",
+			"type": "Enum8('a' = 1, 'b' = 2)",
+			"default_kind": "",
+			"default_expression": "",
+			"compression_codec": "",
+			"comment": "",
+			"position": 6
+		},
+		{
+			"table": "dist",
+			"name": "D",
+			"type": "Decimal(18, 4)",
+			"default_kind": "",
+			"default_expression": "",
+			"compression_codec": "",
+			"comment": "",
+			"position": 7
+		},
+		{
+			"table": "dist",
+			"name": "U",
+			"type": "UUID",
+			"default_kind": "",
+			"default_expression": "",
+			"compression_codec": "",
+			"comment": "",
+			"position": 8
+		},
+		{
+			"table": "dist",
+			"name": "V",
+			"type": "UInt8",
+			"default_kind": "MATERIALIZED",
+			"default_expression": "1",
+			"compression_codec": "",
+			"comment": "",
+			"position": 9
+		},
+		{
+			"table": "dist",
+			"name": "A",
+			"type": "AggregateFunction(quantiles(0.5, 0.9), UInt64)",
+			"default_kind": "",
+			"default_expression": "",
+			"compression_codec": "",
+			"comment": "",
+			"position": 10
+		},
+		{
+			"table": "dist",
+			"name": "S",
+			"type": "SimpleAggregateFunction(sum, UInt64)",
+			"default_kind": "",
+			"default_expression": "",
+			"compression_codec": "",
+			"comment": "",
+			"position": 11
+		},
+		{
+			"table": "dist",
+			"name": "Z",
+			"type": "DateTime('UTC')",
+			"default_kind": "ALIAS",
+			"default_expression": "Ts",
+			"compression_codec": "",
+			"comment": "",
+			"position": 12
+		},
+		{
+			"table": "dist",
+			"name": "LN",
+			"type": "LowCardinality(Nullable(String))",
+			"default_kind": "",
+			"default_expression": "",
+			"compression_codec": "",
+			"comment": "",
+			"position": 13
+		},
+		{
+			"table": "dist",
+			"name": "H",
+			"type": "UInt64",
+			"default_kind": "",
+			"default_expression": "",
+			"compression_codec": "",
+			"comment": "",
+			"position": 14
+		},
+		{
+			"table": "mem",
+			"name": "A",
+			"type": "String",
+			"default_kind": "",
+			"default_expression": "",
+			"compression_codec": "",
+			"comment": "",
+			"position": 1
+		},
+		{
+			"table": "mem",
+			"name": "N",
+			"type": "UInt32",
+			"default_kind": "",
+			"default_expression": "",
+			"compression_codec": "",
+			"comment": "",
+			"position": 2
+		},
+		{
+			"table": "notuple",
+			"name": "A",
+			"type": "String",
+			"default_kind": "",
+			"default_expression": "",
+			"compression_codec": "",
+			"comment": "",
+			"position": 1
+		},
+		{
+			"table": "plain",
+			"name": "my-col",
+			"type": "String",
+			"default_kind": "",
+			"default_expression": "",
+			"compression_codec": "",
+			"comment": "",
+			"position": 1
+		},
+		{
+			"table": "plain",
+			"name": "Id",
+			"type": "UInt64",
+			"default_kind": "",
+			"default_expression": "",
+			"compression_codec": "",
+			"comment": "",
+			"position": 2
+		},
+		{
+			"table": "plain",
+			"name": "B",
+			"type": "Map(UInt64, String)",
+			"default_kind": "",
+			"default_expression": "",
+			"compression_codec": "",
+			"comment": "",
+			"position": 3
+		},
+		{
+			"table": "plain",
+			"name": "T",
+			"type": "Tuple(a String, b UInt8)",
+			"default_kind": "",
+			"default_expression": "",
+			"compression_codec": "",
+			"comment": "",
+			"position": 4
+		},
+		{
+			"table": "plain",
+			"name": "J",
+			"type": "JSON",
+			"default_kind": "",
+			"default_expression": "",
+			"compression_codec": "",
+			"comment": "",
+			"position": 5
+		},
+		{
+			"table": "plain",
+			"name": "Tz",
+			"type": "DateTime64(3, 'UTC')",
+			"default_kind": "",
+			"default_expression": "",
+			"compression_codec": "",
+			"comment": "",
+			"position": 6
+		},
+		{
+			"table": "plain",
+			"name": "NT",
+			"type": "Nullable(DateTime64(3))",
+			"default_kind": "",
+			"default_expression": "",
+			"compression_codec": "",
+			"comment": "",
+			"position": 7
+		},
+		{
+			"table": "plain",
+			"name": "F",
+			"type": "FixedString(4)",
+			"default_kind": "",
+			"default_expression": "",
+			"compression_codec": "",
+			"comment": "",
+			"position": 8
+		},
+		{
+			"table": "plain",
+			"name": "Day",
+			"type": "Date",
+			"default_kind": "",
+			"default_expression": "",
+			"compression_codec": "",
+			"comment": "",
+			"position": 9
+		},
+		{
+			"table": "plain",
+			"name": "I8",
+			"type": "Int8",
+			"default_kind": "",
+			"default_expression": "",
+			"compression_codec": "",
+			"comment": "",
+			"position": 10
+		},
+		{
+			"table": "plain",
+			"name": "F32",
+			"type": "Float32",
+			"default_kind": "",
+			"default_expression": "",
+			"compression_codec": "",
+			"comment": "",
+			"position": 11
+		},
+		{
+			"table": "plain",
+			"name": "Big",
+			"type": "Int128",
+			"default_kind": "",
+			"default_expression": "",
+			"compression_codec": "",
+			"comment": "",
+			"position": 12
+		},
+		{
+			"table": "plain",
+			"name": "Ip",
+			"type": "IPv4",
+			"default_kind": "",
+			"default_expression": "",
+			"compression_codec": "",
+			"comment": "",
+			"position": 13
+		},
+		{
+			"table": "plain",
+			"name": "Q",
+			"type": "Enum8('it\\'s' = 1, 'b' = 2)",
+			"default_kind": "",
+			"default_expression": "",
+			"compression_codec": "",
+			"comment": "",
+			"position": 14
+		},
+		{
+			"table": "plain",
+			"name": "Eph",
+			"type": "UInt8",
+			"default_kind": "EPHEMERAL",
+			"default_expression": "defaultValueOfTypeName('UInt8')",
+			"compression_codec": "",
+			"comment": "",
+			"position": 15
+		},
+		{
+			"table": "sink",
+			"name": "A",
+			"type": "String",
+			"default_kind": "",
+			"default_expression": "",
+			"compression_codec": "",
+			"comment": "",
+			"position": 1
+		},
+		{
+			"table": "t",
+			"name": "OrgId",
+			"type": "LowCardinality(String)",
+			"default_kind": "",
+			"default_expression": "",
+			"compression_codec": "",
+			"comment": "",
+			"position": 1
+		},
+		{
+			"table": "t",
+			"name": "Ts",
+			"type": "DateTime64(3)",
+			"default_kind": "",
+			"default_expression": "",
+			"compression_codec": "CODEC(Delta(8), ZSTD(1))",
+			"comment": "",
+			"position": 2
+		},
+		{
+			"table": "t",
+			"name": "Name",
+			"type": "String",
+			"default_kind": "DEFAULT",
+			"default_expression": "'x'",
+			"compression_codec": "",
+			"comment": "the name",
+			"position": 3
+		},
+		{
+			"table": "t",
+			"name": "N",
+			"type": "Nullable(UInt64)",
+			"default_kind": "",
+			"default_expression": "",
+			"compression_codec": "",
+			"comment": "",
+			"position": 4
+		},
+		{
+			"table": "t",
+			"name": "M",
+			"type": "Map(String, Array(Float64))",
+			"default_kind": "",
+			"default_expression": "",
+			"compression_codec": "",
+			"comment": "",
+			"position": 5
+		},
+		{
+			"table": "t",
+			"name": "E",
+			"type": "Enum8('a' = 1, 'b' = 2)",
+			"default_kind": "",
+			"default_expression": "",
+			"compression_codec": "",
+			"comment": "",
+			"position": 6
+		},
+		{
+			"table": "t",
+			"name": "D",
+			"type": "Decimal(18, 4)",
+			"default_kind": "",
+			"default_expression": "",
+			"compression_codec": "",
+			"comment": "",
+			"position": 7
+		},
+		{
+			"table": "t",
+			"name": "U",
+			"type": "UUID",
+			"default_kind": "",
+			"default_expression": "",
+			"compression_codec": "",
+			"comment": "",
+			"position": 8
+		},
+		{
+			"table": "t",
+			"name": "V",
+			"type": "UInt8",
+			"default_kind": "MATERIALIZED",
+			"default_expression": "1",
+			"compression_codec": "",
+			"comment": "",
+			"position": 9
+		},
+		{
+			"table": "t",
+			"name": "A",
+			"type": "AggregateFunction(quantiles(0.5, 0.9), UInt64)",
+			"default_kind": "",
+			"default_expression": "",
+			"compression_codec": "",
+			"comment": "",
+			"position": 10
+		},
+		{
+			"table": "t",
+			"name": "S",
+			"type": "SimpleAggregateFunction(sum, UInt64)",
+			"default_kind": "",
+			"default_expression": "",
+			"compression_codec": "",
+			"comment": "",
+			"position": 11
+		},
+		{
+			"table": "t",
+			"name": "Z",
+			"type": "DateTime('UTC')",
+			"default_kind": "ALIAS",
+			"default_expression": "Ts",
+			"compression_codec": "",
+			"comment": "",
+			"position": 12
+		},
+		{
+			"table": "t",
+			"name": "LN",
+			"type": "LowCardinality(Nullable(String))",
+			"default_kind": "",
+			"default_expression": "",
+			"compression_codec": "",
+			"comment": "",
+			"position": 13
+		},
+		{
+			"table": "t",
+			"name": "H",
+			"type": "UInt64",
+			"default_kind": "",
+			"default_expression": "",
+			"compression_codec": "",
+			"comment": "",
+			"position": 14
+		},
+		{
+			"table": "totals",
+			"name": "OrgId",
+			"type": "String",
+			"default_kind": "",
+			"default_expression": "",
+			"compression_codec": "",
+			"comment": "",
+			"position": 1
+		},
+		{
+			"table": "totals",
+			"name": "Name",
+			"type": "String",
+			"default_kind": "",
+			"default_expression": "",
+			"compression_codec": "",
+			"comment": "",
+			"position": 2
+		},
+		{
+			"table": "totals",
+			"name": "C",
+			"type": "UInt64",
+			"default_kind": "",
+			"default_expression": "",
+			"compression_codec": "",
+			"comment": "",
+			"position": 3
+		},
+		{
+			"table": "totals_mv",
+			"name": "OrgId",
+			"type": "LowCardinality(String)",
+			"default_kind": "",
+			"default_expression": "",
+			"compression_codec": "",
+			"comment": "",
+			"position": 1
+		},
+		{
+			"table": "totals_mv",
+			"name": "Name",
+			"type": "String",
+			"default_kind": "",
+			"default_expression": "",
+			"compression_codec": "",
+			"comment": "",
+			"position": 2
+		},
+		{
+			"table": "totals_mv",
+			"name": "C",
+			"type": "UInt64",
+			"default_kind": "",
+			"default_expression": "",
+			"compression_codec": "",
+			"comment": "",
+			"position": 3
+		},
+		{
+			"table": "v",
+			"name": "OrgId",
+			"type": "LowCardinality(String)",
+			"default_kind": "",
+			"default_expression": "",
+			"compression_codec": "",
+			"comment": "",
+			"position": 1
+		}
+	],
+	"indexes": [
+		{
+			"table": "t",
+			"name": "idx_name",
+			"type_full": "bloom_filter(0.01)",
+			"expr": "Name",
+			"granularity": 2
+		}
+	]
+}

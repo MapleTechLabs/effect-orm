@@ -16,4 +16,5 @@ export {
 	type GenerateResult,
 	type KitConfig,
 } from "./kit/generate"
+export { pull, type PullOptions, type PullResult } from "./kit/pull"
 export { runCli } from "./kit/cli"

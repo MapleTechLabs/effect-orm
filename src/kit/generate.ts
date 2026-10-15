@@ -57,7 +57,8 @@ export class KitError extends Schema.TaggedError<KitError>()("@maple-dev/effect-
 	details: Schema.optional(Schema.Array(Schema.String)),
 }) {}
 
-const io = <A>(op: () => Promise<A>, message: string) =>
+/** A filesystem call, failing with a `KitError` that names what it was doing. */
+export const io = <A>(op: () => Promise<A>, message: string) =>
 	Effect.tryPromise({ try: op, catch: (cause) => new KitError({ code: "io", message: `${message}: ${cause instanceof Error ? cause.message : String(cause)}` }) })
 
 /** Import every schema module and collect the definitions they export. */
