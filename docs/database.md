@@ -259,6 +259,31 @@ fails at BEGIN today: through the query path with a syntax error, and through `a
 `NOT_IMPLEMENTED`. The full measurements are in
 [`design/transactions.md`](../design/transactions.md).
 
+## Tracing
+
+Each statement `Database` runs is one client span, named and attributed the way the
+[OpenTelemetry database conventions](https://opentelemetry.io/docs/specs/semconv/database/database-spans/)
+describe. A compiled query knows its operation and table, so the span needs no SQL parsing:
+
+| Attribute                   | Value                                                                |
+| --------------------------- | -------------------------------------------------------------------- |
+| `db.system.name`            | `clickhouse`, or `postgresql`                                        |
+| `db.operation.name`         | `SELECT`, `INSERT`, `UPDATE` or `DELETE`                              |
+| `db.collection.name`        | The `FROM` or written table; absent over a subquery, union or CTE    |
+| `db.query.summary`          | `SELECT events`, or the name given with `withQuerySummary`           |
+| `db.response.returned_rows` | The rows it returned                                                 |
+| `error.type`                | On failure: the `DatabaseError` reason, such as `SqlSyntaxError`     |
+
+The span is named after the summary, so a trace reads `SELECT events` rather than `sql.execute`.
+Effect's own `sql.execute` span runs inside it and carries the query text. To give a group of
+statements a stable name of your own, wrap them:
+
+```ts
+Db.run(query, params).pipe(Db.withQuerySummary("dashboard.revenue_by_day"))
+```
+
+The table is also on the compiled query, as `compiled.collection`.
+
 ## Writes
 
 The builder compiles SELECTs, [INSERTs](./inserts.md) and

@@ -270,6 +270,16 @@ interface CompiledQueryBase<Output> {
 	 * meant: the SQL may even run, with ClickHouse quoting and inlined params.
 	 */
 	readonly dialect?: string
+	/**
+	 * The table the statement targets: a SELECT's `FROM` table, or the table an
+	 * INSERT, UPDATE or DELETE writes. Absent when there is no single table, as
+	 * for a `FROM` over a subquery, a union or a CTE, and for handwritten SQL.
+	 *
+	 * What a tracer reports as `db.collection.name`, and with `kind` the
+	 * statement's `db.query.summary` (`SELECT events`), so a span names its
+	 * table without parsing SQL.
+	 */
+	readonly collection?: string
 	/** Runtime decode of raw query results. Queries built from handwritten SQL
 	 *  should provide a row schema so schema drift is caught before consumers
 	 *  read fields from `Record<string, unknown>`. Without a schema this is an
@@ -413,6 +423,7 @@ const makeCompiledQuery = <Output, Route extends string | undefined>(
 	kind: CompiledQueryBase<Output>["kind"] = "select",
 	returning?: ReadonlyArray<string>,
 	crossTenantDeclared = false,
+	collection?: string,
 ): CompiledQuery<Output, Route> => {
 	let cachedDecodeRow: ((row: unknown) => Effect.Effect<Output, unknown, never>) | undefined
 	let decoderBuilt = false
@@ -489,6 +500,7 @@ const makeCompiledQuery = <Output, Route extends string | undefined>(
 		rowSchemaMismatch,
 		...(rawSql !== undefined ? { rawSql } : undefined),
 		...(dialect !== undefined ? { dialect } : undefined),
+		...(collection !== undefined ? { collection } : undefined),
 		...(!(route === undefined) ? { route } : undefined),
 		decodeRows,
 		encodeRows,
@@ -997,6 +1009,10 @@ function compileInner<
 				"select",
 				undefined,
 				state.crossTenant === true,
+				// A table, not a CTE of the same name and not a subquery or union.
+				state.fromQuery || state.fromUnion || visibleCtes.some((c) => c.name === state.tableName)
+					? undefined
+					: state.tableName,
 			),
 			tenantScope === "single-tenant" ? scope.bound : undefined,
 		)
@@ -1697,6 +1713,7 @@ const writeCompiledQuery = (
 	tenantBound: string | undefined,
 	returning: ReturnType<typeof returningOf>,
 	crossTenant: boolean | undefined,
+	collection: string,
 ): CompiledQuery<any, undefined> => {
 	const returnedSchema = returning !== undefined && "schema" in returning.derived ? returning.derived.schema : undefined
 	return withTenantBound(
@@ -1714,6 +1731,7 @@ const writeCompiledQuery = (
 			kind,
 			returning?.aliases,
 			crossTenant === true,
+			collection,
 		),
 		crossTenant === true ? undefined : tenantBound,
 	)
@@ -1948,7 +1966,7 @@ function compileInsert(insert: CHInsert<any, any, any, any>, params: Record<stri
 		},
 		reads,
 	)
-	return writeCompiledQuery(rendered, "insert", own.scope, own.bound, returning, insert._state.crossTenant)
+	return writeCompiledQuery(rendered, "insert", own.scope, own.bound, returning, insert._state.crossTenant, table.name)
 }
 
 /** The VALUES rows' columns, in table order, after checking every key. */
@@ -2082,5 +2100,5 @@ function compileUpdateOrDelete(
 				: `UPDATE ${target} SET ${assignments.join(", ")}`
 	const rendered = renderParams(`${head}${whereSql}${returning?.sql ?? ""}${settings}`, values, dialect)
 	const scope = withReads({ scope: tenantScope, bound: tenantScope === "single-tenant" ? tenantBound : undefined }, reads)
-	return writeCompiledQuery(rendered, kind, scope.scope, scope.bound, returning, state.crossTenant)
+	return writeCompiledQuery(rendered, kind, scope.scope, scope.bound, returning, state.crossTenant, table.name)
 }

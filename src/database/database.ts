@@ -31,6 +31,7 @@ import {
 } from "./errors"
 import { isSqlTemplate, renderTemplate, type SqlTemplate } from "./sql"
 import { firstLine, reasonOf, sqlStateOf, toDatabaseError } from "./sql-error"
+import { traceStatement, type TracedStatement } from "./tracing"
 
 /** SQL and the values bound to its placeholders. A `CompiledQuery` is one. */
 export interface Statement {
@@ -243,11 +244,16 @@ export const fromSqlClient = (sql: SqlClient.SqlClient, options: FromSqlClientOp
 	const resolve = (statement: StatementInput): Effect.Effect<Statement, DatabaseError> =>
 		isSqlTemplate(statement) ? renderTemplate(statement, dialect) : checkScope(statement)
 
-	const rows = (statement: Statement) =>
-		guard(statement).pipe(
-			Effect.andThen(raw.unsafe<Record<string, unknown>>(statement.sql, statement.parameters ?? [])),
-			Effect.map((rows): ReadonlyArray<Record<string, unknown>> => rows),
-			Effect.mapError(toDatabaseError(statement.sql)),
+	const rows = (statement: Statement & TracedStatement) =>
+		traceStatement(
+			dialect,
+			statement,
+			guard(statement).pipe(
+				Effect.andThen(raw.unsafe<Record<string, unknown>>(statement.sql, statement.parameters ?? [])),
+				Effect.map((rows): ReadonlyArray<Record<string, unknown>> => rows),
+				Effect.mapError(toDatabaseError(statement.sql)),
+			),
+			(rows) => rows.length,
 		)
 
 	const decodeWith =
@@ -271,11 +277,15 @@ export const fromSqlClient = (sql: SqlClient.SqlClient, options: FromSqlClientOp
 		)) as DatabaseApi["query"]
 
 	const execute: DatabaseApi["execute"] = (statement) =>
-		Effect.flatMap(resolve(statement), (resolved) =>
-			guard(resolved).pipe(
-				Effect.andThen(command(raw.unsafe(resolved.sql, resolved.parameters ?? []))),
-				Effect.asVoid,
-				Effect.mapError(toDatabaseError(resolved.sql)),
+		Effect.flatMap(resolve(statement), (resolved: Statement & TracedStatement) =>
+			traceStatement(
+				dialect,
+				resolved,
+				guard(resolved).pipe(
+					Effect.andThen(command(raw.unsafe(resolved.sql, resolved.parameters ?? []))),
+					Effect.asVoid,
+					Effect.mapError(toDatabaseError(resolved.sql)),
+				),
 			),
 		)
 

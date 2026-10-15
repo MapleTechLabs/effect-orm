@@ -38,6 +38,11 @@
 			"import": "./dist/clickhouse.mjs",
 			"default": "./dist/clickhouse.mjs"
 		},
+		"./clickhouse-http": {
+			"types": "./dist/clickhouse-http.d.mts",
+			"import": "./dist/clickhouse-http.mjs",
+			"default": "./dist/clickhouse-http.mjs"
+		},
 		"./expr": {
 			"types": "./dist/expr.d.mts",
 			"import": "./dist/expr.mjs",

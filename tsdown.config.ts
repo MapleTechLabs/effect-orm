@@ -3,6 +3,7 @@ import { defineConfig } from "tsdown"
 export default defineConfig({
 	entry: {
 		clickhouse: "./src/clickhouse.ts",
+		"clickhouse-http": "./src/clickhouse-http.ts",
 		expr: "./src/expr.ts",
 		sql: "./src/sql/index.ts",
 		postgres: "./src/postgres.ts",

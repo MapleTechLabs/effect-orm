@@ -38,5 +38,6 @@ export {
 	TransactionUnsupported,
 	type TransactionError,
 } from "./database/errors"
+export { QuerySummary, withQuerySummary } from "./database/tracing"
 export { sql, type SqlIdentifier, type SqlRawText, type SqlTemplate } from "./database/sql"
 export type { DialectTransactions, IsolationLevel, TransactionSettings } from "./ch/dialect"
