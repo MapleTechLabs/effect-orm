@@ -1,5 +1,22 @@
 # @maple-dev/effect-orm
 
+## 0.7.0
+
+### Minor Changes
+
+- 8ee504e: A ClickHouse client for Cloudflare Workers and any `fetch` runtime, and OpenTelemetry-shaped spans for every statement.
+  
+  - `@maple-dev/effect-orm/clickhouse-http` is a ClickHouse `SqlClient` over Effect's `HttpClient`, so `Database` runs where `@effect/sql-clickhouse` (Node only) cannot. Interrupting a statement aborts its request and sends `KILL QUERY` for its `query_id`; failures carry the same `SqlError` reasons as Effect's driver; credentials travel in a header; `asCommand`, `withQueryId` and `withSettings` work as there.
+  - `Database` opens one client span per statement, named and attributed per the OpenTelemetry database conventions: `db.system.name`, `db.operation.name`, `db.collection.name`, `db.query.summary`, `db.response.returned_rows` and `error.type`. `withQuerySummary(name)` names the statements an effect runs.
+  - `CompiledQuery.collection` is the table a statement targets: a SELECT's `FROM` table, or the table a write changes.
+- 6792323: `effect-orm pull` writes table definitions from an existing ClickHouse database, so adopting effect-orm on a database that already has tables no longer means writing every `CH.table` by hand.
+  
+  - It reads the database the config's `driver` connects to and writes one `CH.table` per table: engine and arguments, keys as declared, partition key, TTL, settings, comments, column defaults, codecs and skipping indexes. The definitions yield exactly what the database holds, so `generate --baseline` adopts them and the next `generate` has nothing to do.
+  - Column types map to the built-ins that write the same SQL; others become `CH.custom` with a fitting schema (`UUID`, `Date`, `Decimal`, `Enum8`, …) or `CH.untyped`. Views and non-MergeTree tables are written as `external: true`. Materialized views, `SAMPLE BY` and `EPHEMERAL` columns are listed for review in the file's header.
+  - `pull` is also exported from `/kit`.
+  
+  `verify` reads a table's sorting and primary keys as declared. It had compared `system.tables.sorting_key`, which has a `VersionedCollapsingMergeTree`'s version column appended, so such a table always showed drift.
+
 ## 0.6.2
 
 ### Patch Changes
