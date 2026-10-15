@@ -64,6 +64,7 @@ describe.skipIf(!endpoint)("pull (live)", () => {
 				expect(pulled.external).toEqual(["recent"])
 				expect(pulled.review).toEqual([
 					"totals_mv: materialized view not generated; write it with CH.materializedView. Its body: SELECT OrgId, Name, count() AS C FROM events GROUP BY OrgId, Name",
+					"events.Amount: Decimal(18, 4) decodes to a number, which rounds past 15 significant digits",
 				])
 
 				yield* Kit.generate(config, dir, { baseline: "schema", name: "baseline" })

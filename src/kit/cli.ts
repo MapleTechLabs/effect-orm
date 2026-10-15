@@ -122,11 +122,15 @@ const program = (args: ReadonlyArray<string>, print: (line: string) => void) =>
 				return 0
 			}
 			case "pull": {
-				const target = parsed.values.out ?? (typeof config.schema === "string" ? config.schema : undefined)
+				const modules = typeof config.schema === "string" ? [config.schema] : config.schema
+				const target = parsed.values.out ?? (modules.length === 1 ? modules[0] : undefined)
 				if (target === undefined) {
 					return yield* new KitError({ code: "config", message: "the config names several schema modules; say which to write with --out" })
 				}
 				const tables = parsed.values.tables?.split(",").map((t) => t.trim()).filter((t) => t.length > 0)
+				if (tables !== undefined && tables.length === 0) {
+					return yield* new KitError({ code: "config", message: "--tables takes a comma-separated list of table names" })
+				}
 				const result = yield* pull(config, cwd, {
 					out: target,
 					...(tables !== undefined ? { tables } : undefined),

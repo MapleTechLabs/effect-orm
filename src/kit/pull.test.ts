@@ -4,7 +4,7 @@ import { join, resolve } from "node:path"
 import { Effect } from "effect"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { runCli } from "../kit"
-import { engineSpecOf, entitiesFromCatalog, keyParts, splitEngineFull, type ClickHouseCatalog } from "../migrate/introspect"
+import { engineSpecOf, entitiesFromCatalog, keyParts, splitEngineFull, stripDatabase, type ClickHouseCatalog } from "../migrate/introspect"
 import { entitiesOf, isSchemaObject, type SchemaObject } from "../schema/snapshot"
 import { renderClickHouseSchema, typeCode } from "./codegen"
 
@@ -42,8 +42,8 @@ describe("introspection", () => {
 			["v", "View"],
 		])
 		expect(schema.notes).toEqual([
-			'plain: generated as external; table definitions take plain identifiers only, not "my-col"',
 			"plain.Eph: EPHEMERAL columns are not modeled; left out",
+			'plain: generated as external; table definitions take plain identifiers only, not "my-col"',
 			"t: SAMPLE BY H is not modeled; generated without it",
 			"totals_mv: materialized view not generated; write it with CH.materializedView. Its body: SELECT OrgId, Name, count() AS C FROM t GROUP BY OrgId, Name",
 		])
@@ -53,6 +53,38 @@ describe("introspection", () => {
 		const some = entitiesFromCatalog(catalog, { tables: ["totals", "nope"] })
 		expect(some.entities.filter((e) => e.kind === "table").map((e) => e.name)).toEqual(["totals"])
 		expect(some.notes).toEqual(["nope: no such table in probe"])
+	})
+
+	it("notes what a table holds beyond the model, and writes what it cannot declare as external", () => {
+		const table = (name: string, engineFull: string, create = "") => ({
+			name,
+			engine: engineFull.split("(")[0],
+			engine_full: engineFull,
+			create_table_query: create,
+		})
+		const column = (tbl: string, name: string, kind = "") => ({ table: tbl, name, type: "String", default_kind: kind, default_expression: kind === "" ? "" : "x" })
+		const schema = entitiesFromCatalog({
+			database: "db",
+			tables: [
+				table("legacy", "MergeTree(d, (k, d), 8192)"),
+				table("proj", "MergeTree ORDER BY k", "CREATE TABLE db.proj (k String, PROJECTION by_k (SELECT * ORDER BY k), CONSTRAINT k_set CHECK k != '') ENGINE = MergeTree ORDER BY k"),
+				table("eph", "MergeTree ORDER BY k"),
+			],
+			columns: [column("legacy", "k"), column("proj", "k"), column("eph", "k"), column("eph", "raw-input", "EPHEMERAL")],
+			indexes: [],
+		})
+		expect(schema.entities.filter((e) => e.kind === "table").map((e) => e.name)).toEqual(["eph", "proj"])
+		expect(schema.external.map((t) => t.name)).toEqual(["legacy"])
+		expect(schema.notes).toEqual([
+			"legacy: generated as external; its engine is declared in the old MergeTree(date, key, granularity) syntax, which table definitions do not write",
+			"proj: PROJECTION by_k is not modeled; generated without it",
+			"proj: CONSTRAINT k_set is not modeled; generated without it",
+			"eph.raw-input: EPHEMERAL columns are not modeled; left out",
+		])
+	})
+
+	it("strips the database qualifier only where it is one", () => {
+		expect(stripDatabase("SELECT a FROM db.t JOIN `my-db`.u JOIN mydb.v JOIN x.db.w", "db")).toBe("SELECT a FROM t JOIN `my-db`.u JOIN mydb.v JOIN x.db.w")
 	})
 
 	it("splits engine_full at its clauses, not inside expressions", () => {
@@ -83,11 +115,17 @@ describe("codegen", () => {
 		["Enum8('it\\'s' = 1, 'b' = 2)", 'CH.custom("Enum8(\'it\\\\\'s\' = 1, \'b\' = 2)", Schema.Literals(["it\'s", "b"]))'],
 		["AggregateFunction(quantiles(0.5, 0.9), UInt64)", 'CH.aggregateState("quantiles(0.5, 0.9)", "UInt64")'],
 		["SimpleAggregateFunction(sum, UInt64)", 'CH.simpleAggregateFunction("sum", CH.uint64)'],
-		["Decimal(18, 4)", 'CH.custom("Decimal(18, 4)", CH.CHNumber)'],
+		["Decimal(9, 2)", 'CH.custom("Decimal(9, 2)", CH.CHNumber)'],
 		["Map(UInt64, String)", 'CH.untyped("Map(UInt64, String)")'],
 		["Tuple(a String, b UInt8)", 'CH.untyped("Tuple(a String, b UInt8)")'],
 	])("%s", (sql, code) => {
 		expect(typeCode(sql)).toMatchObject({ code, sql })
+	})
+
+	it("flags a decimal wider than a number holds", () => {
+		expect(typeCode("Decimal(9, 2)").todo).toBeUndefined()
+		expect(typeCode("Decimal(38, 10)").todo).toBe("Decimal(38, 10) decodes to a number, which rounds past 15 significant digits")
+		expect(typeCode("Decimal128(4)").todo).toBeDefined()
 	})
 
 	it("writes a module that yields back the entities it was written from", async () => {
@@ -151,6 +189,14 @@ export default { schema: "./db/schema.ts", out: "./migrations", driver }
 		expect(await cli("generate")).toBe(0)
 		expect(lines.at(-1)).toBe("No schema changes, nothing to write.")
 		expect(readdirSync(join(dir, "migrations"))).toHaveLength(1)
+	})
+
+	it("takes a one-module schema array as the default --out, and refuses an empty --tables", async () => {
+		const config = join(dir, "effect-orm.config.ts")
+		writeFileSync(config, readFileSync(config, "utf8").replace('schema: "./db/schema.ts"', 'schema: ["./db/schema.ts"]'))
+		expect(await cli("pull", "--tables", " , ")).toBe(1)
+		expect(await cli("pull", "--tables", "totals")).toBe(0)
+		expect(readFileSync(join(dir, "db/schema.ts"), "utf8")).toContain('export const Totals = CH.table("totals", {')
 	})
 
 	it("refuses to overwrite without --force, and writes only the tables asked for", async () => {

@@ -7,7 +7,7 @@ import { dirname, resolve } from "node:path"
 import { Effect } from "effect"
 import { introspectClickHouse } from "../migrate/introspect"
 import { renderClickHouseSchema } from "./codegen"
-import { KitError, type KitConfig } from "./generate"
+import { io, KitError, type KitConfig } from "./generate"
 
 export interface PullOptions {
 	/** The file to write. */
@@ -27,9 +27,6 @@ export interface PullResult {
 	/** What the file leaves out or could not type, one line each; also in its header. */
 	readonly review: ReadonlyArray<string>
 }
-
-const io = <A>(op: () => Promise<A>, message: string) =>
-	Effect.tryPromise({ try: op, catch: (cause) => new KitError({ code: "io", message: `${message}: ${cause instanceof Error ? cause.message : String(cause)}` }) })
 
 /** `effect-orm pull`. ClickHouse only, for now. */
 export const pull = (config: KitConfig, cwd: string, options: PullOptions) =>

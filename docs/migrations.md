@@ -179,8 +179,11 @@ numbers, an `Enum8` as its labels), and a type the generator does not know (`Tup
   cannot be turned back into. The header quotes each body; write it with `CH.materializedView`.
 - **Views, dictionaries, `Distributed`, `Kafka` and other non-MergeTree tables** are written as
   `external: true`: queryable, never migrated.
-- A table with a name that is not a plain identifier (`my-col`) is written as external too.
-- **Not modeled, so left out:** `SAMPLE BY`, and `EPHEMERAL` columns.
+- A table with a name that is not a plain identifier (`my-col`), or a MergeTree declared in the
+  old `MergeTree(date, key, granularity)` syntax, is written as external too.
+- **Not modeled, so left out:** `SAMPLE BY`, projections, constraints and `EPHEMERAL` columns.
+  Column-level TTLs are not read at all.
+- A `Decimal` wider than 15 digits decodes to a number, which rounds; the header flags each one.
 
 `--tables a,b` writes only those tables; `--force` overwrites an existing file. `verify` reports
 the views and materialized views as `unexpected` until the schema declares them. Postgres is

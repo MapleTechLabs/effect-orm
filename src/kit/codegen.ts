@@ -10,7 +10,7 @@
 // `CH.custom` with the schema its JSON value decodes with, and one this file
 // does not know becomes `CH.untyped`, marked for review.
 
-import type { ColumnEntity, EngineSpec, IndexEntity, SchemaEntity, TableEntity } from "../schema/entities"
+import type { ColumnEntity, EngineSpec, IndexEntity, TableEntity } from "../schema/entities"
 import { keyParts, splitCall, type ExternalTable, type IntrospectedSchema } from "../migrate/introspect"
 
 export interface CodegenOptions {
@@ -134,6 +134,16 @@ const mapped = (sql: string): TypeCode => {
 			if (labels.length === 0 || labels.some((label) => label === undefined)) return untyped(sql)
 			return custom(sql, `Schema.Literals([${labels.map((label) => str(label!)).join(", ")}])`, true)
 		}
+		case "Decimal":
+		case "Decimal32":
+		case "Decimal64":
+		case "Decimal128":
+		case "Decimal256": {
+			const precision = name === "Decimal" ? Number(args[0]) : { Decimal32: 9, Decimal64: 18, Decimal128: 38, Decimal256: 76 }[name]
+			const type = custom(sql, "CH.CHNumber", false)
+			// A double holds 15 significant digits exactly.
+			return precision > 15 ? { ...type, todo: `${sql} decodes to a number, which rounds past 15 significant digits` } : type
+		}
 		default:
 			if (NUMBERS.has(name)) return custom(sql, "CH.CHNumber", false)
 			if (STRINGS.has(name)) return custom(sql, "Schema.String", true)
@@ -157,16 +167,17 @@ interface Out {
 	readonly todos: Array<string>
 }
 
-const columnCode = (out: Out, column: ColumnEntity, withOptions: boolean): string => {
+/** `ddl: false` writes only the default's kind, which says what an insert may leave out or not write. */
+const columnCode = (out: Out, column: ColumnEntity, ddl: boolean): string => {
 	const type = typeCode(column.type)
 	if (type.usesSchema) out.usesSchema = true
 	if (type.todo !== undefined) out.todos.push(`${column.table}.${column.name}: ${type.todo}`)
 	const options: Array<string> = []
-	if (withOptions) {
-		if (column.default !== null) {
-			const option = { DEFAULT: "defaultExpr", MATERIALIZED: "materialized", ALIAS: "alias" }[column.default.kind]
-			options.push(`${option}: ${str(column.default.expr)}`)
-		}
+	if (column.default !== null) {
+		const option = { DEFAULT: "defaultExpr", MATERIALIZED: "materialized", ALIAS: "alias" }[column.default.kind]
+		options.push(`${option}: ${str(column.default.expr)}`)
+	}
+	if (ddl) {
 		if (column.codec !== null) options.push(`codec: ${str(column.codec)}`)
 		if (column.comment !== null) options.push(`comment: ${str(column.comment)}`)
 	}
@@ -245,9 +256,15 @@ const externalCode = (out: Out, exportName: string, table: ExternalTable) => {
 /** The schema module for an introspected ClickHouse database. */
 export const renderClickHouseSchema = (schema: IntrospectedSchema, options: CodegenOptions = {}): { readonly source: string; readonly todos: ReadonlyArray<string> } => {
 	const out: Out = { lines: [], usesSchema: false, todos: [] }
-	const tables = schema.entities.filter((e): e is TableEntity => e.kind === "table")
-	const columnsOf = (entities: ReadonlyArray<SchemaEntity>, table: string) =>
-		entities.filter((e): e is ColumnEntity => e.kind === "column" && e.table === table).sort((a, b) => a.position - b.position)
+	const tables: Array<TableEntity> = []
+	const columns = new Map<string, Array<ColumnEntity>>()
+	const indexes = new Map<string, Array<IndexEntity>>()
+	const add = <E>(map: Map<string, Array<E>>, table: string, entity: E) => map.set(table, [...(map.get(table) ?? []), entity])
+	for (const entity of schema.entities) {
+		if (entity.kind === "table") tables.push(entity)
+		else if (entity.kind === "column") add(columns, entity.table, entity)
+		else if (entity.kind === "index") add(indexes, entity.table, entity)
+	}
 	const taken = new Set<string>(["CH", "Schema"])
 	const exportName = (name: string) => {
 		const base = pascal(name)
@@ -257,7 +274,7 @@ export const renderClickHouseSchema = (schema: IntrospectedSchema, options: Code
 		return candidate
 	}
 	const objects = [
-		...tables.map((t) => ({ name: t.name, write: () => tableCode(out, exportName(t.name), t, columnsOf(schema.entities, t.name), schema.entities.filter((e): e is IndexEntity => e.kind === "index" && e.table === t.name)) })),
+		...tables.map((t) => ({ name: t.name, write: () => tableCode(out, exportName(t.name), t, (columns.get(t.name) ?? []).sort((a, b) => a.position - b.position), indexes.get(t.name) ?? []) })),
 		...schema.external.map((t) => ({ name: t.name, write: () => externalCode(out, exportName(t.name), t) })),
 	].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
 	objects.forEach((object, i) => {

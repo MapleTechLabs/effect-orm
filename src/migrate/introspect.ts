@@ -12,8 +12,8 @@
 // engine outside the MergeTree family, `Null` and `Memory` (a view, a
 // dictionary, `Distributed`, `Kafka`), or with a name that is not a plain
 // identifier, comes back as an external table, with its columns only. What a
-// managed table has beyond the model (a sampling key, an `EPHEMERAL` column)
-// is reported in `notes`, and so is every materialized view: its body is a
+// managed table has beyond the model (a sampling key, a projection, a
+// constraint, an `EPHEMERAL` column) is reported in `notes`, and so is every materialized view: its body is a
 // query-DSL value, which SQL text cannot be turned into.
 
 import { Effect } from "effect"
@@ -196,18 +196,40 @@ export interface IntrospectOptions {
 	readonly tables?: ReadonlyArray<string>
 }
 
+/** `sql` without `<database>.` qualifiers, which the server adds to a view's body. */
+export const stripDatabase = (sql: string, database: string): string =>
+	sql.replace(new RegExp(`(?<![\\w.\`-])${database.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\.`, "g"), "")
+
+const groupByTable = (rows: ReadonlyArray<CatalogRow>): Map<string, Array<CatalogRow>> => {
+	const out = new Map<string, Array<CatalogRow>>()
+	for (const row of rows) {
+		const table = textOf(row.table)
+		const list = out.get(table)
+		if (list === undefined) out.set(table, [row])
+		else list.push(row)
+	}
+	return out
+}
+
+/** Parts of a table's DDL the entity model does not hold, named from its `CREATE` statement. */
+const UNMODELED = [
+	["PROJECTION", /\bPROJECTION\s+`?([\w-]+)/g],
+	["CONSTRAINT", /\bCONSTRAINT\s+`?([\w-]+)/g],
+] as const
+
 /** The catalog as entities. Pure; see `introspectClickHouse`. */
 export const entitiesFromCatalog = (catalog: ClickHouseCatalog, options: IntrospectOptions = {}): IntrospectedSchema => {
 	const ledger = new Set<string>(Object.values(LEDGER_TABLES))
 	const wanted = options.tables === undefined ? undefined : new Set(options.tables)
+	const columnRows = groupByTable(catalog.columns)
+	const indexRows = groupByTable(catalog.indexes)
 	const entities: Array<SchemaEntity> = []
 	const external: Array<ExternalTable> = []
 	const notes: Array<string> = []
 
-	/** A managed table's columns; `EPHEMERAL` ones are left out, an insert-only input no query can read. */
+	/** A table's columns; `EPHEMERAL` ones are left out, an insert-only input no query can read. */
 	const columnsOf = (table: string): Array<ColumnEntity> =>
-		catalog.columns
-			.filter((row) => textOf(row.table) === table)
+		(columnRows.get(table) ?? [])
 			.filter((row) => {
 				const kind = textOf(row.default_kind)
 				if (kind.length === 0 || DEFAULT_KINDS.has(kind)) return true
@@ -228,34 +250,43 @@ export const entitiesFromCatalog = (catalog: ClickHouseCatalog, options: Introsp
 					comment: orNull(textOf(row.comment)),
 				}
 			})
-	const qualified = new RegExp(`\\b${catalog.database.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\.`, "g")
 
 	for (const row of catalog.tables) {
 		const name = textOf(row.name)
 		if (ledger.has(name) || (wanted !== undefined && !wanted.has(name))) continue
 		const engineName = textOf(row.engine)
 		if (engineName === "MaterializedView") {
-			const body = textOf(row.as_select).replace(qualified, "")
+			const body = stripDatabase(textOf(row.as_select), catalog.database)
 			notes.push(`${name}: materialized view not generated; write it with CH.materializedView. Its body: ${body}`)
 			continue
 		}
 		const { engine, clauses } = splitEngineFull(textOf(row.engine_full))
 		const spec = engineSpecOf(engine.length > 0 ? engine : engineName)
-		if (!isModeledEngine(spec.family)) {
-			external.push({ name, engine: engineName, columns: columnsOf(name) })
-			continue
-		}
-		const unplain = [name, ...catalog.columns.filter((c) => textOf(c.table) === name).map((c) => textOf(c.name))].filter(
-			(identifier) => !PLAIN.test(identifier),
-		)
-		if (unplain.length > 0) {
-			notes.push(`${name}: generated as external; table definitions take plain identifiers only, not ${unplain.map((u) => JSON.stringify(u)).join(", ")}`)
-			external.push({ name, engine: engineName, columns: columnsOf(name) })
-			continue
-		}
 		const columns = columnsOf(name)
+		const asExternal = (reason?: string) => {
+			if (reason !== undefined) notes.push(`${name}: generated as external; ${reason}`)
+			external.push({ name, engine: engineName, columns })
+		}
+		if (!isModeledEngine(spec.family)) {
+			asExternal()
+			continue
+		}
 		const mergeTree = spec.family.endsWith("MergeTree")
+		if (mergeTree && clauses["ORDER BY"] === undefined) {
+			asExternal("its engine is declared in the old MergeTree(date, key, granularity) syntax, which table definitions do not write")
+			continue
+		}
+		const unplain = [name, ...columns.map((c) => c.name)].filter((identifier) => !PLAIN.test(identifier))
+		if (unplain.length > 0) {
+			asExternal(`table definitions take plain identifiers only, not ${unplain.map((u) => JSON.stringify(u)).join(", ")}`)
+			continue
+		}
 		if (textOf(row.sampling_key).length > 0) notes.push(`${name}: SAMPLE BY ${textOf(row.sampling_key)} is not modeled; generated without it`)
+		for (const [kind, pattern] of UNMODELED) {
+			for (const match of textOf(row.create_table_query).matchAll(pattern)) {
+				notes.push(`${name}: ${kind} ${match[1]} is not modeled; generated without it`)
+			}
+		}
 		const table: TableEntity = {
 			kind: "table",
 			name,
@@ -269,8 +300,7 @@ export const entitiesFromCatalog = (catalog: ClickHouseCatalog, options: Introsp
 			comment: orNull(textOf(row.comment)),
 		}
 		entities.push(table, ...columns)
-		for (const index of catalog.indexes) {
-			if (textOf(index.table) !== name) continue
+		for (const index of indexRows.get(name) ?? []) {
 			entities.push({
 				kind: "index",
 				table: name,
