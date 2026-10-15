@@ -169,7 +169,7 @@ export const make = (
 			params: ReadonlyArray<unknown>,
 			format: "JSON" | "JSONCompact" | "JSONEachRow" | undefined,
 			operation: string,
-		): Effect.Effect<HttpClientResponse.HttpClientResponse, SqlError, Scope.Scope> =>
+		): Effect.Effect<{ readonly response: HttpClientResponse.HttpClientResponse; readonly queryId: string }, SqlError, Scope.Scope> =>
 			Effect.withFiber((fiber) => {
 				const command = fiber.getRef(ClientMethod) === "command"
 				const queryId = fiber.getRef(QueryId) ?? crypto.randomUUID()
@@ -186,7 +186,8 @@ export const make = (
 					// Aborting the request does not stop the query: ClickHouse notices a
 					// closed connection only when it next writes to it, which a query still
 					// computing its first block may not do for a long time. So kill it by id,
-					// as Effect's Node driver does.
+					// as Effect's Node driver does. The body is read after this returns (the
+					// headers come with the first block), so readers keep the same guard.
 					Effect.onInterrupt(() => kill(queryId)),
 					Effect.mapError(
 						(cause) =>
@@ -196,7 +197,7 @@ export const make = (
 					),
 					Effect.flatMap((response) =>
 						response.status === 200
-							? Effect.succeed(response)
+							? Effect.succeed({ response, queryId })
 							: Effect.flatMap(Effect.orElseSucceed(response.text, () => ""), (body) => {
 									const header = response.headers["x-clickhouse-exception-code"]
 									const code = header === undefined ? codeFromBody(body) : Number(header)
@@ -216,8 +217,11 @@ export const make = (
 					fiber.getRef(ClientMethod) === "command"
 						? Effect.as(send(sql, params, undefined, "execute"), [] as ReadonlyArray<any>)
 						: send(sql, params, format, "execute").pipe(
-								Effect.flatMap((response) =>
-									Effect.mapError(response.text, (cause) => parseFailure(cause, "execute")),
+								Effect.flatMap(({ response, queryId }) =>
+									response.text.pipe(
+										Effect.mapError((cause) => parseFailure(cause, "execute")),
+										Effect.onInterrupt(() => kill(queryId)),
+									),
 								),
 								Effect.flatMap((text) =>
 									Effect.try({
@@ -239,8 +243,13 @@ export const make = (
 				transformRows ? Effect.map(json(sql, params, "JSON"), transformRows) : json(sql, params, "JSON"),
 			executeStream: (sql, params, transformRows) =>
 				send(sql, params, "JSONEachRow", "stream").pipe(
-					Effect.map((response) =>
-						response.stream.pipe(
+					Effect.map(({ response, queryId }) => {
+						// A stream can end before the body does: interrupted, failed, or stopped
+						// early by its consumer (`Stream.take`). Any of those leaves the query
+						// running on the server, so it is killed unless the body was read to the end.
+						let drained = false
+						return response.stream.pipe(
+							Stream.onEnd(Effect.sync(() => void (drained = true))),
 							Stream.mapError(
 								(cause) =>
 									new SqlError({
@@ -254,8 +263,9 @@ export const make = (
 								Effect.try({ try: () => JSON.parse(line) as object, catch: (cause) => parseFailure(cause, "stream") }),
 							),
 							Stream.map((row) => (transformRows ? transformRows([row])[0] : row)),
-						),
-					),
+							Stream.ensuring(Effect.suspend(() => (drained ? Effect.void : kill(queryId)))),
+						)
+					}),
 					Stream.unwrap,
 				),
 		}

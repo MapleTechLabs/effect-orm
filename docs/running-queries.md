@@ -99,7 +99,9 @@ What it does for you:
 
 - **Interrupting cancels the query.** A timeout or an interrupted fiber aborts the request and
   sends `KILL QUERY` for its `query_id`: a closed connection alone does not stop a query
-  ClickHouse is still computing. Queries also send `cancel_http_readonly_queries_on_client_close`.
+  ClickHouse is still computing. That holds while the body is read too, and for a `.stream`
+  that ends before its body does (interrupted, failed, or stopped early with `Stream.take`).
+  Queries also send `cancel_http_readonly_queries_on_client_close`.
 - **Failures carry Effect's `SqlError` reasons** (`SqlSyntaxError`, `AuthenticationError`,
   `StatementTimeoutError`, …), read from ClickHouse's exception code, the same as
   `@effect/sql-clickhouse`.

@@ -184,6 +184,57 @@ describe("ClickhouseHttpClient", () => {
 		}).pipe(Effect.provide(live))
 	})
 
+	/** A client whose queries answer 200 with `first` and then a body that never ends. */
+	const hanging = (first: string) => {
+		const sent: Array<Sent> = []
+		const http = HttpClient.make((request, url) => {
+			const body = request.body._tag === "Uint8Array" ? (request.body.text ?? "") : ""
+			sent.push({ url, body, headers: { ...request.headers } })
+			if (body.startsWith("KILL")) return Effect.succeed(HttpClientResponse.fromWeb(request, new Response("")))
+			const stream = new ReadableStream<Uint8Array>({
+				start(controller) {
+					if (first !== "") controller.enqueue(new TextEncoder().encode(first))
+				},
+			})
+			return Effect.succeed(HttpClientResponse.fromWeb(request, new Response(stream)))
+		})
+		const live = layer({ url: "https://clickhouse.example" }).pipe(Layer.provide(Layer.succeed(HttpClient.HttpClient, http)))
+		const kills = () => sent.filter((request) => request.body.startsWith("KILL"))
+		return { live, kills }
+	}
+
+	it.effect("kills the query when a stream is stopped before its body ends", () => {
+		const { live, kills } = hanging('{"n":1}\n')
+		return Effect.gen(function* () {
+			const client = yield* ClickhouseHttpClient
+			const rows = yield* Stream.runCollect(
+				client.unsafe("SELECT number AS n FROM numbers(1e9)").stream.pipe(Stream.take(1)),
+			).pipe(client.withQueryId("early-1"))
+			expect(rows).toEqual([{ n: 1 }])
+			expect(kills().map((kill) => kill.url.searchParams.get("param_id"))).toEqual(["early-1"])
+		}).pipe(Effect.provide(live))
+	})
+
+	it.effect("kills the query when interrupted while reading a response body", () => {
+		const { live, kills } = hanging("")
+		return Effect.gen(function* () {
+			const client = yield* ClickhouseHttpClient
+			const fiber = yield* Effect.forkChild(client.unsafe("SELECT sleep(3)").pipe(client.withQueryId("body-1")))
+			for (let i = 0; i < 5; i++) yield* Effect.yieldNow
+			yield* Fiber.interrupt(fiber)
+			expect(kills().map((kill) => kill.url.searchParams.get("param_id"))).toEqual(["body-1"])
+		}).pipe(Effect.provide(live))
+	})
+
+	it.effect("sends no kill for a stream read to the end", () => {
+		const { sent, live } = fake(() => ({ body: '{"n":1}\n{"n":2}\n' }))
+		return Effect.gen(function* () {
+			const sql = yield* SqlClient.SqlClient
+			expect(yield* Stream.runCollect(sql.unsafe("SELECT 1").stream)).toEqual([{ n: 1 }, { n: 2 }])
+			expect(sent.filter((request) => request.body.startsWith("KILL"))).toEqual([])
+		}).pipe(Effect.provide(live))
+	})
+
 	it.effect("keeps a path in the url, for ClickHouse behind a proxy prefix", () => {
 		const { sent, live } = fake(() => json([]), { url: "https://gateway.example/clickhouse" })
 		return Effect.gen(function* () {
