@@ -14,6 +14,7 @@ import { Effect } from "effect"
 import { quoteClickHouseString } from "../sql/sql-fragment"
 import type { SchemaDialect, ClickHouseSnapshot, ColumnEntity, IndexEntity, MaterializedViewEntity, TableEntity } from "../schema/entities"
 import { MigrationDriver } from "./driver"
+import { readClickHouseCatalog, splitEngineFull, type CatalogRow } from "./introspect"
 import type { MigrateSourceError, MigrateSqlError } from "./errors"
 import { LEDGER_TABLES, readApplied } from "./ledger"
 import { readPgApplied } from "./pg-ledger"
@@ -55,6 +56,19 @@ const unwrapTuple = (key: string | null): string => {
 	if (key === null || key === "tuple()") return ""
 	const trimmed = key.trim()
 	return trimmed.startsWith("(") && trimmed.endsWith(")") ? trimmed.slice(1, -1) : trimmed
+}
+/**
+ * A table's keys as it was declared. `sorting_key` will not do: a
+ * VersionedCollapsingMergeTree's has its version column appended.
+ */
+const declaredKeys = (row: CatalogRow): Record<"sorting_key" | "partition_key" | "primary_key", string> => {
+	const { clauses } = splitEngineFull(String(row.engine_full ?? ""))
+	const sorting = clauses["ORDER BY"] === undefined ? String(row.sorting_key ?? "") : unwrapTuple(clauses["ORDER BY"])
+	return {
+		sorting_key: sorting,
+		partition_key: String(row.partition_key ?? ""),
+		primary_key: clauses["PRIMARY KEY"] === undefined ? sorting : unwrapTuple(clauses["PRIMARY KEY"]),
+	}
 }
 const engineFamily = (engine: string): string => engine.replace(/^(Replicated|Shared)(?=\w*MergeTree$)/, "")
 
@@ -115,17 +129,7 @@ export const verify = (
 const verifyClickHouse = (snapshot: ClickHouseSnapshot): Effect.Effect<ReadonlyArray<Drift>, MigrateSqlError, MigrationDriver> =>
 	Effect.gen(function* () {
 		const driver = yield* MigrationDriver
-
-		const db = String((yield* driver.query("SELECT currentDatabase() AS db"))[0]?.db ?? "default")
-		const tables = yield* driver.query(
-			`SELECT name, engine, sorting_key, partition_key, primary_key, as_select, create_table_query FROM system.tables WHERE database = currentDatabase() AND NOT is_temporary AND NOT startsWith(name, '.inner')`,
-		)
-		const columns = yield* driver.query(
-			`SELECT table, name, type, default_kind, default_expression FROM system.columns WHERE database = currentDatabase()`,
-		)
-		const indexes = yield* driver.query(
-			`SELECT table, name, type_full, expr, granularity FROM system.data_skipping_indices WHERE database = currentDatabase()`,
-		)
+		const { database: db, tables, columns, indexes } = yield* readClickHouseCatalog
 
 		const expectedTables = snapshot.entities.filter((e): e is TableEntity => e.kind === "table")
 		const expectedColumns = snapshot.entities.filter((e): e is ColumnEntity => e.kind === "column")
@@ -136,7 +140,7 @@ const verifyClickHouse = (snapshot: ClickHouseSnapshot): Effect.Effect<ReadonlyA
 		for (const t of expectedTables) for (const k of [t.orderBy, t.partitionBy, t.primaryKey]) exprs.add(unwrapTuple(k))
 		for (const c of expectedColumns) if (c.default !== null) exprs.add(c.default.expr)
 		for (const i of expectedIndexes) exprs.add(i.expr)
-		for (const row of tables) for (const k of ["sorting_key", "partition_key", "primary_key"]) exprs.add(String(row[k] ?? ""))
+		for (const row of tables) for (const key of Object.values(declaredKeys(row))) exprs.add(key)
 		for (const row of columns) exprs.add(String(row.default_expression ?? ""))
 		for (const row of indexes) exprs.add(String(row.expr ?? ""))
 		const expr = yield* canonical(driver, "expr", exprs)
@@ -167,7 +171,7 @@ const verifyClickHouse = (snapshot: ClickHouseSnapshot): Effect.Effect<ReadonlyA
 			] as const
 			for (const [column, key] of keys) {
 				const expected = norm(expr, unwrapTuple(key))
-				const actual = norm(expr, String(row[column] ?? ""))
+				const actual = norm(expr, declaredKeys(row)[column])
 				if (expected !== actual) drift.push({ entity: t.name, problem: column, expected, actual })
 			}
 		}

@@ -151,6 +151,41 @@ tables. Independent branches are fine: the next `generate` records both as paren
 change the same table conflict; delete one migration and generate it again on top of the other.
 Run `check` in CI.
 
+### Starting from an existing database
+
+A ClickHouse database that predates effect-orm does not need its tables written by hand.
+`effect-orm pull` reads the database the config's `driver` connects to and writes a schema
+module, one `CH.table` per table; then `generate --baseline` starts the history from it:
+
+```sh
+effect-orm pull                         # writes the config's schema module; --out <path> for another
+effect-orm generate --baseline          # a migration that runs nothing, with this schema as its snapshot
+effect-orm migrate                      # runs no statement; records the baseline as applied
+```
+
+The module is written so that its definitions yield exactly what the database holds: engine
+and its arguments, keys as declared, partition key, TTL, settings, comments, column defaults
+(`DEFAULT`, `MATERIALIZED`, `ALIAS`), codecs and skipping indexes, with every expression as the
+server's own text. The first `generate` after the baseline finds nothing to do. A `Replicated`
+or `Shared` engine is written as its plain family; replication is a render option.
+
+Column types map to the built-ins that write the same SQL (`LowCardinality(Nullable(String))` is
+`CH.lowCardinality(CH.nullable(CH.string))`). A type without one becomes `CH.custom` with the
+schema its JSON value decodes with (`UUID` and `Date` as strings, `Decimal` and `Int8` as
+numbers, an `Enum8` as its labels), and a type the generator does not know (`Tuple`, `JSON`, a
+`Map` keyed by numbers) becomes `CH.untyped`. The file's header lists what to review:
+
+- **Materialized views** are not generated: a view's body is a query-DSL value, which SQL text
+  cannot be turned back into. The header quotes each body; write it with `CH.materializedView`.
+- **Views, dictionaries, `Distributed`, `Kafka` and other non-MergeTree tables** are written as
+  `external: true`: queryable, never migrated.
+- A table with a name that is not a plain identifier (`my-col`) is written as external too.
+- **Not modeled, so left out:** `SAMPLE BY`, and `EPHEMERAL` columns.
+
+`--tables a,b` writes only those tables; `--force` overwrites an existing file. `verify` reports
+the views and materialized views as `unexpected` until the schema declares them. Postgres is
+not supported yet.
+
 ## Applying migrations
 
 The library opens no connection. Give it a `MigrationDriver`, usually built from the

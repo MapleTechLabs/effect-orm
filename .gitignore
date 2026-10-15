@@ -4,3 +4,4 @@ coverage/
 *.tgz
 .env*
 .DS_Store
+tests/.pull-*
