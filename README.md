@@ -228,6 +228,7 @@ regressions live in [`src/docs-examples.test.ts`](./src/docs-examples.test.ts).
 | `@maple-dev/effect-orm/schema`      | Migration tooling over `table` values: DDL rendering, snapshots, the schema diff. Pure.                                                                       |
 | `@maple-dev/effect-orm/kit`, `/migrate` | `effect-orm generate` and `check`; applying migrations through a driver you provide. See [Schema and migrations](./docs/migrations.md).                  |
 | `@maple-dev/effect-orm/database`    | `Database` over your `SqlClient`: `run`, `execute`, `transaction` with retry.                                                                                  |
+| `@maple-dev/effect-orm/clickhouse-http` | A ClickHouse `SqlClient` over `fetch`, for Cloudflare Workers and any runtime with `fetch`; give it to `Database`. |
 
 ## Extending with custom functions
 

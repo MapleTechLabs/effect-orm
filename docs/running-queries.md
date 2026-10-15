@@ -60,10 +60,61 @@ SQL failures as `SqlError`.
 not validate or escape arbitrary SQL; keep untrusted values in `CH.param` bindings. Leave result
 name transforms disabled so aliases still match the compiled decoder.
 
-`@effect/sql-clickhouse` wraps the official Node.js client. For Workers or other fetch-based
-runtimes, use a runtime-compatible adapter such as `@clickhouse/client-web` with an Effect
-integration. Keep database credentials on your server.
+`@effect/sql-clickhouse` wraps the official Node.js client, so it does not run in Cloudflare
+Workers, Deno or a browser. For those, and anywhere `fetch` exists, use
+[`@maple-dev/effect-orm/clickhouse-http`](#on-workers-and-other-fetch-runtimes) below. Keep
+database credentials on your server.
 See the [Effect ClickHouse driver source](https://github.com/Effect-TS/effect/blob/main/packages/sql/clickhouse/src/ClickhouseClient.ts).
+
+### On Workers and other fetch runtimes
+
+`@maple-dev/effect-orm/clickhouse-http` is a ClickHouse `SqlClient` over Effect's `HttpClient`.
+Provide `FetchHttpClient.layer` and it runs wherever `fetch` does; give it to `Database` like
+any other client:
+
+```ts
+import { Effect, Layer, Redacted } from "effect"
+import { FetchHttpClient } from "effect/http"
+import * as SqlClient from "effect/sql/SqlClient"
+import * as CH from "@maple-dev/effect-orm/clickhouse"
+import * as ClickhouseHttp from "@maple-dev/effect-orm/clickhouse-http"
+import * as Db from "@maple-dev/effect-orm/database"
+
+const ClickHouse = ClickhouseHttp.layer({
+	url: "https://abc.clickhouse.cloud:8443",
+	username: "reader",
+	password: Redacted.make("…"),
+	database: "analytics",
+}).pipe(Layer.provide(FetchHttpClient.layer))
+
+const DatabaseLive = Layer.effect(
+	Db.Database,
+	Effect.gen(function* () {
+		return Db.fromSqlClient(yield* SqlClient.SqlClient, { dialect: CH.clickhouseDialect })
+	}),
+).pipe(Layer.provideMerge(ClickHouse))
+```
+
+What it does for you:
+
+- **Interrupting cancels the query.** A timeout or an interrupted fiber aborts the request and
+  sends `KILL QUERY` for its `query_id`: a closed connection alone does not stop a query
+  ClickHouse is still computing. That holds while the body is read too, and for a `.stream`
+  that ends before its body does (interrupted, failed, or stopped early with `Stream.take`).
+  Queries also send `cancel_http_readonly_queries_on_client_close`.
+- **Failures carry Effect's `SqlError` reasons** (`SqlSyntaxError`, `AuthenticationError`,
+  `StatementTimeoutError`, …), read from ClickHouse's exception code, the same as
+  `@effect/sql-clickhouse`.
+- **Credentials travel in a header,** never the URL; the URL may not contain them. A path in the
+  URL is kept, for a ClickHouse behind a proxy prefix.
+- **Spans name the peer:** `server.address`, `server.port` and `peer.service` (`clickhouse`;
+  override it with `spanAttributes`), so a service map draws the edge to the database.
+- `asCommand` runs DDL and writes, `withQueryId` sets the `query_id`, and `withSettings` adds
+  ClickHouse settings over the configured ones. Statements bind `sql` template values on the
+  server, as `{pN: Type}` placeholders.
+
+It opens no connection at startup, so a Worker's first request pays nothing extra. Its spans
+are `Database`'s, described in [Running statements: tracing](./database.md#tracing).
 
 For a client that implements Effect's `SqlClient`, the opt-in
 [`@maple-dev/effect-orm/database`](./database.md) entry point does this loop for you
