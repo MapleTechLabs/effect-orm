@@ -2,7 +2,7 @@
 // reads replies and failures, and that `Database` runs through it unchanged.
 // tests/clickhouse-http.clickhouse.test.ts runs the same client on a server.
 import { assert, describe, expect, it } from "@effect/vitest"
-import { Effect, Exit, Fiber, Layer, Redacted, Stream } from "effect"
+import { Effect, Exit, Fiber, Layer, Redacted, Stream, Tracer } from "effect"
 import * as HttpClient from "effect/http/HttpClient"
 import * as HttpClientResponse from "effect/http/HttpClientResponse"
 import * as SqlClient from "effect/sql/SqlClient"
@@ -182,6 +182,50 @@ describe("ClickhouseHttpClient", () => {
 			expect(kill.body).toBe("KILL QUERY WHERE query_id = {id:String} ASYNC")
 			expect(kill.url.searchParams.get("param_id")).toBe("slow-1")
 		}).pipe(Effect.provide(live))
+	})
+
+	it.effect("keeps a path in the url, for ClickHouse behind a proxy prefix", () => {
+		const { sent, live } = fake(() => json([]), { url: "https://gateway.example/clickhouse" })
+		return Effect.gen(function* () {
+			const sql = yield* SqlClient.SqlClient
+			yield* sql.unsafe("SELECT 1")
+			expect(sent[0]?.url.pathname).toBe("/clickhouse")
+		}).pipe(Effect.provide(live))
+	})
+
+	it.effect("names the peer on its spans, which the caller can override", () => {
+		const spans: Array<Tracer.NativeSpan> = []
+		const recording = Tracer.make({
+			span(options) {
+				const span = new Tracer.NativeSpan({ ...options, sampled: true })
+				spans.push(span)
+				return span
+			},
+		})
+		const run = (config: Partial<ClickhouseHttpClientConfig>) => {
+			const { live } = fake(() => json([]), config)
+			spans.length = 0
+			return Effect.gen(function* () {
+				const sql = yield* SqlClient.SqlClient
+				yield* sql.unsafe("SELECT 1")
+				const span = spans.find((s) => s.name === "sql.execute")
+				assert(span !== undefined)
+				return Object.fromEntries(span.attributes)
+			}).pipe(Effect.provide(live), Effect.withTracer(recording))
+		}
+		return Effect.gen(function* () {
+			expect(yield* run({})).toMatchObject({
+				"db.system.name": "clickhouse",
+				"db.namespace": "analytics",
+				"server.address": "clickhouse.example",
+				"server.port": 8443,
+				"peer.service": "clickhouse",
+			})
+			expect((yield* run({ url: "https://ch.internal", spanAttributes: { "peer.service": "events-clickhouse" } }))).toMatchObject({
+				"server.port": 443,
+				"peer.service": "events-clickhouse",
+			})
+		})
 	})
 
 	it("refuses credentials, a query string or a fragment in the url", () => {

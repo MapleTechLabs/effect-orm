@@ -31,7 +31,11 @@ import * as Statement from "effect/sql/Statement"
 export type ClickhouseSetting = string | number | boolean
 
 export interface ClickhouseHttpClientConfig {
-	/** The server, e.g. `https://abc.clickhouse.cloud:8443`. No credentials, path, query or fragment. */
+	/**
+	 * The server, e.g. `https://abc.clickhouse.cloud:8443`. A path is kept, for a
+	 * ClickHouse behind a proxy prefix (`https://gateway/clickhouse`); credentials,
+	 * a query string or a fragment are refused.
+	 */
 	readonly url: string
 	readonly username?: string | undefined
 	readonly password?: Redacted.Redacted<string> | string | undefined
@@ -259,10 +263,15 @@ export const make = (
 		const client = yield* Client.make({
 			acquirer: Effect.succeed(connection),
 			compiler,
+			// The peer, for service maps: with the HTTP span off, nothing else names it.
+			// The caller's attributes come last, so they can rename the peer.
 			spanAttributes: [
-				...Object.entries(config.spanAttributes ?? {}),
 				["db.system.name", "clickhouse"],
 				["db.namespace", database],
+				["server.address", url.hostname],
+				["server.port", Number(url.port || (url.protocol === "https:" ? 443 : 80))],
+				["peer.service", "clickhouse"],
+				...Object.entries(config.spanAttributes ?? {}),
 			],
 			// ClickHouse has no transactions over HTTP without a session; effect-orm's
 			// ClickHouse dialect refuses them before this is ever sent.

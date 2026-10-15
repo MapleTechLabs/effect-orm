@@ -103,7 +103,10 @@ What it does for you:
 - **Failures carry Effect's `SqlError` reasons** (`SqlSyntaxError`, `AuthenticationError`,
   `StatementTimeoutError`, …), read from ClickHouse's exception code, the same as
   `@effect/sql-clickhouse`.
-- **Credentials travel in a header,** never the URL; the URL may not contain them.
+- **Credentials travel in a header,** never the URL; the URL may not contain them. A path in the
+  URL is kept, for a ClickHouse behind a proxy prefix.
+- **Spans name the peer:** `server.address`, `server.port` and `peer.service` (`clickhouse`;
+  override it with `spanAttributes`), so a service map draws the edge to the database.
 - `asCommand` runs DDL and writes, `withQueryId` sets the `query_id`, and `withSettings` adds
   ClickHouse settings over the configured ones. Statements bind `sql` template values on the
   server, as `{pN: Type}` placeholders.
