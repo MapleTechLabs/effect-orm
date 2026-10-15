@@ -129,7 +129,7 @@ export const verify = (
 const verifyClickHouse = (snapshot: ClickHouseSnapshot): Effect.Effect<ReadonlyArray<Drift>, MigrateSqlError, MigrationDriver> =>
 	Effect.gen(function* () {
 		const driver = yield* MigrationDriver
-		const { database: db, tables, columns, indexes } = yield* readClickHouseCatalog
+		const { database: db, tables, columns, indexes } = yield* readClickHouseCatalog()
 
 		const expectedTables = snapshot.entities.filter((e): e is TableEntity => e.kind === "table")
 		const expectedColumns = snapshot.entities.filter((e): e is ColumnEntity => e.kind === "column")

@@ -31,9 +31,21 @@ export interface ClickHouseCatalog {
 	readonly tables: ReadonlyArray<CatalogRow>
 	readonly columns: ReadonlyArray<CatalogRow>
 	readonly indexes: ReadonlyArray<CatalogRow>
+	/** Why `indexes` is empty when they could not be read; see `readClickHouseCatalog`. */
+	readonly indexesUnread?: string
 }
 
-export const readClickHouseCatalog: Effect.Effect<ClickHouseCatalog, MigrateSqlError, MigrationDriver> = Effect.gen(function* () {
+const INDEXES = `SELECT table, name, type_full, expr, granularity FROM system.data_skipping_indices WHERE database = currentDatabase() ORDER BY table, name`
+
+/**
+ * The catalog of the current database. A read-only user is often granted
+ * `system.tables` and `system.columns` but not `system.data_skipping_indices`;
+ * with `optionalIndexes` that leaves the indexes empty and says why, where
+ * `verify`, which would then miss drift, fails instead.
+ */
+export const readClickHouseCatalog = (
+	options: { readonly optionalIndexes?: boolean } = {},
+): Effect.Effect<ClickHouseCatalog, MigrateSqlError, MigrationDriver> => Effect.gen(function* () {
 	const driver = yield* MigrationDriver
 	const database = String((yield* driver.query("SELECT currentDatabase() AS db"))[0]?.db ?? "default")
 	const tables = yield* driver.query(
@@ -42,10 +54,11 @@ export const readClickHouseCatalog: Effect.Effect<ClickHouseCatalog, MigrateSqlE
 	const columns = yield* driver.query(
 		`SELECT table, name, type, default_kind, default_expression, compression_codec, comment, position FROM system.columns WHERE database = currentDatabase() ORDER BY table, position`,
 	)
-	const indexes = yield* driver.query(
-		`SELECT table, name, type_full, expr, granularity FROM system.data_skipping_indices WHERE database = currentDatabase() ORDER BY table, name`,
+	if (options.optionalIndexes !== true) return { database, tables, columns, indexes: yield* driver.query(INDEXES) }
+	return yield* driver.query(INDEXES).pipe(
+		Effect.map((indexes): ClickHouseCatalog => ({ database, tables, columns, indexes })),
+		Effect.catch((error) => Effect.succeed<ClickHouseCatalog>({ database, tables, columns, indexes: [], indexesUnread: error.message })),
 	)
-	return { database, tables, columns, indexes }
 })
 
 // SQL text, split at depth zero
@@ -226,6 +239,9 @@ export const entitiesFromCatalog = (catalog: ClickHouseCatalog, options: Introsp
 	const entities: Array<SchemaEntity> = []
 	const external: Array<ExternalTable> = []
 	const notes: Array<string> = []
+	if (catalog.indexesUnread !== undefined) {
+		notes.push(`skipping indexes not read, so none are generated: ${catalog.indexesUnread}`)
+	}
 
 	/** A table's columns; `EPHEMERAL` ones are left out, an insert-only input no query can read. */
 	const columnsOf = (table: string): Array<ColumnEntity> =>
@@ -319,4 +335,4 @@ export const entitiesFromCatalog = (catalog: ClickHouseCatalog, options: Introsp
 
 /** Read the current database as entities, for `effect-orm pull`. */
 export const introspectClickHouse = (options: IntrospectOptions = {}): Effect.Effect<IntrospectedSchema, MigrateSqlError, MigrationDriver> =>
-	Effect.map(readClickHouseCatalog, (catalog) => entitiesFromCatalog(catalog, options))
+	Effect.map(readClickHouseCatalog({ optionalIndexes: true }), (catalog) => entitiesFromCatalog(catalog, options))

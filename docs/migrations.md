@@ -184,6 +184,7 @@ numbers, an `Enum8` as its labels), and a type the generator does not know (`Tup
 - **Not modeled, so left out:** `SAMPLE BY`, projections, constraints and `EPHEMERAL` columns.
   Column-level TTLs are not read at all.
 - A `Decimal` wider than 15 digits decodes to a number, which rounds; the header flags each one.
+- A user who may not read `system.data_skipping_indices` gets no indexes, and a note saying so.
 
 `--tables a,b` writes only those tables; `--force` overwrites an existing file. `verify` reports
 the views and materialized views as `unexpected` until the schema declares them. Postgres is

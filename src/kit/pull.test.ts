@@ -1,10 +1,21 @@
 import { mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
-import { Effect } from "effect"
+import { Effect, Layer } from "effect"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { runCli } from "../kit"
-import { engineSpecOf, entitiesFromCatalog, keyParts, splitEngineFull, stripDatabase, type ClickHouseCatalog } from "../migrate/introspect"
+import { MigrationDriver } from "../migrate/driver"
+import { MigrateSqlError } from "../migrate/errors"
+import {
+	engineSpecOf,
+	entitiesFromCatalog,
+	introspectClickHouse,
+	keyParts,
+	readClickHouseCatalog,
+	splitEngineFull,
+	stripDatabase,
+	type ClickHouseCatalog,
+} from "../migrate/introspect"
 import { entitiesOf, isSchemaObject, type SchemaObject } from "../schema/snapshot"
 import { renderClickHouseSchema, typeCode } from "./codegen"
 
@@ -47,6 +58,23 @@ describe("introspection", () => {
 			"t: SAMPLE BY H is not modeled; generated without it",
 			"totals_mv: materialized view not generated; write it with CH.materializedView. Its body: SELECT OrgId, Name, count() AS C FROM t GROUP BY OrgId, Name",
 		])
+	})
+
+	it("goes on without indexes when the user may not read them", async () => {
+		const driver = Layer.succeed(MigrationDriver, {
+			execute: () => Effect.void,
+			query: (sql: string) =>
+				sql.includes("data_skipping_indices")
+					? Effect.fail(new MigrateSqlError({ message: "Not enough privileges", sql, cause: undefined }))
+					: Effect.succeed(
+							sql.includes("currentDatabase() AS db") ? [{ db: catalog.database }] : sql.includes("system.tables") ? catalog.tables : catalog.columns,
+						),
+		})
+		const schema = await Effect.runPromise(introspectClickHouse().pipe(Effect.provide(driver)))
+		expect(schema.entities.some((e) => e.kind === "index")).toBe(false)
+		expect(schema.notes[0]).toBe("skipping indexes not read, so none are generated: Not enough privileges")
+		const verify = await Effect.runPromise(Effect.exit(readClickHouseCatalog().pipe(Effect.provide(driver))))
+		expect(verify._tag).toBe("Failure")
 	})
 
 	it("only the tables asked for", () => {
