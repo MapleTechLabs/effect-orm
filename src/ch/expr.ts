@@ -307,8 +307,23 @@ export function toFragment(value: unknown): SqlFragment {
 	// `String(value)` produces.
 	if (DateTime.isDateTime(value)) return known(() => dateTimeLiteral(DateTime.toUtc(value)))
 	if (value instanceof Date) return known(() => dateTimeLiteral(DateTime.makeUnsafe(value)))
-	return raw(String(value))
+	if (value === null) return raw("NULL")
+	if (typeof value === "bigint") return raw(String(value))
+	// Anything else has no literal here. `String(value)` used to be written as
+	// SQL, so an array or object from a request became part of the query.
+	return known(() =>
+		fail(
+			new QueryBuilderError({
+				code: "InvalidLiteral",
+				message: `cannot write ${describeUntyped(value)} as a SQL literal; compare against a typed column or pass a string, number, boolean or date`,
+			}),
+			"NULL",
+		),
+	)
 }
+
+const describeUntyped = (value: unknown): string =>
+	Array.isArray(value) ? "an array" : value === undefined ? "undefined" : `a ${typeof value}`
 
 /** A value with no column type to encode it, in the active dialect's syntax.
  *  ClickHouse writes booleans as `1`/`0`, which is also the rendering outside

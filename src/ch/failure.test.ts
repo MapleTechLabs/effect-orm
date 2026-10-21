@@ -31,6 +31,50 @@ describe("the builder never throws", () => {
 		expect(error.message).toMatch(/limit\(-1\)/)
 	})
 
+	// A value with no column type to encode it was written as `String(value)`:
+	// an array or object from a request became SQL. It is a typed failure now.
+	it.each([
+		["an array", ["1) OR (1=1"]],
+		["an object", { toString: (): string => "1) OR (1=1" }],
+		["a symbol", Symbol("x")],
+		["a function", () => "1"],
+	])("refuses %s compared against an untyped expression", (_label, value) => {
+		const toFloat = CH.defineFn<[CH.Expr<string>], number>("toFloat64OrNull", CH.float64)
+		const query = CH.from(Events)
+			.select(($) => ({ id: $.Id }))
+			.where(($) => [toFloat($.Name).gt(value as never)])
+		const error = Effect.runSync(Effect.flip(CH.compile(query)))
+		expect(error).toBeInstanceOf(QueryBuilderError)
+		expect(error.code).toBe("InvalidLiteral")
+	})
+
+	it.each([
+		["an object", { toString: (): string => "1) OR (1=1" }],
+		["an array", ["1) OR (1=1"]],
+		["undefined", undefined],
+	])("refuses %s as a function argument", (_label, value) => {
+		const twice = CH.defineFn<[unknown], number>("twice", CH.float64)
+		const query = CH.from(Events).select(() => ({ n: twice(value) }))
+		const error = Effect.runSync(Effect.flip(CH.compile(query)))
+		expect(error.code).toBe("InvalidLiteral")
+	})
+
+	it("still writes null, a bigint and the scalars it always wrote", () => {
+		const toFloat = CH.defineFn<[CH.Expr<string>], number>("toFloat64OrNull", CH.float64)
+		const fn = CH.defineFn<[unknown], number>("f", CH.float64)
+		const sql = CH.compileUnsafe(
+			CH.from(Events)
+				.select(() => ({ a: fn(null), b: fn(12345678901234567890n), c: fn("x'y"), d: fn(1.5), e: fn(true) }))
+				.where(($) => [toFloat($.Name).gt(3)]),
+		).sql
+		expect(sql).toContain("f(NULL) AS a")
+		expect(sql).toContain("f(12345678901234567890) AS b")
+		expect(sql).toContain("f('x\\'y') AS c")
+		expect(sql).toContain("f(1.5) AS d")
+		expect(sql).toContain("f(1) AS e")
+		expect(sql).toContain("toFloat64OrNull(events.Name) > 3")
+	})
+
 	it("dies on a misuse no input could fix", () => {
 		const query = CH.from(Events).select(($) => ({ id: $.Id })).where(($) => [$.Id.eq(CH.param.string("bad__name"))])
 		const exit = Effect.runSyncExit(CH.compile(query, { bad__name: "x" }))
