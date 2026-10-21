@@ -45,11 +45,16 @@ $.Count.eq("lots")
 // QueryBuilderError { code: "InvalidLiteral" }: column Count: string "lots" is not a valid value
 ```
 
-Expressions with no type to read — `untypedExpr`, an untyped `dynamicColumn` — fall back to
-guessing from the JavaScript value, which handles strings, numbers, booleans and dates but
-nothing structured.
+Expressions with no type to read — `untypedExpr`, an untyped `dynamicColumn`, a function
+declared with `defineFn` — fall back to guessing from the JavaScript value, which handles
+strings, numbers, bigints, booleans, dates and `null`; a string is written as an escaped
+literal. Anything structured (an array, an object), a symbol or a function fails compilation
+with a `QueryBuilderError` (`InvalidLiteral`) rather than being written as `String(value)`,
+so an unsupported value that arrives untyped is never written as raw SQL. `undefined` fails
+too: as a function argument with `InvalidLiteral`, and compared against an expression
+(`.gt(undefined)`) with `InvalidArguments`, like any comparison with a missing value.
 
-_(Backed by `src/ch/literal.test.ts`.)_
+_(Backed by `src/ch/literal.test.ts` and `src/ch/failure.test.ts`.)_
 
 ## Comparisons
 
