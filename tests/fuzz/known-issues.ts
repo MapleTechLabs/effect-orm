@@ -123,13 +123,7 @@ const planIssues: ReadonlyArray<KnownIssue<PlanInput>> = [
 			target === "postgres" &&
 			[...nodes(plan)].some((node) => node.k === "value" && typeof node.v === "number" && !Number.isInteger(node.v)),
 	},
-	{
-		id: "fromquery-select-all",
-		reason:
-			"`CH.fromQuery(q, alias).select()` is typed as selecting every column, but a subquery source has no column " +
-			"list to expand, so compile dies with QueryBuilderDefect `select() is required`. `select(...names)` works.",
-		matches: ({ plan }) => plan.wrap === "all",
-	},
+
 ]
 
 export const knownPlanIssue = (input: PlanInput): string | undefined => firstMatch(planIssues, input)
