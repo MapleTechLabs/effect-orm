@@ -88,7 +88,7 @@ const fixtureColumns = {
 } satisfies Record<string, readonly FixtureColumn[]>
 
 type Value = string | number | null
-const fixtureRows: Record<keyof typeof fixtureColumns, ReadonlyArray<ReadonlyArray<Value>>> = {
+export const fixtureRows: Record<keyof typeof fixtureColumns, ReadonlyArray<ReadonlyArray<Value>>> = {
 	orders: [
 		["org_1", 1, "acme", 10, "paid", "rush", "2026-01-01 00:00:00.000"],
 		["org_1", 2, "acme", 20, "paid", null, "2026-01-01 00:10:00.000"],

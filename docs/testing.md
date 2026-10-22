@@ -93,6 +93,42 @@ or exempted with a reason.
 Tests preserve documented behavior: arithmetic chains follow SQL precedence, not call
 order, and `windowFunnel` with `strict_order` rejects intervening events.
 
+## Fuzzing
+
+`tests/fuzz/` generates random inputs with fast-check and checks them against oracles that do
+not trust the builder:
+
+- `literals.fuzz.test.ts`: a random value of each column type reaches the database twice. One
+  copy goes through the database's own JSON parser as the reference, the other through the
+  builder, both as a comparison literal and as a param in the SELECT list. The two must agree.
+- `queries.fuzz.test.ts`: random query plans (joins, nested conditions, grouping, having,
+  ordering, paging, subqueries) run on the core fixture and must match `model.ts`, a JS
+  evaluator with SQL three-valued logic. A plan that reports `single-tenant` must have read
+  one org's rows only.
+- `compile.fuzz.test.ts`: needs no database. Valid plans always compile, compile
+  deterministically, leak no `undefined`, `NaN` or `__PARAM_`, and number Postgres
+  placeholders `$1..$n`. Any JS value placed where a value goes is compiled or refused with a
+  `QueryBuilderError`, never thrown and never a defect.
+
+`bun run test` runs a small budget (a few seconds). Use `bun run fuzz` for longer runs:
+
+```sh
+FUZZ_SCALE=50 bun run fuzz          # 50× every property's default run count
+FUZZ_RUNS=10000 bun run fuzz -t "plans match the model"
+FUZZ_VERBOSE=1 bun run fuzz         # print checked / skipped counts per property
+```
+
+A failure prints the shrunk input, the SQL it compiled to, the database's reply, and a
+`FUZZ_SEED=… FUZZ_PATH=…` command that replays it. Pin the input in
+`tests/fuzz/regressions.ts`, which is replayed before any random input.
+
+Bugs found but not yet fixed live in `tests/fuzz/known-issues.ts`. Each entry recognises
+the inputs that reach its bug and gives a reason, so the suite stays green while the rest of
+the input space keeps being fuzzed. After fixing a bug, delete its entry and run with
+`FUZZ_STRICT=1`, which ignores every entry, to confirm nothing else matched it. Differences
+between the databases that are not bugs are encoded in the model instead, each with the
+difference it represents.
+
 ## Version and CI policy
 
 Every push to `main` and every pull request runs the complete release check against
