@@ -914,6 +914,12 @@ function compileInner<
 			// GROUP BY rules below know what each part reads and aggregates.
 			const selected = selectKeys.map((alias) => {
 				const expr = selectExprs[alias]
+				if (!isExprLike(expr)) {
+					const [sql, found] = track(() =>
+						fail(new QueryBuilderDefect({ message: `CHQuery: select(($) => ...) must map each alias to an expression; ${JSON.stringify(alias)} is not one` }), "NULL"),
+					)
+					return { alias, sql, found, column: undefined }
+				}
 				const fragment = expr.toFragment()
 				const [sql, found] = track(() => compileSqlFragment(fragment))
 				return { alias, sql, found, column: plainColumn(fragment) }

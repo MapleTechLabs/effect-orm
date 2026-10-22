@@ -30,6 +30,7 @@ const describe = (value: unknown): string => {
 	if (typeof value === "function") return "a function"
 	if (typeof value === "symbol") return "a symbol"
 	if (typeof value === "number" || typeof value === "boolean") return `${value}`
+	if (typeof value === "bigint") return `${value}n`
 	if (value instanceof Date) return "a Date"
 	if (Array.isArray(value)) return "an array"
 	if (typeof value === "object") return "an object"

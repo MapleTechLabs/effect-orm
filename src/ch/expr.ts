@@ -306,7 +306,13 @@ export function toFragment(value: unknown): SqlFragment {
 	// be the dialect's own form (ClickHouse's is tz-less) rather than whatever
 	// `String(value)` produces.
 	if (DateTime.isDateTime(value)) return known(() => dateTimeLiteral(DateTime.toUtc(value)))
-	if (value instanceof Date) return known(() => dateTimeLiteral(DateTime.makeUnsafe(value)))
+	if (value instanceof Date) {
+		return known(() =>
+			Number.isNaN(value.getTime())
+				? fail(new QueryBuilderError({ code: "InvalidLiteral", message: "cannot write an invalid Date as a SQL literal" }), "NULL")
+				: dateTimeLiteral(DateTime.makeUnsafe(value)),
+		)
+	}
 	if (value === null) return raw("NULL")
 	if (typeof value === "bigint") return raw(String(value))
 	// Anything else has no literal here. `String(value)` used to be written as
@@ -342,9 +348,19 @@ const boundString = (value: string): SqlFragment =>
 		return bind !== undefined ? bind(value) : compile(str(value))
 	})
 
-/** A LIKE pattern: an expression as it renders, a string as `boundString`. */
-const likePattern = (pattern: string | Expr<string, any>): string =>
-	compile(typeof pattern === "string" ? boundString(pattern) : pattern.toFragment())
+/** A LIKE pattern: an expression as it renders, a string as `boundString`. A
+ *  pattern often comes from a request, so anything else is a failure. */
+const likePattern = (pattern: string | Expr<string, any>): string => {
+	if (typeof pattern === "string") return compile(boundString(pattern))
+	if (isExprLike(pattern)) return compile(pattern.toFragment())
+	return fail(
+		new QueryBuilderError({
+			code: "InvalidLiteral",
+			message: `a LIKE pattern must be a string or a string expression, not ${describeUntyped(pattern)}`,
+		}),
+		"NULL",
+	)
+}
 
 const dateTimeLiteral = (value: DateTime.Utc): string =>
 	activeSqlSyntax()?.dateTimeLiteral(value) ?? compile(str(chDateTimeLiteral(value)))
@@ -407,7 +423,8 @@ const arith = <Result>(
 	rhs: number | null | Expr<number | null>,
 	lhsSchema?: Schema.Codec<any, any>,
 ): Expr<Result, any> => {
-	const rhsSchema = typeof rhs === "number" || rhs === null ? undefined : rhs.schema
+	const operand = typeof rhs === "number" || rhs === null || isExprLike(rhs)
+	const rhsSchema = isExprLike(rhs) ? rhs.schema : undefined
 	// `x / 1000000` is finite whenever `x` is. A literal below 1 in magnitude
 	// can overflow a large dividend (`1 / 5e-324` is `inf`), so only |d| >= 1
 	// keeps the strict codec — the same rule `Quotient` applies to the type.
@@ -422,6 +439,13 @@ const arith = <Result>(
 	const grouped = typeof rhs === "object" && rhs !== null && infix.has(rhs)
 	const expr = makeExpr(
 		known(() => {
+			// The operand is often a number from a request; anything else is a failure, not `'x'` or `NULL` in SQL.
+			if (!operand) {
+				return fail(
+					new QueryBuilderError({ code: "InvalidLiteral", message: `arithmetic operand must be a number or a numeric expression, not ${describeUntyped(rhs)}` }),
+					"NULL",
+				)
+			}
 			const right = compile(toFragment(rhs))
 			return `${compile(lhs)} ${op} ${grouped ? `(${right})` : right}`
 		}),
@@ -657,7 +681,18 @@ export function lit(value: string | number): Expr<string> | Expr<number> {
 	// a single `CH.lit("all")` in a SELECT costs the whole query its row schema,
 	// since derivation is all-or-nothing.
 	if (typeof value === "string") return makeExpr<string>(str(value), chString.schema)
-	return makeExpr<number>(typeof value === "number" ? numberFragment(value) : raw(String(value)), CHNumber as Schema.Codec<number, any>)
+	if (typeof value === "number") return makeExpr<number>(numberFragment(value), CHNumber as Schema.Codec<number, any>)
+	if (typeof value === "bigint") return makeExpr<number>(raw(String(value)), CHNumber as Schema.Codec<number, any>)
+	// `String(value)` used to be written as SQL, so `lit(obj)` emitted `[object Object]`.
+	return makeExpr<number>(
+		known(() =>
+			fail(
+				new QueryBuilderError({ code: "InvalidLiteral", message: `lit: cannot write ${describeUntyped(value)} as a SQL literal; pass a string or a number` }),
+				"NULL",
+			),
+		),
+		CHNumber as Schema.Codec<number, any>,
+	)
 }
 
 // Subquery expressions
