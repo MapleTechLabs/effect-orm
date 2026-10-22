@@ -391,8 +391,16 @@ const inCond = (
 const acceptsNull = (schema: Schema.Codec<any, any> | undefined): boolean =>
 	schema !== undefined && Result.isSuccess(Schema.decodeUnknownResult(schema)(null))
 
+/** Expressions `arith` built: an infix operator a caller may pass as an argument. */
+const infix = new WeakSet<object>()
+
 /** Numeric promotion and SQL NULL propagation share one runtime codec. The
- *  result type is the caller's claim — see {@link Quotient} for `/` and `%`. */
+ *  result type is the caller's claim — see {@link Quotient} for `/` and `%`.
+ *
+ *  The receiver is not parenthesised: a chain follows SQL precedence, as
+ *  docs/expressions.md says. An argument is, when it is itself arithmetic —
+ *  `$.a.sub($.b.add(1))` means `a - (b + 1)`, and no call order could say so
+ *  if the argument's boundary were dropped. */
 const arith = <Result>(
 	lhs: SqlFragment,
 	op: string,
@@ -411,10 +419,16 @@ const arith = <Result>(
 		acceptsNull(rhsSchema)
 	// `+`, `-`, `*` can overflow a Float64 to `inf`, sent as JSON null: NaN.
 	const overflows = op === "+" || op === "-" || op === "*"
-	return makeExpr(
-		known(() => `${compile(lhs)} ${op} ${compile(toFragment(rhs))}`),
+	const grouped = typeof rhs === "object" && rhs !== null && infix.has(rhs)
+	const expr = makeExpr(
+		known(() => {
+			const right = compile(toFragment(rhs))
+			return `${compile(lhs)} ${op} ${grouped ? `(${right})` : right}`
+		}),
 		(nullable ? Schema.NullOr(CHNumber) : overflows ? CHFloatResult : CHNumber) as Schema.Codec<Result, any>,
 	) as Expr<Result, any>
+	infix.add(expr)
+	return expr
 }
 
 /**

@@ -18,7 +18,7 @@ import { Effect, Exit } from "effect"
 import * as CH from "@maple-dev/effect-orm/clickhouse"
 import * as PG from "@maple-dev/effect-orm/postgres"
 import { clickhouseEndpoint, closePostgres, run } from "./db"
-import { config, FuzzFailure, property, skip, skipKnown, withContext } from "./harness"
+import { FuzzFailure, property, skip, skipKnown, withContext } from "./harness"
 import { knownLiteralIssue, type LiteralPath } from "./known-issues"
 import { literalTypes, normalize, referenceJson, wellFormed, type LiteralType } from "./values"
 
@@ -35,10 +35,8 @@ const build = (literal: LiteralType, value: unknown, path: LiteralPath) => {
 const roundTrip = async (literal: LiteralType, value: unknown, path: LiteralPath): Promise<void> => {
 	// The reference row goes through JSON, which cannot carry a lone surrogate the way SQL text does.
 	if (!wellFormed(value)) skip("lone surrogate")
-	if (!config.strict) {
-		const known = knownLiteralIssue({ literal, value, path })
-		if (known !== undefined) skipKnown(known)
-	}
+	const known = knownLiteralIssue({ literal, value, path })
+	if (known !== undefined) skipKnown(known)
 	const M = literal.dialect === "clickhouse" ? CH : PG
 	const exit = Effect.runSyncExit((M.compile as any)(build(literal, value, path), { p: value }))
 	if (Exit.isFailure(exit)) throw new FuzzFailure("the builder refused a valid value", { value, cause: String(exit.cause) })

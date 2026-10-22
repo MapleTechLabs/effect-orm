@@ -124,8 +124,8 @@ A failure prints the shrunk input, the SQL it compiled to, the database's reply,
 
 Bugs found but not yet fixed live in `tests/fuzz/known-issues.ts`. Each entry recognises
 the inputs that reach its bug and gives a reason, so the suite stays green while the rest of
-the input space keeps being fuzzed. After fixing a bug, delete its entry and run with
-`FUZZ_STRICT=1`, which ignores every entry, to confirm nothing else matched it. Differences
+the input space keeps being fuzzed. `FUZZ_STRICT=<id>` re-enables one entry's inputs, to check a
+fix before deleting the entry; `FUZZ_STRICT=1` re-enables them all. Differences
 between the databases that are not bugs are encoded in the model instead, each with the
 difference it represents.
 

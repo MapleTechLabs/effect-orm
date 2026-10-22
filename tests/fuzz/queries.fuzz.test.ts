@@ -12,7 +12,7 @@ import type { CoreContext } from "../core-cases"
 import { contexts, scopeContexts } from "./contexts"
 import { compilePlan } from "./build"
 import { clickhouseEndpoint, closePostgres, run, type Target } from "./db"
-import { config, FuzzFailure, property, skipKnown, withContext } from "./harness"
+import { FuzzFailure, property, skipKnown, withContext } from "./harness"
 import { knownPlanIssue } from "./known-issues"
 import { evaluate } from "./model"
 import { nastyOptions, plainOptions, plan, type Plan } from "./plan"
@@ -30,10 +30,8 @@ const canonical = (rows: ReadonlyArray<unknown>): Array<unknown> =>
 const sorted = (rows: Array<unknown>) => rows.map((r) => JSON.stringify(r)).sort()
 
 const matchesModel = async (ctx: CoreContext, target: Target, input: Plan) => {
-	if (!config.strict) {
-		const known = knownPlanIssue({ target, plan: input })
-		if (known !== undefined) skipKnown(known)
-	}
+	const known = knownPlanIssue({ target, plan: input })
+	if (known !== undefined) skipKnown(known)
 	const expected = evaluate(input, target)
 	const result = compilePlan(ctx, input)
 	if (result._tag !== "Compiled") throw new FuzzFailure(`a valid plan was not compiled (${result._tag})`, { error: result.error })
