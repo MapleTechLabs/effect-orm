@@ -122,6 +122,20 @@ describe("sqlLiteral", () => {
 		expect(sqlLiteral([{ a: "b" }, { c: "d" }], "test")).toBe("[map('a', 'b'), map('c', 'd')]")
 	})
 
+	it("writes a subnormal float from its bits, the one spelling ClickHouse parses exactly", () => {
+		expect(sqlLiteral(5e-324, "test")).toBe("reinterpretAsFloat64(toUInt64(1))")
+		expect(sqlLiteral(-5e-324, "test")).toBe("reinterpretAsFloat64(toUInt64(9223372036854775809))")
+		expect(sqlLiteral(2.2250738585072014e-308, "test")).toBe("2.2250738585072014e-308")
+		expect(sqlLiteral(0.1, "test")).toBe("0.1")
+	})
+
+	it("writes a whole double past 2^53 as its exact integer, not its shortest decimal", () => {
+		expect(sqlLiteral(44812297868494010, "test")).toBe("44812297868494008")
+		expect(sqlLiteral(-(2 ** 60), "test")).toBe("-1152921504606846976")
+		expect(sqlLiteral(2 ** 53 - 1, "test")).toBe("9007199254740991")
+		expect(sqlLiteral(1e300, "test")).toBe("1e+300")
+	})
+
 	it("refuses what has no ClickHouse literal", () => {
 		const failureOf = (value: unknown) => collectFailures(() => sqlLiteral(value, "test")).failures[0]?.message
 		expect(failureOf(Number.NaN)).toMatch(/no ClickHouse literal/)

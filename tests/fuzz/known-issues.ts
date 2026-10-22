@@ -19,15 +19,7 @@ export interface LiteralInput {
 	readonly path: LiteralPath
 }
 
-const isFloat64 = (literal: LiteralType) => literal.dialect === "clickhouse" && literal.type.sql === "Float64"
-
 const literalIssues: ReadonlyArray<KnownIssue<LiteralInput>> = [
-	{
-		id: "ch-float-subnormal-syntax",
-		reason: "A subnormal float (`5e-324`) written as String(value) is a ClickHouse SYNTAX_ERROR.",
-		matches: ({ literal, value }) =>
-			isFloat64(literal) && typeof value === "number" && value !== 0 && Math.abs(value) < 2.2250738585072014e-308,
-	},
 	{
 		id: "ch-array-literal-untyped",
 		reason:
