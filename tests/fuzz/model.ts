@@ -90,15 +90,16 @@ const chKind = (e: Expr | number): ChKind => {
 // Expressions
 
 /**
- * Arithmetic as the SQL text parses it. The builder writes `${lhs} ${op} ${rhs}`
- * without parentheses — documented in docs/expressions.md ("Arithmetic does not
- * parenthesise"): a chain follows SQL precedence, not call order. So the model
- * flattens a tree to the token sequence the SQL contains and re-parses it with
- * `*` `/` `%` binding tighter than `+` `-`, both left-associative.
+ * Arithmetic as the SQL text parses it. A chain is not parenthesised —
+ * documented in docs/expressions.md ("Arithmetic does not parenthesise"), it
+ * follows SQL precedence, not call order — while an argument keeps its own
+ * parentheses. So the model flattens the receiver chain to the token sequence
+ * the SQL contains, keeps each argument whole, and re-parses with `*` `/` `%`
+ * binding tighter than `+` `-`, both left-associative.
  */
 const parsed = new WeakSet<Expr>()
 const flatten = (e: Expr): Array<Expr | ArithOp> =>
-	e.k === "arith" ? [...flatten(e.l), e.op, ...(typeof e.r === "number" ? [{ k: "num", v: e.r } as Expr] : flatten(e.r))] : [e]
+	e.k === "arith" ? [...flatten(e.l), e.op, typeof e.r === "number" ? ({ k: "num", v: e.r } as Expr) : e.r] : [e]
 const asParsed = (e: Expr & { k: "arith" }): Expr => {
 	const tokens = flatten(e)
 	const node = (op: ArithOp, l: Expr, r: Expr): Expr => {

@@ -302,6 +302,17 @@ describe("docs/expressions.md", () => {
 		expect(oneLine(compileCHUnsafe(query, {}).sql)).toContain("DurationMs - 1 / 2 AS ratio")
 	})
 
+	it("An arithmetic argument keeps its parentheses", () => {
+		const query = CH.from(Events).select(($) => ({
+			left: $.DurationMs.sub($.DurationMs.add(1)),
+			half: CH.lit(0.5).mul($.DurationMs.sub(1)),
+		}))
+
+		const sql = oneLine(compileCHUnsafe(query, {}).sql)
+		expect(sql).toContain("events.DurationMs - (events.DurationMs + 1) AS left")
+		expect(sql).toContain("0.5 * (events.DurationMs - 1) AS half")
+	})
+
 	it("Combining conditions with and/or", () => {
 		const query = CH.from(Events)
 			.select(($) => ({ name: $.Name }))

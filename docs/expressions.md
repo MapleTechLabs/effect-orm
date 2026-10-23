@@ -164,6 +164,12 @@ decodes that `null` as `NaN`. `sum`, `sumIf`, and `toFloat64OrZero` behave the s
 
 _(Backed by `docs/expressions.md > Arithmetic does not parenthesise`.)_
 
+An expression passed as an *argument* keeps its boundary, so that is how to group:
+`$.DurationMs.sub($.Offset.add(1))` is `DurationMs - (Offset + 1)`, and
+`CH.lit(0.5).mul($.DurationMs.sub(1))` is `0.5 * (DurationMs - 1)`.
+
+_(Backed by `docs/expressions.md > An arithmetic argument keeps its parentheses`.)_
+
 ### Division can produce a NULL
 
 `.div()` and `.mod()` decode nullably, whatever their operands are. ClickHouse renders `1 / 0` as

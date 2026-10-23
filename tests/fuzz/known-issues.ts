@@ -4,6 +4,7 @@
 // while it is open and the rest of the input space keeps being fuzzed. This file
 // is the backlog: fix the bug, delete its entry, and run with `FUZZ_STRICT=1`
 // to confirm nothing else matched it. An entry needs a reason a person can act on.
+import { config } from "./harness"
 import type { LiteralType } from "./values"
 
 export interface KnownIssue<A> {
@@ -11,6 +12,10 @@ export interface KnownIssue<A> {
 	readonly reason: string
 	readonly matches: (input: A) => boolean
 }
+
+/** The first open issue `input` reaches, unless FUZZ_STRICT re-enabled it. */
+const firstMatch = <A>(issues: ReadonlyArray<KnownIssue<A>>, input: A): string | undefined =>
+	issues.find((issue) => !config.strict.has("1") && !config.strict.has(issue.id) && issue.matches(input))?.id
 
 export type LiteralPath = "compare" | "select"
 export interface LiteralInput {
@@ -47,7 +52,7 @@ const literalIssues: ReadonlyArray<KnownIssue<LiteralInput>> = [
 
 /** The id of the open issue this input would hit, if any. */
 export const knownLiteralIssue = (input: LiteralInput): string | undefined =>
-	literalIssues.find((issue) => issue.matches(input))?.id
+	firstMatch(literalIssues, input)
 
 // Hostile values (compile.fuzz.test.ts)
 
@@ -101,7 +106,7 @@ const hostileIssues: ReadonlyArray<KnownIssue<HostileInput>> = [
 ]
 
 export const knownHostileIssue = (input: HostileInput): string | undefined =>
-	hostileIssues.find((issue) => issue.matches(input))?.id
+	firstMatch(hostileIssues, input)
 
 // Query plans (queries.fuzz.test.ts)
 
@@ -121,8 +126,6 @@ const nodes = function* (value: unknown): Generator<Record<string, unknown>> {
 		for (const item of Object.values(value)) yield* nodes(item)
 	}
 }
-const precedence = (op: unknown) => (op === "add" || op === "sub" ? 1 : 2)
-const isArith = (e: unknown): e is { op: string; l: unknown; r: unknown } => (e as any)?.k === "arith"
 
 /** The conjuncts a WHERE list ANDs together, flattening nested ANDs. */
 const conjuncts = (conds: ReadonlyArray<unknown>): Array<unknown> =>
@@ -161,18 +164,6 @@ const planIssues: ReadonlyArray<KnownIssue<PlanInput>> = [
 			[...nodes(plan)].some((node) => node.k === "value" && typeof node.v === "number" && !Number.isInteger(node.v)),
 	},
 	{
-		id: "arith-argument-not-parenthesised",
-		reason:
-			"A compound expression passed as an arithmetic argument loses its boundary: `$.a.sub($.b.add(1))` compiles to " +
-			"`a - b + 1`, `$.a.div($.b.mul(2))` to `a / b * 2`. docs/expressions.md documents that *chains* follow SQL " +
-			"precedence (the model applies that), but an argument is not a chain, and no call order expresses " +
-			"`a - (b + 1)`. Parenthesising a compound right operand would fix it without changing chained SQL.",
-		matches: ({ plan }) =>
-			[...nodes(plan)].some(
-				(node) => isArith(node) && isArith(node.r) && precedence(node.r.op) <= precedence(node.op),
-			),
-	},
-	{
 		id: "fromquery-select-all",
 		reason:
 			"`CH.fromQuery(q, alias).select()` is typed as selecting every column, but a subquery source has no column " +
@@ -181,4 +172,4 @@ const planIssues: ReadonlyArray<KnownIssue<PlanInput>> = [
 	},
 ]
 
-export const knownPlanIssue = (input: PlanInput): string | undefined => planIssues.find((issue) => issue.matches(input))?.id
+export const knownPlanIssue = (input: PlanInput): string | undefined => firstMatch(planIssues, input)

@@ -9,8 +9,8 @@
 //     command that replays it (`FUZZ_SEED`, `FUZZ_PATH`);
 //   - inputs pinned in `regressions.ts` are replayed before any random one, so
 //     a counterexample stays a test after the bug is fixed;
-//   - `known` issues are skipped by name (see `known-issues.ts`), and
-//     `FUZZ_STRICT=1` turns them back on to check whether one is fixed.
+//   - `known` issues are skipped by name (see `known-issues.ts`);
+//     `FUZZ_STRICT=1` turns them all back on, `FUZZ_STRICT=<id>,<id>` just those.
 import fc from "fast-check"
 import { pinnedFor } from "./regressions"
 
@@ -25,7 +25,8 @@ export const config = {
 	runs: int("FUZZ_RUNS"),
 	seed: int("FUZZ_SEED"),
 	path: process.env.FUZZ_PATH || undefined,
-	strict: process.env.FUZZ_STRICT === "1",
+	/** `1`: ignore every known issue. A comma list of ids: ignore just those (to verify one fix). */
+	strict: new Set((process.env.FUZZ_STRICT ?? "").split(",").filter(Boolean)),
 	verbose: process.env.FUZZ_VERBOSE === "1",
 }
 

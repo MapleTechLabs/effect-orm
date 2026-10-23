@@ -16,7 +16,7 @@ import * as PG from "@maple-dev/effect-orm/postgres"
 import type { CoreContext } from "../core-cases"
 import { scopeContexts as contexts } from "./contexts"
 import { compilePlan } from "./build"
-import { config, FuzzFailure, property, skipKnown } from "./harness"
+import { FuzzFailure, property, skipKnown } from "./harness"
 import { knownHostileIssue, knownPlanIssue } from "./known-issues"
 import { nastyOptions, ORDER_COLUMNS, plan, type OrderColumn, type Plan } from "./plan"
 
@@ -26,10 +26,8 @@ const stringsIn = (value: unknown): Array<string> =>
 const serialize = (value: unknown) => JSON.stringify(value, (_, v) => (typeof v === "bigint" ? `${v}n` : v instanceof Date ? `Date(${v.getTime()})` : v))
 
 const compiles = (ctx: CoreContext, input: Plan) => {
-	if (!config.strict) {
-		const known = knownPlanIssue({ target: ctx.dialect, plan: input })
-		if (known !== undefined) skipKnown(known)
-	}
+	const known = knownPlanIssue({ target: ctx.dialect, plan: input })
+	if (known !== undefined) skipKnown(known)
 	const first = compilePlan(ctx, input)
 	if (first._tag !== "Compiled") throw new FuzzFailure(`a valid plan was not compiled (${first._tag})`, { error: first.error })
 	const { compiled } = first
@@ -113,10 +111,8 @@ const hostileInput = (dialect: "clickhouse" | "postgres"): fc.Arbitrary<HostileI
 	})
 
 const neverThrows = (ctx: CoreContext, input: HostileInput) => {
-	if (!config.strict) {
-		const known = knownHostileIssue(input)
-		if (known !== undefined) skipKnown(known)
-	}
+	const known = knownHostileIssue(input)
+	if (known !== undefined) skipKnown(known)
 	let exit: Exit.Exit<unknown, unknown>
 	try {
 		const { query, params } = hostileQuery(ctx, input)
