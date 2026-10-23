@@ -142,7 +142,9 @@ export const property = async <T>(
 
 	const error = details.errorInstance
 	const counterexample = details.counterexample?.[0]
-	const replay = `FUZZ_SEED=${details.seed} FUZZ_PATH=${details.counterexamplePath} bun run fuzz -t ${JSON.stringify(name)}`
+	// vitest reads `-t` as a regex, and names like `plans match the model (postgres, …)` have metacharacters.
+	const pattern = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+	const replay = `FUZZ_SEED=${details.seed} FUZZ_PATH=${details.counterexamplePath} bun run fuzz -t '${pattern}'`
 	throw new Error(
 		[
 			`[fuzz] ${name} failed after ${details.numRuns} runs (${details.numShrinks} shrinks)`,
