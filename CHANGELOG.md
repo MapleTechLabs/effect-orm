@@ -1,5 +1,16 @@
 # @maple-dev/effect-orm
 
+## 0.7.2
+
+### Patch Changes
+
+- 36499ea: An arithmetic expression passed as an argument keeps its parentheses: `$.a.sub($.b.add(1))` compiles to `a - (b + 1)`, not `a - b + 1`. Chains still follow SQL precedence as documented (`$.a.sub(1).div(2)` is `a - 1 / 2`); passing the group as an argument is how to group.
+- 0bf4dbc: On ClickHouse, an array or map compared against a column is cast to the column's type: `$.Ids.eq([0, 4294967296])` writes `CAST([0, 4294967296] AS Array(Nullable(Int64)))`. Uncast, ClickHouse inferred the literal's element type from its values (`Array(UInt64)` here) and could refuse the comparison with `ILLEGAL_TYPE_OF_ARGUMENT`.
+- 1aee63f: ClickHouse number literals read back as exactly the value you passed. A subnormal float (`5e-324`) was a syntax error and is now written from its bits; a whole number past 2^53 (`44812297868494010`) was written as its shortest decimal, which ClickHouse parses as a different integer, so `WHERE x = value` could miss the row — it is now written as the double's exact integer value.
+- 362e880: A bare `select()` over a subquery or union (`CH.fromQuery(inner, "w").select()`, `CH.fromUnion(union, "u").select()`) selects every alias the source selects, as its type already said. It died with `QueryBuilderDefect: select() is required`, because the derived source has no column list until its own SELECT is evaluated.
+- 4f690ed: Two Postgres values the server typed wrong from context now compile correctly. A `param.of(type)` selected on its own is written `CAST($n AS <type>)`, so a boolean or array comes back as itself instead of text that fails to decode. A fractional value compared with an integer column binds as `$n::numeric` instead of failing with `invalid input syntax for type bigint`. Nothing else is cast: whole numbers, params compared with columns, inserts and `real` columns keep untyped placeholders (and their indexes). `param.of` also no longer confuses two types that share a codec (`int8` and `float8`).
+- ed8f7b4: Values that cannot become SQL fail compilation with a `QueryBuilderError` (`InvalidLiteral`) instead of throwing: a bigint compared against a non-integer column, a non-string `like`/`notLike`/`ilike` pattern, `lit()` of anything but a string or number (it wrote `[object Object]`), a non-numeric arithmetic operand, an invalid `Date`, and an unparseable string or invalid `Date` for a Postgres timestamp. A non-expression in a `select` record is a `QueryBuilderDefect` naming the alias, like a malformed `orderBy`.
+
 ## 0.7.1
 
 ### Patch Changes
