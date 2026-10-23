@@ -126,6 +126,12 @@ export interface CHQueryState {
 	readonly tableAlias?: string
 	readonly columns: ColumnDefs
 	readonly selectFn?: ($: any) => SelectRecord
+	/**
+	 * A bare `select()` over a subquery or union: every alias the source
+	 * selects. Its columns are only known once the source's SELECT is evaluated,
+	 * which `compile` does, so the expansion waits for it.
+	 */
+	readonly selectAll?: true
 	readonly whereFn?: ($: any) => ReadonlyArray<Condition | undefined>
 	readonly groupByKeys: string[]
 	/** Post-aggregation filter. Deliberately NOT consulted when deriving tenant
@@ -569,11 +575,15 @@ function makeQuery<
 		_state: state,
 
 		select(...args: any[]): any {
-			if (args.length === 0) return makeQuery({ ...state, selectFn: selectEvery(Object.keys(state.columns)) })
+			if (args.length === 0) {
+				return state.fromQuery !== undefined || state.fromUnion !== undefined
+					? makeQuery({ ...state, selectFn: undefined, selectAll: true })
+					: makeQuery({ ...state, selectFn: selectEvery(Object.keys(state.columns)) })
+			}
 			// String overload: select("Col1", "Col2") → select($ => ({ Col1: $.Col1, Col2: $.Col2 }))
-			if (typeof args[0] === "string") return makeQuery({ ...state, selectFn: selectEvery(args as string[]) })
+			if (typeof args[0] === "string") return makeQuery({ ...state, selectFn: selectEvery(args as string[]), selectAll: undefined })
 			// Callback overload: select($ => ({ ... }))
-			return makeQuery({ ...state, selectFn: args[0] })
+			return makeQuery({ ...state, selectFn: args[0], selectAll: undefined })
 		},
 
 		where(fn) {

@@ -353,3 +353,21 @@ describe("CTE shadowing", () => {
 		expect(compiled.tenantScope).toBe("cross-tenant")
 	})
 })
+
+describe("bare select() over a derived source", () => {
+	const inner = CH.from(Events)
+		.select(($) => ({ trace: $.TraceId, total: CH.count(), raw: CH.untypedExpr("1") }))
+		.groupBy("trace")
+
+	it("selects every alias of a subquery, typed ones decoding as before", () => {
+		const compiled = compileCHUnsafe(CH.fromQuery(inner, "w").select(), {})
+		expect(compiled.sql).toContain("SELECT\n          w.trace AS trace,\n          w.total AS total,\n          w.raw AS raw")
+		expect(compiled.sql).toContain("FROM (")
+	})
+
+	it("selects every alias of a union", () => {
+		const branch = CH.from(Events).select(($) => ({ trace: $.TraceId }))
+		const { sql } = compileCHUnsafe(CH.fromUnion(CH.unionAll(branch, branch), "u").select(), {})
+		expect(sql).toContain("u.trace AS trace")
+	})
+})
