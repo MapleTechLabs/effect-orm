@@ -9,6 +9,8 @@
 import type { DateTime } from "effect"
 
 export interface SqlSyntax {
+	/** The dialect's name (`clickhouse`, `postgres`, …), for the few choices expression code makes per dialect. */
+	readonly dialect: string
 	/** One identifier (a column, alias, table or schema name), quoted as needed. */
 	readonly quoteIdent: (name: string) => string
 	/** A string as a quoted literal. */

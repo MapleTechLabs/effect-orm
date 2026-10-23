@@ -130,7 +130,7 @@ export const noTransactions: DialectTransactions = {
  * finished text, so a value that spelled one would be rewritten too. A literal
  * that does is refused at compile time rather than trusted.
  */
-export interface Dialect extends SqlSyntax {
+export interface Dialect extends Omit<SqlSyntax, "dialect"> {
 	/** Shown in errors. */
 	readonly name: string
 	readonly params: ParamStyle
@@ -205,6 +205,7 @@ export const checkedLiteral = (dialect: Dialect, value: unknown, context: string
 	checked(dialect, dialect.literal(value, context), context)
 
 const checkedSyntax = (dialect: Dialect): SqlSyntax => ({
+	dialect: dialect.name,
 	quoteIdent: dialect.quoteIdent,
 	quoteString: (value) => checked(dialect, dialect.quoteString(value), "a string literal"),
 	literal: (value, context) => checkedLiteral(dialect, value, context),

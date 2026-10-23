@@ -25,20 +25,7 @@ export interface LiteralInput {
 }
 
 const literalIssues: ReadonlyArray<KnownIssue<LiteralInput>> = [
-	{
-		id: "ch-array-literal-untyped",
-		reason:
-			"An array literal is written without a cast, so ClickHouse infers its element type from the values: " +
-			"`[0, 4294967296]` is Array(UInt64), and comparing it with an Array(Nullable(Int64)) column is " +
-			"ILLEGAL_TYPE_OF_ARGUMENT. CAST(… AS <column type>) would fix it.",
-		matches: ({ literal, value, path }) =>
-			literal.dialect === "clickhouse" &&
-			path === "compare" &&
-			literal.type.sql === "Array(Nullable(Int64))" &&
-			Array.isArray(value) &&
-			value.every((n) => n === null || n >= 0) &&
-			value.some((n) => n !== null && n >= 2 ** 32),
-	},
+
 	{
 		id: "pg-untyped-select-param",
 		reason:

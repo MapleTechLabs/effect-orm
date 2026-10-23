@@ -37,13 +37,13 @@ const whereSql = (
 describe("literals encode through the column's type", () => {
 	it("writes a Map as ClickHouse's map() rather than [object Object]", () => {
 		expect(whereSql(($) => [$.Attributes.eq({ "http.method": "GET" })])).toBe(
-			"events.Attributes = map('http.method', 'GET')",
+			"events.Attributes = CAST(map('http.method', 'GET') AS Map(String, String))",
 		)
 	})
 
 	it("writes an Array with brackets and quoted elements", () => {
-		expect(whereSql(($) => [$.Tags.eq(["a", "b"])])).toBe("events.Tags = ['a', 'b']")
-		expect(whereSql(($) => [$.Tags.in_(["a"], ["b"])])).toBe("events.Tags IN (['a'], ['b'])")
+		expect(whereSql(($) => [$.Tags.eq(["a", "b"])])).toBe("events.Tags = CAST(['a', 'b'] AS Array(String))")
+		expect(whereSql(($) => [$.Tags.in_(["a"], ["b"])])).toBe("events.Tags IN (CAST(['a'] AS Array(String)), CAST(['b'] AS Array(String)))")
 	})
 
 	it("writes a Bool as 1/0, which is what ClickHouse compares against", () => {
@@ -141,6 +141,22 @@ describe("sqlLiteral", () => {
 		expect(failureOf(Number.NaN)).toMatch(/no ClickHouse literal/)
 		expect(failureOf(undefined)).toMatch(/cannot write undefined/)
 		expect(failureOf(() => 1)).toMatch(/cannot write a function/)
+	})
+})
+
+describe("comparison literals", () => {
+	const Tagged = CH.table("tagged", { Ids: T.array(T.nullable(T.int64)), Attrs: T.map(T.string, T.string), Name: T.string })
+
+	it("casts an array or map literal to the column's type on ClickHouse", () => {
+		const { sql } = compileCHUnsafe(
+			CH.from(Tagged)
+				.select(($) => ({ name: $.Name }))
+				.where(($) => [$.Ids.eq([0, 4294967296]), $.Attrs.eq({ a: "b" }), $.Name.eq("x")]),
+			{},
+		)
+		expect(sql).toContain("tagged.Ids = CAST([0, 4294967296] AS Array(Nullable(Int64)))")
+		expect(sql).toContain("tagged.Attrs = CAST(map('a', 'b') AS Map(String, String))")
+		expect(sql).toContain("tagged.Name = 'x'")
 	})
 })
 
