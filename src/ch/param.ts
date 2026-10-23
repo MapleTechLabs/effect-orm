@@ -95,13 +95,15 @@ const unresolvedSql = (name: string): SqlFragment =>
 function makeParamMarker<N extends string, T>(
 	name: N,
 	fragment: SqlFragment,
-	schema?: Schema.Codec<T, any>,
+	schema: Schema.Codec<T, any> | undefined,
+	kind: ParamKind,
 ): ParamMarker<N, T> {
 	const raise = (): Condition<any> => makeCond(unresolvedSql(name))
 	const raiseExpr = (): Expr<any, any> => makeUntypedExpr(unresolvedSql(name))
 	return {
 		_brand: "Expr" as const,
 		_paramName: name,
+		_paramKind: kind,
 		schema,
 		toFragment: () => fragment,
 		eq: raise,
@@ -166,20 +168,32 @@ const makeParam =
 		const fragment = isValidParamName(name)
 			? raw(paramPlaceholder(kind, name))
 			: known(() => fail(badParamName(name), "NULL"))
-		return makeParamMarker<N, T>(name, fragment, schema) as ParamMarker<N, T, V>
+		return makeParamMarker<N, T>(name, fragment, schema, kind) as ParamMarker<N, T, V>
 	}
 
-const customKinds = new WeakMap<Schema.Codec<any, any>, ParamKind>()
+// Keyed by codec *and* SQL type: types share codecs (`PG.int8` and `PG.float8`
+// both encode with one number codec), and a dialect that types its
+// placeholders needs the kind to name one SQL type.
+const customKinds = new WeakMap<Schema.Codec<any, any>, Map<string, ParamKind>>()
 let nextCustomKind = 0
+/** The column type a `param.of` kind was made from, for a dialect that types its placeholders. */
+const kindColumnTypes = new Map<ParamKind, CHType<string, any, any>>()
 
 const kindFor = (type: CHType<string, any, any>): ParamKind => {
-	const existing = customKinds.get(type.literalSchema)
+	let bySql = customKinds.get(type.literalSchema)
+	if (bySql === undefined) customKinds.set(type.literalSchema, (bySql = new Map()))
+	const existing = bySql.get(type.sql)
 	if (existing !== undefined) return existing
 	const kind = `custom${nextCustomKind++}`
-	customKinds.set(type.literalSchema, kind)
+	bySql.set(type.sql, kind)
 	paramTypes.set(kind, type.literalSchema)
+	kindColumnTypes.set(kind, type)
 	return kind
 }
+
+/** The column type of a `param.of` placeholder; `undefined` for anything else. */
+export const paramColumnTypeOf = (expr: unknown): CHType<string, any, any> | undefined =>
+	typeof expr === "object" && expr !== null && "_paramKind" in expr ? kindColumnTypes.get((expr as { readonly _paramKind: ParamKind })._paramKind) : undefined
 
 export const param = {
 	/** Resolved from a string; emitted as an escaped SQL literal. */

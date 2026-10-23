@@ -21,7 +21,7 @@ import { splitTerminalClauses } from "../sql/terminal-clauses"
 import { activeLiteralBinder, withLiteralBinder } from "../sql/literal-binder"
 import { compileQuery, type SqlQuery } from "../sql/sql-query"
 import { track, untracked, type RenderTrack } from "../sql/render-tracker"
-import { PARAM_MARKER_PREFIX, PARAM_PLACEHOLDER_PATTERN, param, paramSchema, type ParamKind } from "./param"
+import { PARAM_MARKER_PREFIX, PARAM_PLACEHOLDER_PATTERN, param, paramColumnTypeOf, paramSchema, type ParamKind } from "./param"
 import { mergeResultSchemas } from "./define-fn"
 import { encodeValue } from "./literal"
 import { checkedLiteral, clickhouseDialect, currentDialect, withDialect, type Dialect } from "./dialect"
@@ -922,7 +922,7 @@ function compileInner<
 				}
 				const fragment = expr.toFragment()
 				const [sql, found] = track(() => compileSqlFragment(fragment))
-				return { alias, sql, found, column: plainColumn(fragment) }
+				return { alias, sql: castSelectedParam(expr, sql), found, column: plainColumn(fragment) }
 			})
 			const where = presentWhere.map((c) => raw(rowFilter("WHERE", c)))
 			const having = (state.havingFn ? state.havingFn($) : [])
@@ -1261,6 +1261,21 @@ function derivedLiteralSchema(schema: Schema.Codec<any, any>): Schema.Codec<any,
 		return Schema.Union(schema.ast.types.map((ast) => derivedLiteralSchema(Schema.make(ast))))
 	}
 	return schema
+}
+
+/**
+ * A `param.of(type)` selected on its own, cast to its type where the dialect
+ * binds. A bound placeholder has no type of its own and a select list gives it
+ * none, so Postgres sends it back as text: a boolean as `'false'`, an array as
+ * `'{}'`, which the type's codec rejects. Anywhere else the column it is
+ * compared with types it, and a cast there could only cost an index.
+ */
+const castSelectedParam = (expr: unknown, sql: string): string => {
+	const sqlType = paramColumnTypeOf(expr)?.sql
+	// Only a lowercase type name: that is how Postgres types are spelled, and a
+	// ClickHouse type (`String`, `Nullable(…)`) handed to a Postgres query would
+	// otherwise become a cast the server rejects.
+	return sqlType && /^[a-z_]/.test(sqlType) && currentDialect().params._tag === "bind" ? `CAST(${sql} AS ${sqlType})` : sql
 }
 
 /** The aliases a query selects, read without compiling it; `undefined` before `select()`. */

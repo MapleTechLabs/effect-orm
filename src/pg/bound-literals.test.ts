@@ -99,3 +99,52 @@ describe("orderBy params", () => {
 		expect(PG.compileUnsafe(byParam, { fallback: "z" }).parameters).toEqual(["z"])
 	})
 })
+
+describe("typed placeholders", () => {
+	const Scores = PG.table("scores", { columns: { id: PG.int8, ok: PG.bool, tags: PG.array(PG.text) }, primaryKey: ["id"] })
+	const run = (compiled: PG.CompiledQuery<any>) =>
+		Effect.promise(() => db.query<Record<string, unknown>>(compiled.sql, [...compiled.parameters])).pipe(
+			Effect.flatMap((result) => compiled.decodeRows(result.rows)),
+		)
+
+	it.effect("a param.of in a select list binds as its own type, not text", () =>
+		Effect.gen(function* () {
+			yield* Effect.promise(() => db.exec(`CREATE TABLE IF NOT EXISTS scores (id int8 PRIMARY KEY, ok boolean, tags text[]); INSERT INTO scores VALUES (1, true, '{a}') ON CONFLICT DO NOTHING`))
+			const compiled = PG.compileUnsafe(
+				PG.from(Scores).select(() => ({ flag: CH.param.of(PG.bool, "flag"), list: CH.param.of(PG.array(PG.text), "list") })),
+				{ flag: false, list: [] },
+			)
+			expect(compiled.sql).toContain(`CAST($1 AS boolean) AS "flag"`)
+			expect(compiled.sql).toContain(`CAST($2 AS text[]) AS "list"`)
+			expect(yield* run(compiled)).toEqual([{ flag: false, list: [] }])
+			// A ClickHouse type has no Postgres name to cast to; it is left as it was.
+			expect(PG.compileUnsafe(PG.from(Scores).select(() => ({ s: CH.param.of(CH.string, "s") })), { s: "a" }).sql).toContain(`$1 AS "s"`)
+		}),
+	)
+
+	it.effect("a fraction compared with an integer column binds as numeric; a whole number stays uncast", () =>
+		Effect.gen(function* () {
+			const compiled = PG.compileUnsafe(PG.from(Scores).select("id").where(($) => [$.id.gt(0.5), $.id.lt(2)]), {})
+			expect(compiled.sql).toContain(`"id" > $1::numeric`)
+			expect(compiled.sql).toMatch(/"id" < \$2(?!:)/)
+			expect(yield* run(compiled)).toEqual([{ id: 1 }])
+		}),
+	)
+
+	it.effect("a param compared with a column stays untyped, and a float4 fraction still matches", () =>
+		Effect.gen(function* () {
+			const Reals = PG.table("reals", { columns: { id: PG.int8, r: PG.float4 }, primaryKey: ["id"] })
+			yield* Effect.promise(() => db.exec(`CREATE TABLE IF NOT EXISTS reals (id int8 PRIMARY KEY, r real); INSERT INTO reals VALUES (1, 0.1) ON CONFLICT DO NOTHING`))
+			const byParam = PG.compileUnsafe(PG.from(Scores).select("id").where(($) => [$.id.eq(CH.param.of(PG.int8, "v"))]), { v: 1 })
+			expect(byParam.sql).toMatch(/"id" = \$1(?!:)/)
+			const real = PG.compileUnsafe(PG.from(Reals).select("id").where(($) => [$.r.eq(0.1)]), {})
+			expect(real.sql).toMatch(/"r" = \$1(?!:)/)
+			expect(yield* run(real)).toEqual([{ id: 1 }])
+		}),
+	)
+
+	it("inserting a fraction into an integer column is not cast, so it is not rounded", () => {
+		const compiled = PG.compileUnsafe(PG.insertInto(Scores).values([{ id: 9.75, ok: true, tags: [] }]))
+		expect(compiled.sql).not.toContain("::numeric")
+	})
+})

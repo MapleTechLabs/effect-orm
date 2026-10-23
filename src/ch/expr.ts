@@ -338,16 +338,26 @@ const describeUntyped = (value: unknown): string =>
  * A value compared against a column. On ClickHouse an array or map literal is
  * cast to the column's type: otherwise its element type is inferred from the
  * values (`[0, 4294967296]` is Array(UInt64)), which may not compare with the
- * column at all. A bound value needs no cast; the driver sends it typed.
+ * column at all.
  */
 const comparisonLiteral = (columnType: CHType<string, any, any>, value: unknown, column: string): string => {
 	const literal = encodeColumnLiteral(columnType, value, column)
-	const compound = columnType._tag === "Array" || columnType._tag === "Map"
 	// Outside a compile, ClickHouse is the default dialect.
-	return compound && activeLiteralBinder() === undefined && (activeSqlSyntax()?.dialect ?? "clickhouse") === "clickhouse"
-		? `CAST(${literal} AS ${columnType.sql})`
-		: literal
+	const dialect = activeSqlSyntax()?.dialect ?? "clickhouse"
+	const bound = activeLiteralBinder() !== undefined
+	if (!bound && dialect === "clickhouse" && (columnType._tag === "Array" || columnType._tag === "Map")) {
+		return `CAST(${literal} AS ${columnType.sql})`
+	}
+	// Postgres types a bound value from the column, and an integer column turns
+	// `9.75` into `invalid input syntax for type bigint`. Only a fraction is
+	// cast: a whole number left untyped keeps the comparison on the index.
+	if (bound && dialect === "postgres" && POSTGRES_INTEGERS.has(columnType.sql) && typeof value === "number" && !Number.isInteger(value)) {
+		return `${literal}::numeric`
+	}
+	return literal
 }
+
+const POSTGRES_INTEGERS = new Set(["int2", "int4", "int8", "smallint", "integer", "bigint"])
 
 /** A number as SQL that reads back exactly. A subnormal goes through the dialect: ClickHouse cannot parse one as written. */
 const numberFragment = (value: number): SqlFragment =>
