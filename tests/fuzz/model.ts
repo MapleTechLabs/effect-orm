@@ -158,6 +158,8 @@ const evalExpr = (env: Env, row: Row, e: Expr): V => {
 					if (env.target !== "postgres") {
 						const kinds = new Set([chKind(e.l), chKind(e.r)])
 						if (kinds.has("unsigned") && kinds.has("signed")) skip("ClickHouse % across signed and unsigned")
+						// Not IEEE fmod: `3 % (27 / 99)` is 0 on ClickHouse, 2.2e-16 by fmod.
+						if (kinds.has("float")) skip("ClickHouse % of a float")
 					}
 					// Both databases truncate towards zero, like JS `%`.
 					return l % r

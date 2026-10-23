@@ -26,15 +26,7 @@ export interface LiteralInput {
 
 const literalIssues: ReadonlyArray<KnownIssue<LiteralInput>> = [
 
-	{
-		id: "pg-untyped-select-param",
-		reason:
-			"A param in a Postgres SELECT list is bound untyped (`$1 AS \"p\"`), so the server infers `text` and a " +
-			"boolean comes back as `'false'`, an array as `'{…}'`, neither of which the column's codec decodes. " +
-			"Writing `$1::<type>` would fix it.",
-		matches: ({ literal, path }) =>
-			literal.dialect === "postgres" && path === "select" && (literal.type.sql === "boolean" || literal.type._tag === "Array"),
-	},
+
 ]
 
 /** The id of the open issue this input would hit, if any. */
@@ -83,33 +75,24 @@ const planIssues: ReadonlyArray<KnownIssue<PlanInput>> = [
 	{
 		id: "clickhouse-server-and-absorption",
 		reason:
-			"A ClickHouse 25.8 server bug, not the builder: `WHERE a AND ((b AND a) OR a)` fails with " +
+			"A ClickHouse 25.8 server bug, not the builder: `WHERE a AND ((b AND a) OR a)` or `a AND ((a OR a) OR a)` fails with " +
 			"`Number of arguments for function \"and\" should be at least 2` — the common-expression rewrite leaves a " +
 			"one-argument and(). `SETTINGS optimize_extract_common_expressions = 0` avoids it.",
 		matches: ({ target, plan }) => {
 			if (target === "postgres") return false
 			const top = conjuncts(plan.where)
+			const disjuncts = (c: any): Array<any> => (c?.k === "or" ? c.cs.flatMap(disjuncts) : [c])
+			// Fails when every disjunct of a nested OR contains a top-level conjunct `w` (as `w`, or inside an AND):
+			// `w AND ((x AND w) OR w)`, `w AND ((w OR w) OR w)`. `w AND (w OR w)` and `w AND ((x AND w) OR y)` run.
 			return [...nodes(plan)].some(
 				(node) =>
 					node.k === "or" &&
-					top.some(
-						(w) =>
-							(node.cs as Array<any>).some((d) => same(d, w)) &&
-							(node.cs as Array<any>).some((d) => d?.k === "and" && conjuncts(d.cs).some((x) => same(x, w))),
-					),
+					(node.cs as Array<any>).some((d) => d?.k === "or" || d?.k === "and") &&
+					top.some((w) => disjuncts(node).every((d) => same(d, w) || (d?.k === "and" && conjuncts(d.cs).some((x) => same(x, w))))),
 			)
 		},
 	},
-	{
-		id: "pg-fraction-bound-to-integer",
-		reason:
-			"On Postgres a comparison value is bound as a parameter, and the server types it from the integer side: " +
-			"`\"Amount\" > $1` with 9.75 fails `invalid input syntax for type bigint`. ClickHouse inlines the literal " +
-			"and compares correctly. The builder accepts the value (int8's codec is any finite number).",
-		matches: ({ target, plan }) =>
-			target === "postgres" &&
-			[...nodes(plan)].some((node) => node.k === "value" && typeof node.v === "number" && !Number.isInteger(node.v)),
-	},
+
 
 ]
 
