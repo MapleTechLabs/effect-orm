@@ -25,7 +25,7 @@ describe("source column identity", () => {
 			.where(($) => [$.Timestamp.gte(new Date("2026-01-01T00:00:00Z")), $.Attributes.eq({ a: "b" })])
 		const compiled = CH.compileUnsafe(query, {})
 		expect(compiled.sql).toContain("b.Timestamp >= '2026-01-01 00:00:00'")
-		expect(compiled.sql).toContain("b.Attributes = map('a', 'b')")
+		expect(compiled.sql).toContain("b.Attributes = CAST(map('a', 'b') AS Map(String, String))")
 	})
 
 	it("keeps built-in timestamp comparison codecs after computed projections", () => {
@@ -42,7 +42,7 @@ describe("source column identity", () => {
 			CH.compileUnsafe(CH.fromQuery(inner, "q").innerJoin(Events, "e", (main, e) => main.Attributes.eq({ a: "b" }).and(e.Attributes.eq({ a: "b" }))).select(() => ({ Id: CH.lit(1) })), {}),
 		]) {
 			expect(compiled.sql).not.toContain("[object Object]")
-			expect(compiled.sql.match(/= map\('a', 'b'\)/g)).toHaveLength(2)
+			expect(compiled.sql.match(/= CAST\(map\('a', 'b'\) AS Map\(String, String\)\)/g)).toHaveLength(2)
 		}
 	})
 

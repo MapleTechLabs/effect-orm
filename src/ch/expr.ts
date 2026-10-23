@@ -334,6 +334,21 @@ const describeUntyped = (value: unknown): string =>
 /** A value with no column type to encode it, in the active dialect's syntax.
  *  ClickHouse writes booleans as `1`/`0`, which is also the rendering outside
  *  a compile. */
+/**
+ * A value compared against a column. On ClickHouse an array or map literal is
+ * cast to the column's type: otherwise its element type is inferred from the
+ * values (`[0, 4294967296]` is Array(UInt64)), which may not compare with the
+ * column at all. A bound value needs no cast; the driver sends it typed.
+ */
+const comparisonLiteral = (columnType: CHType<string, any, any>, value: unknown, column: string): string => {
+	const literal = encodeColumnLiteral(columnType, value, column)
+	const compound = columnType._tag === "Array" || columnType._tag === "Map"
+	// Outside a compile, ClickHouse is the default dialect.
+	return compound && activeLiteralBinder() === undefined && (activeSqlSyntax()?.dialect ?? "clickhouse") === "clickhouse"
+		? `CAST(${literal} AS ${columnType.sql})`
+		: literal
+}
+
 /** A number as SQL that reads back exactly. A subnormal goes through the dialect: ClickHouse cannot parse one as written. */
 const numberFragment = (value: number): SqlFragment =>
 	isSubnormal(value) ? known(() => (activeSqlSyntax()?.literal ?? sqlLiteral)(value, "a number literal")) : raw(numberText(value))
@@ -598,7 +613,7 @@ export function makeColumnRef<Name extends string, ColType extends CHType<string
 		columnType?.schema as Schema.Codec<InferTS<ColType>, any> | undefined,
 		columnType === undefined
 			? undefined
-			: (value) => known(() => encodeColumnLiteral(columnType, value, columnName ?? name)),
+			: (value) => known(() => comparisonLiteral(columnType, value, columnName ?? name)),
 	)
 	// Without `sqlName`: a query reading this column as a subquery's output sees it under its alias.
 	if (columnType !== undefined) {
