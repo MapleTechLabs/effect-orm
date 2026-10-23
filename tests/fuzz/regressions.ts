@@ -44,7 +44,7 @@ export const pinned: Record<string, ReadonlyArray<unknown>> = {
 	] satisfies ReadonlyArray<Plan>,
 
 	// Literals.
-	"clickhouse:Float64": [5e-324, 2.1722934738885276e269],
+	"clickhouse:Float64": [5e-324, -5e-324, 44812297868494010, 2.1722934738885276e269],
 	"clickhouse:Array(Nullable(Int64)) compare": [[0, 4294967296]],
 	"clickhouse:String": ["__PARAM_string_x__", "\\'", "\0"],
 	"postgres:boolean select": [false],

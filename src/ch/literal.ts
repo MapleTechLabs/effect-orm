@@ -43,6 +43,32 @@ const oneLine = (failure: unknown): string =>
 		.replace(/\s*\n\s*/g, "; ")
 		.trim()
 
+/** Below the smallest normal double: a value ClickHouse's SQL parser cannot read back. */
+export const isSubnormal = (value: number): boolean => value !== 0 && Math.abs(value) < 2.2250738585072014e-308
+
+/**
+ * A finite double as digits that read back as exactly that double.
+ *
+ * `String(value)` is the shortest decimal that rounds to it, which a float
+ * parser rounds back — but a whole number past 2^53 prints as an integer
+ * (`44812297868494010`), and an integer literal is parsed exactly, as a value
+ * the double is not (it is …008). Below 2^64 the double's own integer value is
+ * written instead; above, `String` already uses an exponent.
+ */
+export const numberText = (value: number): string =>
+	Number.isInteger(value) && !Number.isSafeInteger(value) && Math.abs(value) < 2 ** 64 ? BigInt(value).toString() : String(value)
+
+/**
+ * A subnormal double as ClickHouse SQL. Written as a decimal (`5e-324`) it is a
+ * syntax error, and parsed from text (`toFloat64('5e-324')`) it flushes to 0, so
+ * it is rebuilt from its IEEE bits, which is exact.
+ */
+const subnormalLiteral = (value: number): string => {
+	const view = new DataView(new ArrayBuffer(8))
+	view.setFloat64(0, value)
+	return `reinterpretAsFloat64(toUInt64(${view.getBigUint64(0)}))`
+}
+
 /**
  * A wire value as ClickHouse literal syntax.
  *
@@ -62,7 +88,7 @@ export function sqlLiteral(value: unknown, context: string): string {
 				message: `${context}: ${value} has no ClickHouse literal`,
 			}), "NULL")
 		}
-		return String(value)
+		return isSubnormal(value) ? subnormalLiteral(value) : numberText(value)
 	}
 
 	if (Array.isArray(value)) {

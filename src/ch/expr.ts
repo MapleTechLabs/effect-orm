@@ -12,7 +12,7 @@ import { raw, str, ident, compile, as_ as sqlAs, known } from "../sql/sql-fragme
 import { activeSqlSyntax } from "../sql/sql-syntax"
 import { activeLiteralBinder } from "../sql/literal-binder"
 import { chDateTimeLiteral, CHFloatResult, CHNumber, string as chString, type CHType, type InferEncoded, type InferTS } from "./types"
-import { encodeColumnLiteral } from "./literal"
+import { encodeColumnLiteral, isSubnormal, numberText, sqlLiteral } from "./literal"
 import { QueryBuilderError } from "./errors"
 import { fail } from "./failure"
 import { markTenantColumn, markTenantPredicate, tenantColumnOf, tenantPredicatesOf } from "./tenant"
@@ -300,7 +300,7 @@ export const isExprLike = (value: unknown): value is Expr<unknown> =>
 export function toFragment(value: unknown): SqlFragment {
 	if (isExprLike(value)) return value.toFragment()
 	if (typeof value === "string") return str(value)
-	if (typeof value === "number") return raw(String(value))
+	if (typeof value === "number") return numberFragment(value)
 	if (typeof value === "boolean") return known(() => untypedLiteral(value))
 	// A DateTime column compares against a DateTime value, so the literal has to
 	// be the dialect's own form (ClickHouse's is tz-less) rather than whatever
@@ -328,6 +328,10 @@ const describeUntyped = (value: unknown): string =>
 /** A value with no column type to encode it, in the active dialect's syntax.
  *  ClickHouse writes booleans as `1`/`0`, which is also the rendering outside
  *  a compile. */
+/** A number as SQL that reads back exactly. A subnormal goes through the dialect: ClickHouse cannot parse one as written. */
+const numberFragment = (value: number): SqlFragment =>
+	isSubnormal(value) ? known(() => (activeSqlSyntax()?.literal ?? sqlLiteral)(value, "a number literal")) : raw(numberText(value))
+
 const untypedLiteral = (value: boolean): string =>
 	activeSqlSyntax()?.literal(value, "an untyped boolean") ?? (value ? "1" : "0")
 
@@ -639,7 +643,7 @@ export function lit(value: string | number): Expr<string> | Expr<number> {
 	// a single `CH.lit("all")` in a SELECT costs the whole query its row schema,
 	// since derivation is all-or-nothing.
 	if (typeof value === "string") return makeExpr<string>(str(value), chString.schema)
-	return makeExpr<number>(raw(String(value)), CHNumber as Schema.Codec<number, any>)
+	return makeExpr<number>(typeof value === "number" ? numberFragment(value) : raw(String(value)), CHNumber as Schema.Codec<number, any>)
 }
 
 // Subquery expressions
