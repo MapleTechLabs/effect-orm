@@ -77,7 +77,7 @@ const hostile: fc.Arbitrary<unknown> = fc.oneof(
 	fc.constantFrom<unknown>(Number.NaN, Infinity, -Infinity, -0, 2 ** 53, 1e308, 5e-324, new Date(Number.NaN), Symbol("s"), () => 1, undefined, null, "", "2026-13-45 99:99:99", { _brand: "Expr" }, { _brand: "Expr", toFragment: 1 }),
 )
 
-type HostileSite = "eq" | "neq" | "gt" | "in_" | "notIn" | "between" | "like" | "param.int" | "param.float" | "param.string" | "param.bool" | "param.dateTime" | "param.of" | "select"
+type HostileSite = "lit" | "add" | "eq" | "neq" | "gt" | "in_" | "notIn" | "between" | "like" | "param.int" | "param.float" | "param.string" | "param.bool" | "param.dateTime" | "param.of" | "select"
 export interface HostileInput {
 	readonly dialect: "clickhouse" | "postgres"
 	readonly column: OrderColumn
@@ -90,6 +90,8 @@ const hostileQuery = (ctx: CoreContext, input: HostileInput) => {
 	const params: Record<string, unknown> = { orgId: "org_1", h: value }
 	let q: any = ctx.from(ctx.orders)
 	if (site === "select") return { query: q.select(() => ({ id: CH.lit(1), bad: value })), params }
+	if (site === "lit") return { query: q.select(() => ({ id: CH.lit(value as never) })), params }
+	if (site === "add") return { query: q.select(($: any) => ({ id: $.Amount.add(value) })), params }
 	q = q.select(($: any) => ({ id: $.Id }))
 	if (site.startsWith("param.")) {
 		const kind = site.slice("param.".length)
@@ -106,7 +108,7 @@ const hostileInput = (dialect: "clickhouse" | "postgres"): fc.Arbitrary<HostileI
 	fc.record({
 		dialect: fc.constant(dialect),
 		column: fc.constantFrom(...(Object.keys(ORDER_COLUMNS) as OrderColumn[])),
-		site: fc.constantFrom<HostileSite>("eq", "neq", "gt", "in_", "notIn", "between", "like", "param.int", "param.float", "param.string", "param.bool", "param.dateTime", "param.of", "select"),
+		site: fc.constantFrom<HostileSite>("lit", "add", "eq", "neq", "gt", "in_", "notIn", "between", "like", "param.int", "param.float", "param.string", "param.bool", "param.dateTime", "param.of", "select"),
 		value: hostile,
 	})
 
@@ -123,7 +125,13 @@ const neverThrows = (ctx: CoreContext, input: HostileInput) => {
 		})
 	}
 	if (Exit.isFailure(exit)) {
-		const typed = exit.cause.reasons.every((reason) => reason._tag === "Fail" && String((reason as any).error?._tag).endsWith("QueryBuilderError"))
+		// src/ch/errors.ts: a value a request could supply fails with a QueryBuilderError; what is only ever
+		// written in source (the shape of a select record) may die with a QueryBuilderDefect. Nothing else.
+		const sourceSite = input.site === "select"
+		const typed = exit.cause.reasons.every((reason) => {
+			const tag = String(((reason as any).error ?? (reason as any).defect)?._tag)
+			return (reason._tag === "Fail" && tag.endsWith("QueryBuilderError")) || (sourceSite && reason._tag === "Die" && tag.endsWith("QueryBuilderDefect"))
+		})
 		if (!typed) throw new FuzzFailure("compile died or failed with something other than a QueryBuilderError", { cause: String(exit.cause) })
 	}
 	expect(true).toBe(true)

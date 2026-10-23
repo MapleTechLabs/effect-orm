@@ -13,6 +13,41 @@ const Events = CH.table("events", {
 
 const PgEvents = PG.table("events", { columns: { id: PG.text, score: PG.nullable(PG.float8) }, primaryKey: ["id"] })
 
+describe("values a request could supply fail as QueryBuilderError, never a throw", () => {
+	const PgTimed = PG.table("timed", { columns: { id: PG.text, at: PG.timestamptz }, primaryKey: ["id"] })
+	const failure = (effect: Effect.Effect<unknown, QueryBuilderError>) => {
+		const exit = Effect.runSyncExit(effect)
+		expect(Exit.isFailure(exit) && Cause.squash(exit.cause)).toBeInstanceOf(QueryBuilderError)
+		return Exit.isFailure(exit) ? String(Cause.squash(exit.cause)) : ""
+	}
+
+	it("a bigint compared against a String column", () => {
+		expect(failure(CH.compile(CH.from(Events).select(($) => ({ id: $.Id })).where(($) => [$.Id.eq(0n as never)])))).toMatch(/0n is not a valid value/)
+	})
+
+	it.each([[1], [{}], [new Map()]])("a LIKE pattern of %o", (pattern) => {
+		expect(failure(CH.compile(CH.from(Events).select(($) => ({ id: $.Id })).where(($) => [$.Name.like(pattern as never)])))).toMatch(/LIKE pattern/)
+	})
+
+	it.each([[{}], [Symbol("x")], [true]])("lit(%o)", (value) => {
+		expect(failure(CH.compile(CH.from(Events).select(() => ({ v: CH.lit(value as never) }))))).toMatch(/lit: cannot write/)
+	})
+
+	it.each([[undefined], ["5"], [{}], [new Date(Number.NaN)]])("an arithmetic operand of %o", (operand) => {
+		expect(failure(CH.compile(CH.from(Events).select(() => ({ v: CH.lit(1).add(operand as never) }))))).toMatch(/operand|invalid Date/)
+	})
+
+	it.each([[""], ["2026-13-45 99:99:99"], [new Date(Number.NaN)]])("a Postgres timestamp of %o", (value) => {
+		const query = PG.from(PgTimed).select(($) => ({ id: $.id })).where(($) => [$.at.gte(CH.param.dateTime("from"))])
+		expect(failure(PG.compile(query, { from: value as never }))).toMatch(/not a valid value/)
+	})
+
+	it("a non-expression in a select record is a defect: it is written in source", () => {
+		const exit = Effect.runSyncExit(CH.compile(CH.from(Events).select(() => ({ v: 1 as never }))))
+		expect(Exit.isFailure(exit) && Cause.squash(exit.cause)).toBeInstanceOf(QueryBuilderDefect)
+	})
+})
+
 describe("the builder never throws", () => {
 	it("builds a bad query without throwing; compiling it reports the failure", () => {
 		const build = () =>

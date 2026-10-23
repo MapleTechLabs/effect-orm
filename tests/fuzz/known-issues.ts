@@ -58,51 +58,11 @@ export const knownLiteralIssue = (input: LiteralInput): string | undefined =>
 
 import type { HostileInput } from "./compile.fuzz.test"
 
-const containsBigInt = (value: unknown, seen = new Set<unknown>()): boolean => {
-	if (typeof value === "bigint") return true
-	if (value === null || typeof value !== "object" || seen.has(value)) return false
-	seen.add(value)
-	try {
-		return Reflect.ownKeys(value).some((key) => containsBigInt((value as any)[key], seen))
-	} catch {
-		return false
-	}
-}
-
 const hostileIssues: ReadonlyArray<KnownIssue<HostileInput>> = [
-	{
-		id: "describe-bigint",
-		reason:
-			"literal.ts `describe()` formats an unexpected value with JSON.stringify, which throws on a bigint, so " +
-			"`$.OrgId.eq(0n)` dies with `TypeError: Do not know how to serialize a BigInt` instead of an InvalidLiteral error.",
-		matches: ({ value }) => containsBigInt(value),
-	},
-	{
-		id: "like-non-string-pattern",
-		reason:
-			"`like`/`notLike`/`ilike` call `pattern.toFragment()` on anything that is not a string, so a number, " +
-			"object or Map pattern dies with `TypeError: pattern.toFragment is not a function`.",
-		matches: ({ site, value }) => site === "like" && typeof value !== "string",
-	},
-	{
-		id: "select-non-expression",
-		reason:
-			"A select callback returning a non-expression (`{ bad: 1 }`, `{ bad: undefined }`) dies with " +
-			"`TypeError: selectExprs[alias].toFragment is not a function` instead of a QueryBuilderError naming the alias.",
-		matches: ({ site, value }) =>
-			site === "select" && !(value !== null && typeof value === "object" && typeof (value as any).toFragment === "function"),
-	},
-	{
-		id: "pg-timestamp-invalid-string-dies",
-		reason:
-			"The Postgres timestamp literal codec formats an unparseable string or invalid Date with toISOString(), which " +
-			"throws `RangeError: Invalid time value` inside the transform: compile dies instead of failing InvalidLiteral.",
-		matches: ({ dialect, site, column, value }) =>
-			dialect === "postgres" &&
-			(site === "param.dateTime" || (column === "Created" && (site === "param.of" || !site.startsWith("param.")))) &&
-			(typeof value === "string" || value instanceof Date) &&
-			Number.isNaN(new Date(value as string).getTime()),
-	},
+
+
+
+
 ]
 
 export const knownHostileIssue = (input: HostileInput): string | undefined =>

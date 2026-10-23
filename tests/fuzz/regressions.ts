@@ -56,6 +56,9 @@ export const pinned: Record<string, ReadonlyArray<unknown>> = {
 		{ dialect: "clickhouse", column: "OrgId", site: "eq", value: 0n },
 		{ dialect: "clickhouse", column: "OrgId", site: "like", value: {} },
 		{ dialect: "clickhouse", column: "OrgId", site: "select", value: Number.NaN },
+		{ dialect: "clickhouse", column: "OrgId", site: "lit", value: 0n },
+		{ dialect: "clickhouse", column: "OrgId", site: "add", value: undefined },
+		{ dialect: "clickhouse", column: "OrgId", site: "add", value: new Date(Number.NaN) },
 	],
 	"hostile values are refused, never thrown (postgres)": [
 		{ dialect: "postgres", column: "OrgId", site: "param.dateTime", value: "" },

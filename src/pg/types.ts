@@ -69,6 +69,13 @@ const PgTimestamptz: Schema.Codec<DateTime.Utc, Date | string> = Schema.Union([
  * receives epoch milliseconds. Unlike a zoneless literal, an instant cannot be
  * read in the session's time zone.
  */
+const isValidDate = Schema.makeFilter((value: Date) => (Number.isNaN(value.getTime()) ? "an invalid Date" : undefined), {
+	title: "validDate",
+})
+
+// The checks sit on the value side, which is what encoding reads: a string or
+// Date that is not an instant fails there as a schema issue, instead of reaching
+// `format` as NaN and throwing from `toISOString`.
 export const timestampLiteral = (format: (epochMillis: number) => string): Schema.Codec<unknown, unknown> =>
 	Schema.Union([
 		Schema.String.pipe(
@@ -78,14 +85,14 @@ export const timestampLiteral = (format: (epochMillis: number) => string): Schem
 			}),
 		),
 		Schema.String.pipe(
-			Schema.decodeTo(Schema.Date, {
+			Schema.decodeTo(Schema.Date.pipe(Schema.check(isValidDate)), {
 				decode: SchemaGetter.transform((value: string) => new Date(value)),
 				encode: SchemaGetter.transform((value: Date) => format(value.getTime())),
 			}),
 		),
 		Schema.String.pipe(
 			Schema.check(isTimestamp),
-			Schema.decodeTo(Schema.String, {
+			Schema.decodeTo(Schema.String.pipe(Schema.check(isTimestamp)), {
 				decode: SchemaGetter.transform((value: string) => value),
 				encode: SchemaGetter.transform((value: string) => format(Date.parse(pgTimestampToIso(value)))),
 			}),
