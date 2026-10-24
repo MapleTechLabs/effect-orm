@@ -1967,7 +1967,9 @@ function compileInsert(insert: CHInsert<any, any, any, any>, params: Record<stri
 			} else {
 				const selected = insertSelectSource(insert, selectQuery!, values)
 				columns = selected.columns
-				source = selected.sql
+				source = insert._state.conflict !== undefined && dialect.clauses.insertSelectNeedsWhere === true
+					? `SELECT * FROM (\n${selected.sql}\n) AS ${quoteIdent("__insert_source")} WHERE 1`
+					: selected.sql
 				readScope = selected.inner.tenantScope
 				const bound = tenantBoundOf(selected.inner)
 				readBound = bound

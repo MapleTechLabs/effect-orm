@@ -47,3 +47,12 @@ it("refuses unsupported SQLite syntax while compiling, before sending SQL", () =
 	expect(() => SQLite.compileUnsafe(SQLite.from(Items).select("id").where(($) => [$.note.ilike("a%")]))).toThrow(/ILIKE/)
 	expect(() => SQLite.compileUnsafe(SQLite.from(Items).select("id").forUpdate())).toThrow(/row locks/)
 })
+
+it("runs INSERT SELECT with ON CONFLICT even when the source has no WHERE", async () => {
+	const rows = await withDatabase((db) => Effect.gen(function* () {
+		yield* db.run(SQLite.insertInto(Items).values({ id: 1, note: "first", enabled: true, score: null }))
+		yield* db.run(SQLite.insertInto(Items).select(SQLite.from(Items).select()).onConflictDoNothing())
+		return yield* db.run(SQLite.from(Items).select("id"))
+	}))
+	expect(rows).toEqual([{ id: 1 }])
+})

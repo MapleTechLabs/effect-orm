@@ -72,6 +72,8 @@ export interface DialectClauses {
 	readonly onConflict?: boolean
 	/** Whether ON CONFLICT can name a constraint rather than columns. */
 	readonly onConflictConstraint?: boolean
+	/** SQLite disambiguates INSERT SELECT ... ON CONFLICT with a WHERE. */
+	readonly insertSelectNeedsWhere?: boolean
 	/** Whether a VALUES tuple can contain DEFAULT for a missing cell. */
 	readonly defaultInValues?: boolean
 	/** Whether SELECT DISTINCT ON is supported. Undefined preserves existing dialects. */

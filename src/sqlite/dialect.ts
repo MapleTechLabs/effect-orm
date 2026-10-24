@@ -43,6 +43,7 @@ export const sqliteDialect: Dialect = {
 		returning: true,
 		onConflict: true,
 		onConflictConstraint: false,
+		insertSelectNeedsWhere: true,
 		defaultInValues: false,
 		distinctOn: false,
 	},
