@@ -27,6 +27,7 @@ const literal = (value: unknown, context: string): string => {
 export const sqliteDialect: Dialect = {
 	name: "sqlite",
 	functions: "sqlite",
+	ilike: false,
 	quoteIdent: (name) => `"${name.replace(/"/g, '""')}"`,
 	quoteString,
 	literal,
@@ -41,6 +42,9 @@ export const sqliteDialect: Dialect = {
 		offsetRequiresLimit: true,
 		returning: true,
 		onConflict: true,
+		onConflictConstraint: false,
+		defaultInValues: false,
+		distinctOn: false,
 	},
 	paramCodecs: {
 		dateTime: PgTimestampLiteral,

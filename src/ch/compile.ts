@@ -936,7 +936,9 @@ function compileInner<
 			const sqlQuery: SqlQuery = {
 				distinct: state.distinct !== undefined,
 				distinctOn: Array.isArray(state.distinct)
-					? (state.distinct.length === 0
+					? (currentDialect().clauses.distinctOn === false
+						? fail<ReadonlyArray<string>>(new QueryBuilderDefect({ message: `${currentDialect().name} has no DISTINCT ON clause` }), [])
+						: state.distinct.length === 0
 							? fail<ReadonlyArray<string>>(new QueryBuilderDefect({ message: "CHQuery: distinctOn() needs at least one key" }), [])
 							: state.distinct
 						).map((key: string) => {
@@ -1690,6 +1692,9 @@ const onConflictClause = (
 	let target = ""
 	if (conflict.target !== undefined) {
 		if ("constraint" in conflict.target) {
+			if (dialect.clauses.onConflictConstraint === false) {
+				return fail(new QueryBuilderDefect({ message: `${where}: ${dialect.name} has no ON CONSTRAINT conflict target; name its columns instead` }), "")
+			}
 			if (conflict.targetWhere !== undefined) {
 				return fail(new QueryBuilderDefect({ message: `${where}: targetWhere needs a column target, not a constraint` }), "")
 			}
@@ -1784,7 +1789,9 @@ const valueCells = (table: Table<string, ColumnDefs>, params: Record<string, unk
 	const values: Record<string, unknown> = { ...params }
 	let next = 0
 	const cell = (column: string, value: unknown, context: string): string => {
-		if (value === undefined) return "DEFAULT"
+		if (value === undefined) return currentDialect().clauses.defaultInValues === false
+			? fail(new QueryBuilderDefect({ message: `${where}: ${currentDialect().name} has no per-cell DEFAULT in VALUES; group rows by their present columns` }), "NULL")
+			: "DEFAULT"
 		if (isExprLike(value)) return compileSqlFragment(value.toFragment())
 		const wire = encodeValue(table.columns[column]!.literalSchema, value, `${where}: ${context}, column ${column}`)
 		let name = `${VALUE_PARAM}${next++}`

@@ -36,3 +36,14 @@ it("keeps query and union pagination when OFFSET has no LIMIT and branches have 
 	}))
 	expect(rows).toEqual({ offset: [{ id: 2 }, { id: 3 }], union: [{ id: 3 }] })
 })
+
+it("refuses unsupported SQLite syntax while compiling, before sending SQL", () => {
+	const defaulted = SQLite.table("items", { id: SQLite.integer, note: SQLite.text }, { defaults: ["note"] })
+	expect(() => SQLite.compileUnsafe(SQLite.insertInto(defaulted).values([{ id: 1, note: "a" }, { id: 2 }]))).toThrow(/DEFAULT/)
+	expect(() => SQLite.compileUnsafe(SQLite.insertInto(Items)
+		.values({ id: 1, note: "a", enabled: true, score: null })
+		.onConflictDoNothing({ target: { constraint: "items_pkey" } }))).toThrow(/ON CONSTRAINT/)
+	expect(() => SQLite.compileUnsafe(SQLite.from(Items).select("id").distinctOn("id"))).toThrow(/DISTINCT ON/)
+	expect(() => SQLite.compileUnsafe(SQLite.from(Items).select("id").where(($) => [$.note.ilike("a%")]))).toThrow(/ILIKE/)
+	expect(() => SQLite.compileUnsafe(SQLite.from(Items).select("id").forUpdate())).toThrow(/row locks/)
+})

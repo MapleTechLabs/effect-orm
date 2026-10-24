@@ -13,7 +13,7 @@ import { activeSqlSyntax } from "../sql/sql-syntax"
 import { activeLiteralBinder } from "../sql/literal-binder"
 import { chDateTimeLiteral, CHFloatResult, CHNumber, string as chString, type CHType, type InferEncoded, type InferTS } from "./types"
 import { encodeColumnLiteral, isSubnormal, numberText, sqlLiteral } from "./literal"
-import { QueryBuilderError } from "./errors"
+import { QueryBuilderDefect, QueryBuilderError } from "./errors"
 import { fail } from "./failure"
 import { markTenantColumn, markTenantPredicate, tenantColumnOf, tenantPredicatesOf } from "./tenant"
 
@@ -533,7 +533,9 @@ export function makeExpr<T>(
 
 		like: (pattern) => makeCond(known(() => `${compile(fragment)} LIKE ${likePattern(pattern)}`)),
 		notLike: (pattern) => makeCond(known(() => `${compile(fragment)} NOT LIKE ${likePattern(pattern)}`)),
-		ilike: (pattern) => makeCond(known(() => `${compile(fragment)} ILIKE ${likePattern(pattern)}`)),
+		ilike: (pattern) => makeCond(known(() => activeSqlSyntax()?.ilike === false
+			? fail(new QueryBuilderDefect({ message: `ILIKE is not supported by the ${activeSqlSyntax()?.dialect} dialect; use LIKE with SQLite's own case rules` }), "FALSE")
+			: `${compile(fragment)} ILIKE ${likePattern(pattern)}`)),
 
 		in_: (...values) => inCond(fragment, "IN", values.map((v) => () => operand(v))),
 		notIn: (...values) => inCond(fragment, "NOT IN", values.map((v) => () => operand(v))),

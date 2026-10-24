@@ -70,6 +70,12 @@ export interface DialectClauses {
 	/** `ON CONFLICT ... DO NOTHING / DO UPDATE` after an INSERT. Absent means
 	 *  no: an insert with `onConflict*` fails to compile for the dialect. */
 	readonly onConflict?: boolean
+	/** Whether ON CONFLICT can name a constraint rather than columns. */
+	readonly onConflictConstraint?: boolean
+	/** Whether a VALUES tuple can contain DEFAULT for a missing cell. */
+	readonly defaultInValues?: boolean
+	/** Whether SELECT DISTINCT ON is supported. Undefined preserves existing dialects. */
+	readonly distinctOn?: boolean
 	/** `SETTINGS` on an INSERT, UPDATE or DELETE (ClickHouse). Absent means
 	 *  no: a write with `.settings()` fails to compile for the dialect. */
 	readonly writeSettings?: boolean
@@ -210,6 +216,7 @@ export const checkedLiteral = (dialect: Dialect, value: unknown, context: string
 
 const checkedSyntax = (dialect: Dialect): SqlSyntax => ({
 	dialect: dialect.name,
+	ilike: dialect.ilike,
 	quoteIdent: dialect.quoteIdent,
 	quoteString: (value) => checked(dialect, dialect.quoteString(value), "a string literal"),
 	literal: (value, context) => checkedLiteral(dialect, value, context),
