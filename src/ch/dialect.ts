@@ -60,6 +60,10 @@ export interface DialectClauses {
 	/** Whether each `UNION ALL` branch is wrapped in parentheses. Postgres needs
 	 *  it for a branch with its own WITH, ORDER BY or LIMIT. */
 	readonly parenthesizeUnionBranches: boolean
+	/** SQLite preserves branch-local ORDER BY/LIMIT by selecting from each branch. */
+	readonly wrapUnionBranches?: boolean
+	/** SQLite requires LIMIT -1 before OFFSET when the caller omitted a limit. */
+	readonly offsetRequiresLimit?: boolean
 	/** `RETURNING` after an INSERT. Absent means no: an insert with
 	 *  `.returning()` fails to compile for the dialect. */
 	readonly returning?: boolean

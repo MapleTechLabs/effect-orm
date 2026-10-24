@@ -37,6 +37,8 @@ export const sqliteDialect: Dialect = {
 		derivedTableAlias: true,
 		groupByAlias: false,
 		parenthesizeUnionBranches: false,
+		wrapUnionBranches: true,
+		offsetRequiresLimit: true,
 		returning: true,
 		onConflict: true,
 	},

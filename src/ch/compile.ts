@@ -967,7 +967,9 @@ function compileInner<
 				orderBy: state.orderByFn === undefined
 					? orderByClause(state.orderBySpecs).map(raw)
 					: orderByExprs(state.orderByFn($)).map(raw),
-				limit: rowCount("limit", state.limitValue),
+				limit: state.limitValue == null && state.offsetValue != null && currentDialect().clauses.offsetRequiresLimit === true
+					? raw("-1")
+					: rowCount("limit", state.limitValue),
 				offset: rowCount("offset", state.offsetValue),
 				format: options?.skipFormat ? undefined : formatClause(state.formatValue),
 			}
@@ -1442,7 +1444,9 @@ function compileUnionInner<Output extends Record<string, any>, Params extends Re
 				: "cross-tenant"
 
 	const parenthesize = currentDialect().clauses.parenthesizeUnionBranches
-	let sql = subQueries.map((q) => (parenthesize ? `(\n${q.sql}\n)` : q.sql)).join("\nUNION ALL\n")
+	let sql = subQueries.map((q) => currentDialect().clauses.wrapUnionBranches === true
+		? `SELECT * FROM (\n${q.sql}\n) AS ${quoteIdent("__union_branch")}`
+		: parenthesize ? `(\n${q.sql}\n)` : q.sql).join("\nUNION ALL\n")
 
 	// Wrap in outer SELECT if ordering/pagination is needed
 	const hasOuter =
@@ -1455,6 +1459,8 @@ function compileUnionInner<Output extends Record<string, any>, Params extends Re
 		}
 		if (state.outerLimitValue != null) {
 			sql += `\nLIMIT ${compileSqlFragment(rowCount("limit", state.outerLimitValue)!)}`
+		} else if (state.outerOffsetValue != null && currentDialect().clauses.offsetRequiresLimit === true) {
+			sql += "\nLIMIT -1"
 		}
 		if (state.outerOffsetValue != null) {
 			sql += `\nOFFSET ${compileSqlFragment(rowCount("offset", state.outerOffsetValue)!)}`
