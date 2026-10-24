@@ -1,5 +1,5 @@
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient"
-import { Effect } from "effect"
+import { Cause, DateTime, Effect, Exit, Schema } from "effect"
 import * as SqlClient from "effect/sql/SqlClient"
 import { expect, it } from "vitest"
 import * as Db from "../database"
@@ -68,4 +68,57 @@ it("decodes SQLite aggregates, including SQL NULL for an empty aggregate", async
 		return { totals, empty }
 	}))
 	expect(rows).toEqual({ totals: [{ n: 2, enabled: 1, total: 6, avg: 3, min: 2, max: 4 }], empty: [{ n: 0, sum: null }] })
+})
+
+it("round-trips JSON, blobs and zoned timestamps, and runs SQLite scalar functions", async () => {
+	const Payloads = SQLite.table("payloads", { id: SQLite.integer, value: SQLite.json(Schema.Struct({ message: Schema.String })), bytes: SQLite.blob, at: SQLite.timestamp })
+	const seen = await withDatabase((db) => Effect.gen(function* () {
+		yield* db.execute({ sql: "CREATE TABLE payloads (id INTEGER, value TEXT, bytes BLOB, at TEXT)" })
+		const returned = yield* db.run(SQLite.insertInto(Payloads).values({ id: 1, value: { message: "__PARAM_id__\0😀" }, bytes: new Uint8Array([0, 127, 255]), at: DateTime.makeUnsafe("2026-10-01T10:00:00+02:00") }).returning())
+		yield* db.run(SQLite.insertInto(Items).values({ id: 1, note: "HELLO", enabled: true, score: null }))
+		const scalar = yield* db.run(SQLite.from(Items).select(($) => ({ lower: SQLite.lower($.note), upper: SQLite.upper($.note), length: SQLite.length($.note), fallback: SQLite.coalesce($.score, SQLite.lit(9)) })))
+		return { returned, scalar }
+	}))
+	expect(seen.returned[0]?.value).toEqual({ message: "__PARAM_id__\0😀" })
+	expect(seen.returned[0]?.bytes).toEqual(new Uint8Array([0, 127, 255]))
+	expect(seen.returned.map((row) => DateTime.formatIso(row.at))).toEqual(["2026-10-01T08:00:00.000Z"])
+	expect(seen.scalar).toEqual([{ lower: "hello", upper: "HELLO", length: 5, fallback: 9 }])
+})
+
+it("binds repeated positional params independently and quotes reserved-marker/NUL literals safely", async () => {
+	const result = await withDatabase((db) => Effect.gen(function* () {
+		const note = "' OR 1=1 -- __PARAM_note__\0😀"
+		yield* db.run(SQLite.insertInto(Items).values({ id: 1, note, enabled: false, score: null }))
+		const query = SQLite.from(Items).select("id").where(($) => [$.note.eq(SQLite.param.string("note")), $.note.eq(SQLite.param.string("note"))])
+		const compiled = yield* SQLite.compile(query, { note })
+		const rows = yield* db.run(compiled)
+		const literal = yield* db.query({ sql: `SELECT ${SQLite.sqliteDialect.quoteString(note)} AS note` })
+		return { parameters: compiled.parameters, rows, literal }
+	}))
+	expect(result.parameters).toEqual(["' OR 1=1 -- __PARAM_note__\0😀", "' OR 1=1 -- __PARAM_note__\0😀"])
+	expect(result.rows).toEqual([{ id: 1 }])
+	expect(result.literal).toEqual([{ note: "' OR 1=1 -- __PARAM_note__\0😀" }])
+})
+
+it("rejects a stored value that does not match the derived row schema", async () => {
+	const exit = await withDatabase((db) => Effect.gen(function* () {
+		yield* db.execute({ sql: "INSERT INTO items VALUES (1, 'bad boolean', 2, NULL)" })
+		return yield* Effect.exit(db.run(SQLite.from(Items).select()))
+	}))
+	if (!Exit.isFailure(exit)) throw new Error("invalid database row was accepted")
+	expect(Cause.findError(exit.cause)).toMatchObject({ success: { _tag: "@maple-dev/effect-orm/CompiledQueryDecodeError" } })
+})
+
+it("rolls back failed SQLite transactions and nested savepoints", async () => {
+	const ids = await withDatabase((db) => Effect.gen(function* () {
+		const insert = (id: number) => db.run(SQLite.insertInto(Items).values({ id, note: `${id}`, enabled: true, score: null }))
+		yield* db.transaction(Effect.gen(function* () {
+			yield* insert(1)
+			yield* Effect.result(db.transaction(Effect.andThen(insert(2), Effect.fail("inner"))))
+			yield* insert(3)
+		}))
+		yield* Effect.result(db.transaction(Effect.andThen(insert(4), Effect.fail("outer"))))
+		return yield* db.run(SQLite.from(Items).select("id").orderBy(["id", "asc"]))
+	}))
+	expect(ids).toEqual([{ id: 1 }, { id: 3 }])
 })
