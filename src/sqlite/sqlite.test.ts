@@ -56,3 +56,16 @@ it("runs INSERT SELECT with ON CONFLICT even when the source has no WHERE", asyn
 	}))
 	expect(rows).toEqual([{ id: 1 }])
 })
+
+it("decodes SQLite aggregates, including SQL NULL for an empty aggregate", async () => {
+	const rows = await withDatabase((db) => Effect.gen(function* () {
+		yield* db.run(SQLite.insertInto(Items).values([
+			{ id: 1, note: "A", enabled: true, score: 2 },
+			{ id: 2, note: "B", enabled: false, score: 4 },
+		]))
+		const totals = yield* db.run(SQLite.from(Items).select(($) => ({ n: SQLite.count(), enabled: SQLite.countIf($.enabled.eq(true)), total: SQLite.sum($.score), avg: SQLite.avg($.score), min: SQLite.min($.score), max: SQLite.max($.score) })))
+		const empty = yield* db.run(SQLite.from(Items).select(($) => ({ n: SQLite.count(), sum: SQLite.sum($.score) })).where(($) => [$.id.eq(99)]))
+		return { totals, empty }
+	}))
+	expect(rows).toEqual({ totals: [{ n: 2, enabled: 1, total: 6, avg: 3, min: 2, max: 4 }], empty: [{ n: 0, sum: null }] })
+})

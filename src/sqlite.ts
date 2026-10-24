@@ -5,6 +5,7 @@ import { sqliteDialect } from "./sqlite/dialect"
 
 export * from "./core"
 export * from "./sqlite/types"
+export * from "./sqlite/functions"
 export { table, type TableOptions } from "./ch/table"
 export { sqliteDialect, d1Dialect } from "./sqlite/dialect"
 
