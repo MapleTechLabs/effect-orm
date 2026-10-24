@@ -11,7 +11,7 @@ export const integer = custom("integer", Schema.Int)
 export const real = custom("real", Schema.Finite)
 /** SQLite stores booleans as 0/1. Other integers are not booleans. */
 export const boolean = custom("integer", Schema.BooleanFromBit)
-/** An explicitly zoned instant stored as ISO text. */
+/** An instant stored as ISO text. */
 export const timestamp = custom("text", Schema.DateTimeUtcFromString, PgTimestampLiteral)
 
 const bytes = Schema.Array(Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 255 }))).pipe(

@@ -5,9 +5,10 @@ The package has one entry per database, each self-contained:
 ```ts
 import * as CH from "@maple-dev/effect-orm/clickhouse"
 import * as PG from "@maple-dev/effect-orm/postgres"
+import * as SQLite from "@maple-dev/effect-orm/sqlite"
 ```
 
-Both carry the whole [query builder](#query-builder-both-entries). Each adds its own column
+All carry the whole [query builder](#query-builder-both-entries). Each adds its own column
 types, functions, table definitions and a `compile` that defaults to its dialect:
 [`/clickhouse`](#clickhouse) and [`/postgres`](#postgres). Everything else is on a
 [subpath](#other-subpaths) for a narrower job.
@@ -34,7 +35,7 @@ uniformly, which some codebases prefer for exactly this reason.
 
 ## Query builder (both entries)
 
-Everything in this section is exported, identically, from both `/clickhouse` and `/postgres`.
+Everything in this section is exported, identically, from `/clickhouse`, `/postgres` and `/sqlite`.
 
 ### Query construction
 
@@ -530,3 +531,25 @@ verification, and JSON protocol.
 Note `/sql` exports a `compile` (fragment → string) distinct from the dialect entries' `compile`
 (query → `CompiledQuery`), and a `when` distinct from the query builder's `when` (optional
 conditions).
+
+## SQLite and D1
+
+`@maple-dev/effect-orm/sqlite` exports the shared query builder and the four compile functions.
+`sqliteDialect` is the default; `d1Dialect` uses the same SQL with a 100-binding limit and no
+interactive transactions. See [SQLite and D1](./sqlite.md) for driver wiring and limits.
+
+| Export | Purpose |
+| --- | --- |
+| `SqliteType` | A SQLite SQL type with its Effect codec |
+| `text`, `integer`, `real` | Text, safe integer and finite number codecs |
+| `boolean` | A boolean encoded as 0/1; other integers fail decoding |
+| `timestamp` | An instant stored as ISO text |
+| `blob` | Bytes from a Uint8Array or D1's array wire representation |
+| `json(schema)` | JSON text decoded through the supplied schema |
+| `nullable(type)`, `custom`, `brand` | Type composition |
+| `table(name, columns, options?)`, `TableOptions` | A query schema, including `tenantColumn`, defaults and computed-column metadata; no generated DDL |
+| `count`, `countDistinct`, `countIf`, `sum`, `avg`, `min`, `max` | SQLite aggregates; the last four can return SQL NULL |
+| `lower`, `upper`, `length`, `coalesce` | SQLite scalar functions |
+
+SQLite's table definition is for query typing and decoding. The schema/kit/migrate entries
+currently support ClickHouse and Postgres DDL only.

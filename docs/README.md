@@ -99,3 +99,7 @@ The optional `@maple-dev/effect-orm/benchmark` entry point and bundled
 `ch-bench` CLI measure real queries, compare fixed workloads, and save evidence.
 See [Benchmarking](./benchmarking.md) and the
 [agent playbook](./benchmark-agent.md). The SQL builders remain driver-free.
+
+## SQLite and D1
+
+[SQLite and D1](./sqlite.md) covers `@maple-dev/effect-orm/sqlite`, its codecs and functions, Effect SQL drivers, tenant checks and transaction limits. SQLite migration generation is not implemented.

@@ -122,3 +122,27 @@ it("rolls back failed SQLite transactions and nested savepoints", async () => {
 	}))
 	expect(ids).toEqual([{ id: 1 }, { id: 3 }])
 })
+
+it("executes SQLite upserts, updates and deletes with RETURNING", async () => {
+	const rows = await withDatabase((db) => Effect.gen(function* () {
+		yield* db.run(SQLite.insertInto(Items).values([{ id: 1, note: "first", enabled: true, score: 2 }, { id: 2, note: "second", enabled: false, score: null }]))
+		const upsert = yield* db.run(SQLite.insertInto(Items).values({ id: 1, note: "replacement", enabled: true, score: 3 })
+			.onConflictDoUpdate({ target: ["id"], set: { note: "updated" } }).returning("id", "note"))
+		const update = yield* db.run(SQLite.update(Items).set({ note: "changed" }).where(($) => [$.id.eq(2)]).returning("note"))
+		const deleted = yield* db.run(SQLite.deleteFrom(Items).where(($) => [$.id.eq(2)]).returning("id"))
+		return { upsert, update, deleted }
+	}))
+	expect(rows).toEqual({ upsert: [{ id: 1, note: "updated" }], update: [{ note: "changed" }], deleted: [{ id: 2 }] })
+})
+
+it("runs scoped CTEs, joins and derived-table queries with the same row decoder", async () => {
+	const rows = await withDatabase((db) => Effect.gen(function* () {
+		yield* db.run(SQLite.insertInto(Items).values({ id: 1, note: "one", enabled: true, score: null }))
+		const filtered = SQLite.from(Items).select("id", "note").where(($) => [$.id.eq(SQLite.param.int("id"))])
+		const Recent = SQLite.table("recent", { id: SQLite.integer, note: SQLite.text })
+		const cte = yield* db.run(SQLite.from(Recent).withCTE("recent", filtered).select(), { id: 1 })
+		const joined = yield* db.run(SQLite.fromQuery(filtered, "filtered").innerJoin(Items, "i", (a, b) => a.id.eq(b.id)).select(($) => ({ id: $.id, note: $.i.note })), { id: 1 })
+		return { cte, joined }
+	}))
+	expect(rows).toEqual({ cte: [{ id: 1, note: "one" }], joined: [{ id: 1, note: "one" }] })
+})

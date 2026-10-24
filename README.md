@@ -4,9 +4,12 @@
 > **Alpha.** The API is still changing and minor releases may break it. Pin an exact version,
 > read the [changelog](./CHANGELOG.md) before upgrading, and expect rough edges.
 
-Type-safe ClickHouse and Postgres queries, result decoding, and reproducible benchmarks for Effect and TypeScript.
+Type-safe ClickHouse, Postgres and SQLite queries, result decoding, and reproducible benchmarks for Effect and TypeScript.
 
 Formerly `@maple-dev/effect-clickhouse`.
+
+SQLite and Cloudflare D1 use the same builder and row decoder through the new
+[`/sqlite` entry](./docs/sqlite.md). SQLite schema/migration generation is not implemented.
 
 [Read the documentation](https://effect-clickhouse.maple.dev) ·
 [Getting started](./docs/getting-started.md) · [Recipes](./docs/recipes.md)
