@@ -228,6 +228,35 @@ describe("docs/queries.md", () => {
 		expect(oneLine(compileCHUnsafe(query, {}).sql)).toContain("ORDER BY count DESC, name ASC")
 	})
 
+	it("Pipeable, data-last queries", () => {
+		const piped = CH.Query.from(Events).pipe(
+			CH.Query.select(($) => ({ name: $.Name, ms: $.DurationMs })),
+			CH.Query.where(($) => [$.OrgId.eq("org_123")]),
+			CH.Query.orderBy(["ms", "desc"]),
+			CH.Query.limit(10),
+		)
+		const fluent = CH.from(Events)
+			.select(($) => ({ name: $.Name, ms: $.DurationMs }))
+			.where(($) => [$.OrgId.eq("org_123")])
+			.orderBy(["ms", "desc"])
+			.limit(10)
+		expect(compileCHUnsafe(piped, {}).sql).toBe(compileCHUnsafe(fluent, {}).sql)
+		expect(compileCHUnsafe(CH.Query.where(CH.from(Events).select("Name"), ($) => [$.OrgId.eq("org_123")]), {}).sql).toBe(
+			compileCHUnsafe(
+				CH.from(Events)
+					.select("Name")
+					.where(($) => [$.OrgId.eq("org_123")]),
+				{},
+			).sql,
+		)
+
+		const byOrg = (orgId: string) => CH.Query.where(($: CH.ColumnAccessor<typeof Events.columns>) => [$.OrgId.eq(orgId)])
+		const reused = CH.Query.from(Events).pipe(byOrg("org_123"), CH.Query.select("Name"))
+		expect(oneLine(compileCHUnsafe(reused, {}).sql)).toBe(
+			"SELECT events.Name AS Name FROM events WHERE events.OrgId = 'org_123'",
+		)
+	})
+
 	it("orderBy rejects a bare string", () => {
 		const query = CH.from(Events).select(($) => ({ name: $.Name }))
 
