@@ -5,7 +5,7 @@
 
 import { PgliteClient } from "@effect/sql-pglite"
 import { assert, describe, expect, it, layer } from "@effect/vitest"
-import { Cause, DateTime, Deferred, Effect, Exit, Fiber, Layer, Ref, Schedule, Schema } from "effect"
+import { Cause, DateTime, Deferred, Effect, Exit, Fiber, Layer, Redacted, Ref, Schedule, Schema } from "effect"
 import * as SqlClient from "effect/sql/SqlClient"
 import * as CH from "../ch/index"
 import * as PG from "../postgres"
@@ -665,6 +665,25 @@ describe("sql templates per dialect", () => {
 			expect(yield* renderTemplate(Db.sql`WHERE ${or}`, clickhouseDialect)).toEqual({ sql: "WHERE a = 1 OR b = 'x'", parameters: [] })
 			const empty = yield* Effect.flip(renderTemplate(Db.sql`id IN (${Db.sql.join([])})`, postgresDialect))
 			expect(empty.message).toContain("no values to join")
+		}),
+	)
+
+	it.effect("binds a Redacted value as its plain value, and marks it sensitive", () =>
+		Effect.gen(function* () {
+			const statement = Db.sql`UPDATE door_codes SET code = ${Redacted.make("4821")} WHERE id = ${7}`
+			expect(yield* renderTemplate(statement, postgresDialect)).toEqual({
+				sql: "UPDATE door_codes SET code = $1 WHERE id = $2",
+				parameters: ["4821", 7],
+				sensitiveParameters: [0],
+			})
+		}),
+	)
+
+	it.effect("refuses a Redacted value on ClickHouse, which would write it into the text", () =>
+		Effect.gen(function* () {
+			const error = yield* Effect.flip(renderTemplate(Db.sql`SELECT 1 WHERE code = ${Redacted.make("4821")}`, clickhouseDialect))
+			expect(error.message).toContain("Redacted")
+			expect(error.message).not.toContain("4821")
 		}),
 	)
 

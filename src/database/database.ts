@@ -37,6 +37,11 @@ import { traceStatement, type TracedStatement } from "./tracing"
 export interface Statement {
 	readonly sql: string
 	readonly parameters?: ReadonlyArray<unknown>
+	/**
+	 * The indexes in `parameters` of values that must not reach a span or a log:
+	 * those given as `Redacted`. Set by `compile` and by `sql\`...\``.
+	 */
+	readonly sensitiveParameters?: ReadonlyArray<number>
 }
 
 /** What `query` and `execute` take: a `sql\`...\`` template, or SQL with its parameters. */
