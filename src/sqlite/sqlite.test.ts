@@ -100,6 +100,32 @@ it("binds repeated positional params independently and quotes reserved-marker li
 	expect(result.literal).toEqual([{ note: "' OR 1=1 -- __PARAM_note__😀" }])
 })
 
+it("compares timestamps with the text SQLite's own functions write, and reads zoneless text as UTC", async () => {
+	const Events = SQLite.table("events", { id: SQLite.integer, at: SQLite.timestamp })
+	const rows = await withDatabase((db) => Effect.gen(function* () {
+		yield* db.execute({ sql: "CREATE TABLE events (id INTEGER, at TEXT NOT NULL)" })
+		// Written by SQLite, not the builder: strftime's %f form, and CURRENT_TIMESTAMP-style text read back.
+		yield* db.execute({ sql: "INSERT INTO events VALUES (1, strftime('%Y-%m-%d %H:%M:%f', 'now')), (2, '2026-01-01 00:00:00')" })
+		const recent = yield* db.run(SQLite.from(Events).select("id").where(($) => [$.at.gt(DateTime.makeUnsafe(Date.now() - 3_600_000))]))
+		const zoneless = yield* db.run(SQLite.from(Events).select("at").where(($) => [$.id.eq(2)]))
+		return { recent, zoneless }
+	}))
+	expect(rows.recent).toEqual([{ id: 1 }])
+	// No zone in the text means UTC, whatever the host's time zone.
+	expect(rows.zoneless.map((row) => DateTime.formatIso(row.at))).toEqual(["2026-01-01T00:00:00.000Z"])
+	const written = SQLite.compileUnsafe(SQLite.insertInto(Events).values({ id: 3, at: DateTime.makeUnsafe("2026-10-01T10:00:00.5+02:00") }))
+	expect(written.parameters).toContain("2026-10-01 08:00:00.500")
+})
+
+it("refuses an integer past 2^53 instead of decoding a different number", async () => {
+	const exit = await withDatabase((db) => Effect.gen(function* () {
+		// node:sqlite refuses an unsafe integer itself; D1 hands one over (see d1.test.ts), where the codec refuses it.
+		yield* db.execute({ sql: "INSERT INTO items VALUES (9007199254740993, 'big', 1, NULL)" })
+		return yield* Effect.exit(db.run(SQLite.from(Items).select("id")))
+	}))
+	expect(Exit.isFailure(exit) ? String(Cause.squash(exit.cause)) : exit.value).toMatch(/safe integer|too large to be represented/)
+})
+
 it("refuses U+0000 in text, which SQLite drivers would cut short", () => {
 	// node:sqlite returns `SELECT 'a' || char(0) || 'b'` as "a": the value would be silently truncated.
 	const refused = (exit: Exit.Exit<unknown, unknown>) => Exit.isFailure(exit) && /U\+0000/.test(String(Cause.squash(exit.cause)))

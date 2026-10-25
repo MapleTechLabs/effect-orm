@@ -16,7 +16,7 @@ import type { PgType } from "../pg/types"
 import { postgresDialect } from "../pg/dialect"
 import { ddlRenderer, type DdlPredicate } from "./ddl-expr"
 import { externalTable, type DdlExpr, type DdlKey } from "./define"
-import { withRenderProblems, type DefinitionProblem, type ProblemSink } from "./problems"
+import { checkDistinctNames, checkNoRepeats, withRenderProblems, type DefinitionProblem, type ProblemSink } from "./problems"
 import {
 	canonicalPgType,
 	PG_MAX_IDENTIFIER,
@@ -469,8 +469,12 @@ function buildTable<const Name extends string, const Columns extends Record<stri
 		}
 	}
 
+	// Postgres refuses these when it runs the DDL ("column specified more than once").
+	checkDistinctNames(problems, name, inputs.map(([column]) => [column, sqlName(column)] as const), { ignoreCase: false })
+
 	const pk = definition.primaryKey
 	const pkColumns = pk === undefined ? [] : "columns" in pk ? pk.columns : pk
+	checkNoRepeats(problems, `${name} primary key`, pkColumns)
 	const pkName = pk !== undefined && "columns" in pk && pk.name !== undefined ? pk.name : `${name}_pkey`
 	if (pk !== undefined) {
 		checkIdentifier(problems, `${name} primary key`, pkName)
@@ -489,6 +493,7 @@ function buildTable<const Name extends string, const Columns extends Record<stri
 	const indexEntities = (definition.indexes ?? []).map((spec): PgIndexEntity => {
 		checkIdentifier(problems, `${name} index`, spec.name)
 		if (Array.isArray(spec.on)) {
+			checkNoRepeats(problems, `${name} index ${spec.name}`, spec.on)
 			for (const column of spec.on) {
 				if (!has(column)) problems.push({ object: `${name} index ${spec.name}`, message: `${column} is not a column` })
 			}

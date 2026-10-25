@@ -1,5 +1,5 @@
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient"
-import { Effect, Schema } from "effect"
+import { DateTime, Effect, Schema } from "effect"
 import * as SqlClient from "effect/sql/SqlClient"
 import { expect, it } from "vitest"
 import * as Db from "../database"
@@ -186,6 +186,7 @@ it("refuses definitions SQLite would only reject when it runs the DDL", async ()
 			b: SQLite.text,
 			copy: SQLite.column(SQLite.text, { defaultExpr: ($) => $.b }),
 			maybe: SQLite.column(SQLite.text, { default: undefined as never }),
+			stamped: SQLite.column(SQLite.timestamp, { defaultExpr: "(CURRENT_TIMESTAMP)" }),
 		},
 		primaryKey: ["id", "id"],
 		indexes: [SQLite.index("bad_ddl_twice", ["b", "b"])],
@@ -200,9 +201,26 @@ it("refuses definitions SQLite would only reject when it runs the DDL", async ()
 		"b is listed more than once",
 		"defaultExpr reads b",
 		"default is undefined",
+		"use SQLite.timestampNow",
 	]) {
 		expect(messages).toContain(expected)
 	}
+})
+
+it("stamps rows with timestampNow in the form a timestamp column compares with", async () => {
+	const Events = SQLite.table("events", {
+		columns: { id: SQLite.integer, at: SQLite.column(SQLite.timestamp, { defaultExpr: SQLite.timestampNow }) },
+		primaryKey: ["id"],
+	})
+	const rows = await Effect.runPromise(Effect.gen(function* () {
+		const db = Db.fromSqlClient(yield* SqlClient.SqlClient, { dialect: SQLite.sqliteDialect })
+		for (const sql of yield* Effect.map(sqliteEntitiesOf([Events]), renderSqliteSchema)) yield* db.execute({ sql })
+		yield* db.run(SQLite.insertInto(Events).values({ id: 1 }))
+		const hourAgo = DateTime.makeUnsafe(Date.now() - 3_600_000)
+		const inAnHour = DateTime.makeUnsafe(Date.now() + 3_600_000)
+		return yield* db.run(SQLite.from(Events).select("id").where(($) => [$.at.gt(hourAgo), $.at.lt(inAnHour)]))
+	}).pipe(Effect.provide(SqliteClient.layer({ filename: ":memory:" }))))
+	expect(rows).toEqual([{ id: 1 }])
 })
 
 it("keeps entities as plain data that survive a JSON round trip, sorted the same every time", async () => {

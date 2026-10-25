@@ -12,11 +12,12 @@ import { withDialect } from "../ch/dialect"
 import { encodeColumnLiteral } from "../ch/literal"
 import { columnSqlName, type CHType, type ColumnDefs, type InferTS } from "../ch/types"
 import { sqliteDialect } from "../sqlite/dialect"
+import { timestamp } from "../sqlite/types"
 import { createColumnAccessor } from "../ch/query"
 import { ddlRenderer } from "./ddl-expr"
 import { externalTable, type DdlExpr, type DdlKey } from "./define"
 import { sortEntities } from "./entities"
-import { checkIdentifier, definitionError, withRenderProblems, type DefinitionProblem, type ProblemSink, type SchemaDefinitionError } from "./problems"
+import { checkDistinctNames, checkIdentifier, checkNoRepeats, definitionError, withRenderProblems, type DefinitionProblem, type ProblemSink, type SchemaDefinitionError } from "./problems"
 import {
 	canonicalSqliteType,
 	type SqliteColumnEntity,
@@ -122,6 +123,10 @@ export const uniqueIndex = <Cols extends ColumnDefs>(name: string, on: DdlKey<Co
 	on,
 })
 
+/** A `SQLite.timestamp` column, nullable or not. */
+const isTimestamp = (type: CHType<string, any, any>): boolean =>
+	type.schema === timestamp.schema || (type._tag === "Nullable" && (type as { element?: CHType<string, any, any> }).element?.schema === timestamp.schema)
+
 const columnDefault = (
 	problems: ProblemSink,
 	table: string,
@@ -139,7 +144,16 @@ const columnDefault = (
 		}
 	}
 	if (options.defaultExpr !== undefined) {
-		if (typeof options.defaultExpr === "string") return options.defaultExpr
+		if (typeof options.defaultExpr === "string") {
+			// SQLite compares timestamp text by bytes: a default in another form misorders against the column's values.
+			if (isTimestamp(spec.type) && /\bcurrent_(timestamp|date|time)\b|\b(datetime|date|time|unixepoch)\s*\(/i.test(options.defaultExpr)) {
+				problems.push({
+					object: `${table}.${name}`,
+					message: `defaultExpr ${options.defaultExpr} writes a different text form than a timestamp column compares with; use SQLite.timestampNow`,
+				})
+			}
+			return options.defaultExpr
+		}
 		// SQLite refuses a DEFAULT that reads a column ("default value of column is not constant").
 		const read: Array<string> = []
 		const accessor = createColumnAccessor(columns)
@@ -254,19 +268,10 @@ function buildTable<const Name extends string, const Columns extends Record<stri
 	})
 
 	// SQLite compares column names without case, so `Id` and `id` are one column.
-	const seen = new Map<string, string>()
-	for (const [column] of inputs) {
-		const other = seen.get(sqlName(column).toLowerCase())
-		if (other !== undefined) problems.push({ object: `${name}.${column}`, message: `${sqlName(column)} has the same SQL name as ${other} (SQLite ignores case in names)` })
-		else seen.set(sqlName(column).toLowerCase(), column)
-	}
-	const repeated = (object: string, keys: ReadonlyArray<string>) => {
-		const dupes = keys.filter((key, i) => keys.indexOf(key) !== i)
-		if (dupes.length > 0) problems.push({ object, message: `${[...new Set(dupes)].join(", ")} is listed more than once` })
-	}
+	checkDistinctNames(problems, name, inputs.map(([column]) => [column, sqlName(column)] as const), { ignoreCase: true })
 
 	const pkColumns = definition.primaryKey ?? []
-	repeated(`${name} primary key`, pkColumns)
+	checkNoRepeats(problems, `${name} primary key`, pkColumns)
 	if (definition.primaryKey !== undefined) {
 		if (pkColumns.length === 0) problems.push({ object: name, message: "a primary key needs columns" })
 		for (const column of pkColumns) {
@@ -283,7 +288,7 @@ function buildTable<const Name extends string, const Columns extends Record<stri
 	const indexEntities: ReadonlyArray<SqliteIndexEntity> = (definition.indexes ?? []).map((spec): SqliteIndexEntity => {
 		checkName(problems, `${name} index`, spec.name)
 		if (Array.isArray(spec.on)) {
-			repeated(`${name} index ${spec.name}`, spec.on)
+			checkNoRepeats(problems, `${name} index ${spec.name}`, spec.on)
 			for (const column of spec.on) {
 				if (!has(column)) problems.push({ object: `${name} index ${spec.name}`, message: `${column} is not a column` })
 			}
