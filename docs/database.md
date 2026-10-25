@@ -92,6 +92,7 @@ Calling `withdraw(1, 30)` outside `transfer` does not compile: `requireTransacti
 | `retryContention(options?)` | Re-run on serialization failure or deadlock |
 | `Transaction` | The open transaction (`depth`, `isolationLevel`, `accessMode`) |
 | `isContention(error)` | Whether an error is a serialization failure or deadlock |
+| `layerTest(options)`, `TestDatabase` | A `Database` with no server, for unit tests ([Testing](./testing.md#testing-your-own-code-layertest)) |
 
 `run`, `query`, `execute`, `transaction` and `retryContention` are also methods on
 `DatabaseApi`.

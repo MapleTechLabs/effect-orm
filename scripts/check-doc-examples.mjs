@@ -119,6 +119,8 @@ await assert.rejects(() => Effect.runPromise(enums.shared.decodeRows([{ id: "c",
 assert.match(sql(enums.upsert), /ON CONFLICT \\("slug"\\) DO UPDATE SET/)
 const database = await import("./database-transaction")
 assert.deepEqual(database.balances, { from: 70, to: 30, refused: "InsufficientFunds" })
+const testLayer = await import("./database-test-layer")
+assert.deepEqual(testLayer.result, { rows: [{ id: 1, balance: 70 }], parameters: ["org_1"] })
 console.log("Markdown example behavior checks passed")
 `,
 	)
