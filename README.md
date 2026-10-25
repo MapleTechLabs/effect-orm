@@ -9,7 +9,7 @@ Type-safe ClickHouse, Postgres and SQLite queries, result decoding, and reproduc
 Formerly `@maple-dev/effect-clickhouse`.
 
 SQLite and Cloudflare D1 use the same builder and row decoder through the new
-[`/sqlite` entry](./docs/sqlite.md). SQLite schema/migration generation is not implemented.
+[`/sqlite` entry](./docs/sqlite.md), which also writes SQLite table DDL. SQLite migration generation is not implemented.
 
 [Read the documentation](https://effect-clickhouse.maple.dev) ·
 [Getting started](./docs/getting-started.md) · [Recipes](./docs/recipes.md)
