@@ -1,7 +1,7 @@
 // `generate` for SQLite, checked on real SQLite: the migrations it writes,
 // applied in order, must give the same PRAGMA results as creating the final
 // schema fresh.
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { cpSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { Effect } from "effect"
@@ -29,7 +29,11 @@ const generateFrom = (body: string, options: GenerateOptions = {}) => {
 	return Effect.runPromise(generate(config, dir, { name: `v${version}`, ...options }))
 }
 
-const folders = () => readdirSync(join(dir, "migrations")).sort()
+const folders = () =>
+	readdirSync(join(dir, "migrations"), { withFileTypes: true })
+		.filter((entry) => entry.isDirectory())
+		.map((entry) => entry.name)
+		.sort()
 const migrationSql = (folder: string) => readFileSync(join(dir, "migrations", folder, "migration.sql"), "utf8")
 
 /** Every statement of every migration, in folder order, split as Alchemy and drizzle split them. */
@@ -194,4 +198,52 @@ export const Urls = SQLite.table("urls", {
 	])
 	await expectMigratedToEqualFresh(v2)
 	expect(await rowsAfter(allStatements(seedLinks), 'SELECT "target" FROM "urls" ORDER BY "id"')).toEqual([{ target: "https://a" }, { target: "https://b" }])
+})
+
+// The tables of __fixtures__/drizzle-sqlite/schema.ts.txt, declared with effect-orm.
+const drizzleEquivalent = `
+const named = <T extends Parameters<typeof SQLite.column>[0]>(type: T, name: string) => SQLite.column(type, { name })
+const optionalText = (name: string) => named(SQLite.nullable(SQLite.text), name)
+export const ShortLink = SQLite.table("short_link", {
+	columns: {
+		id: SQLite.text, code: SQLite.text, targetUrl: named(SQLite.text, "target_url"), targetHash: named(SQLite.text, "target_hash"),
+		orgId: optionalText("org_id"), createdBy: optionalText("created_by"), subjectType: named(SQLite.text, "subject_type"),
+		subjectId: named(SQLite.text, "subject_id"), purpose: SQLite.text, prospectId: optionalText("prospect_id"),
+		clickCount: named(SQLite.integer, "click_count"), firstAccessedAt: optionalText("first_accessed_at"),
+		lastAccessedAt: optionalText("last_accessed_at"), createdAt: named(SQLite.text, "created_at"), updatedAt: named(SQLite.text, "updated_at"),
+	},
+	primaryKey: ["id"],
+	indexes: [SQLite.uniqueIndex("short_link_code", ["code"]), SQLite.index("short_link_org", ["orgId"])],
+})
+export const Membership = SQLite.table("membership", {
+	columns: {
+		orgId: named(SQLite.text, "org_id"), userId: named(SQLite.text, "user_id"),
+		role: SQLite.column(SQLite.text, { default: "member" }), weight: SQLite.column(SQLite.real, { default: 1.5 }),
+		active: SQLite.column(SQLite.boolean, { default: true }), avatar: SQLite.nullable(SQLite.blob),
+		amount: SQLite.nullable(SQLite.custom("numeric", SQLite.real.schema)),
+		email: SQLite.column(SQLite.nullable(SQLite.text), { unique: true }),
+		createdAt: SQLite.column(SQLite.text, { name: "created_at", defaultExpr: "(CURRENT_TIMESTAMP)" }),
+	},
+	primaryKey: ["orgId", "userId"],
+	indexes: [SQLite.index("membership_user_role", ["userId", "role"])],
+})`
+
+it("adopts a drizzle-kit 1.0 folder: a baseline from its snapshot, then no change for the same tables", async () => {
+	cpSync(join(import.meta.dirname, "__fixtures__", "drizzle-sqlite"), join(dir, "migrations"), { recursive: true })
+	await expect(generateFrom(drizzleEquivalent)).rejects.toMatchObject({ code: "config", message: expect.stringContaining("--baseline") })
+	const baseline = await generateFrom(drizzleEquivalent, { baseline: "drizzle" })
+	expect(baseline.plan).toEqual([])
+	const [, adopted] = folders()
+	expect(migrationSql(adopted!)).toMatch(/^-- Baseline/)
+	expect(JSON.parse(readFileSync(join(dir, "migrations", adopted!, "snapshot.json"), "utf8")).dialect).toBe("sqlite")
+	expect(await generateFrom(drizzleEquivalent)).toEqual({ written: undefined, plan: [] })
+	// The comparison is live: one difference from the drizzle tables is a change.
+	const changed = await generateFrom(drizzleEquivalent.replace('"short_link_org", ["orgId"]', '"short_link_org", ["orgId", "purpose"]'))
+	expect(changed.plan.flatMap((p) => p.sql)).toEqual([
+		'DROP INDEX IF EXISTS "short_link_org"',
+		'CREATE INDEX IF NOT EXISTS "short_link_org" ON "short_link" ("org_id", "purpose")',
+	])
+	// The folder drizzle-kit wrote, applied as it is, holds the same tables apart from the NOT NULL
+	// drizzle-kit drops from a text primary key.
+	expect(Object.keys(await shapeAfter(allStatements()))).toEqual(["membership", "short_link"])
 })

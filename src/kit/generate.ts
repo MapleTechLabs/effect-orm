@@ -10,6 +10,7 @@ import { fromRecord, isStagingName, STATEMENT_BREAKPOINT, type LoadedMigration, 
 import type { MigrationDriver } from "../migrate/driver"
 import { diffSchemas, type DiffResult, type Hint } from "../schema/diff"
 import { fromDrizzleSnapshot } from "../schema/drizzle"
+import { fromDrizzleSqliteSnapshot } from "../schema/sqlite-drizzle"
 import { ORIGIN_ID, type AnySchemaEntity, type SchemaDialect, type SchemaEntity } from "../schema/entities"
 import type { SchemaDefinitionError } from "../schema/problems"
 import { labelOf, renderOp, type MigrationFile, type MigrationOp } from "../schema/ops"
@@ -203,10 +204,11 @@ export const generate = (config: KitConfig, cwd: string, options: GenerateOption
 		let snapshotEntities: ReadonlyArray<AnySchemaEntity>
 		let prevIds = analysis.baseIds
 		if (options.baseline === "drizzle") {
-			if (dialect !== "postgres") return yield* new KitError({ code: "config", message: "--from-drizzle needs dialect: \"postgres\"" })
+			if (dialect === "clickhouse") return yield* new KitError({ code: "config", message: "--from-drizzle needs dialect: \"postgres\" or \"sqlite\"" })
 			const source = [...analysis.legacy].reverse().find((m) => m.foreignSnapshot?.tool === "drizzle-kit")
 			if (source === undefined) return yield* new KitError({ code: "config", message: "no drizzle-kit snapshot.json in the folder to start from" })
-			const imported = fromDrizzleSnapshot(source.foreignSnapshot!.json)
+			const imported =
+				dialect === "sqlite" ? fromDrizzleSqliteSnapshot(source.foreignSnapshot!.json) : fromDrizzleSnapshot(source.foreignSnapshot!.json)
 			if (imported.unsupported.length > 0) {
 				return yield* new KitError({
 					code: "unsupported",

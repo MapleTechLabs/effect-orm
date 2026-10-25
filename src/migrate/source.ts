@@ -86,6 +86,10 @@ const foreignSnapshotOf = (text: string): LoadedMigration["foreignSnapshot"] => 
 		: undefined
 }
 
+/** The dialect a drizzle-kit snapshot names: `sqlite` (or `turso`) is SQLite; anything else is read as Postgres, as before. */
+const drizzleDialect = (json: unknown): SchemaDialect =>
+	typeof json === "object" && json !== null && "dialect" in json && (json.dialect === "sqlite" || json.dialect === "turso") ? "sqlite" : "postgres"
+
 /**
  * Each migration's parent migrations, from its snapshot's `prevIds`. A custom
  * migration copies its parent's entities, so several migrations can share one
@@ -212,7 +216,7 @@ export const dialectOf = (migrations: ReadonlyArray<LoadedMigration>): SchemaDia
 	for (const m of migrations) {
 		if (m.snapshot !== undefined) return m.snapshot.dialect
 		if (m.file !== undefined) return "dialect" in m.file ? "postgres" : "clickhouse"
-		if (m.foreignSnapshot !== undefined) return "postgres"
+		if (m.foreignSnapshot !== undefined) return drizzleDialect(m.foreignSnapshot.json)
 	}
 	return undefined
 }
