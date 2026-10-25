@@ -188,6 +188,7 @@ Each dialect entry exports its own `compile`, defaulting to that dialect. Unions
 interface CompiledQuery<Output> {
 	readonly sql: string
 	readonly parameters: ReadonlyArray<unknown>
+	readonly sensitiveParameters?: ReadonlyArray<number>
 	readonly tenantScope: "single-tenant" | "cross-tenant" | "untenanted"
 	readonly rowSchemaSource: "declared" | "derived" | "none"
 	readonly rowSchema: CompiledQueryRowSchema<Output> | undefined
@@ -205,6 +206,7 @@ interface CompiledQuery<Output> {
 | ------------------------------- | ---------------------------------------------------------------------------------------- |
 | `sql`                           | The statement to execute. The builder never runs it.                                     |
 | `parameters`                    | Values a binding dialect sends beside `sql`, in placeholder order; empty by default      |
+| `sensitiveParameters`           | Indexes in `parameters` of values given as `Redacted`; see [Redaction](./database.md#redaction) |
 | `tenantScope`                   | Whether the query pins a single tenant — see [Tenant scoping](./tenant-scoping.md)       |
 | `rowSchemaSource`               | Where the row schema came from, so a caller can tell real validation from a pass-through |
 | `rowSchema`                     | The codec itself, for a caller that needs a `Schema` rather than a call                  |
