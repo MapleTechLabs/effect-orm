@@ -25,7 +25,8 @@ import { PARAM_MARKER_PREFIX, PARAM_PLACEHOLDER_PATTERN, param, paramColumnTypeO
 import { mergeResultSchemas } from "./define-fn"
 import { encodeValue } from "./literal"
 import { checkedLiteral, clickhouseDialect, currentDialect, withDialect, type Dialect } from "./dialect"
-import { Effect, Option, Schema } from "effect"
+import { Context, Effect, Option, Schema } from "effect"
+import { fiberLocal } from "../sql/fiber-local"
 import { QueryBuilderDefect, QueryBuilderError } from "./errors"
 import { withSubqueryCompiler } from "./subquery-context"
 import { tenantBoundOf, tenantColumnOf, tenantPredicatesOf, withTenantBound, type TenantPredicate } from "./tenant"
@@ -1533,7 +1534,7 @@ function renderParams(
 	const style = dialect.params
 
 	const resolved = sql.replace(PARAM_PLACEHOLDER_PATTERN, (placeholder, kind: string, name: string) => {
-		const literal = boundLiterals?.get(name)
+		const literal = boundLiterals.get()?.get(name)
 		if (!(name in params) && literal === undefined) {
 			missing.push(name)
 			return placeholder
@@ -1629,7 +1630,11 @@ const VALUE_PARAM = "$$v"
 const LITERAL_PARAM = "$$l"
 
 /** The values bound by the enclosing compile, by param name; see `withBoundLiterals`. */
-let boundLiterals: Map<string, { readonly wire: unknown }> | undefined
+const boundLiterals = fiberLocal(
+	Context.Reference<Map<string, { readonly wire: unknown }> | undefined>("@maple-dev/effect-orm/internal/BoundLiterals", {
+		defaultValue: () => undefined,
+	}),
+)
 
 /**
  * Run a compile with its literal values bound, on a dialect that binds params:
@@ -1641,10 +1646,8 @@ function withBoundLiterals<A>(dialect: Dialect, body: () => A): A {
 	if (dialect.params._tag !== "bind" || activeLiteralBinder() !== undefined) return body()
 	const values = new Map<string, { readonly wire: unknown }>()
 	const names = new Map<string, string>()
-	const previous = boundLiterals
-	boundLiterals = values
-	try {
-		return withLiteralBinder((wire) => {
+	return boundLiterals.with(values, () =>
+		withLiteralBinder((wire) => {
 			const key = `${typeof wire}\0${JSON.stringify(wire)}`
 			let name = names.get(key)
 			if (name === undefined) {
@@ -1653,10 +1656,8 @@ function withBoundLiterals<A>(dialect: Dialect, body: () => A): A {
 				values.set(name, { wire })
 			}
 			return compileSqlFragment(param.of(insertWireValue, name).toFragment())
-		}, body)
-	} finally {
-		boundLiterals = previous
-	}
+		}, body),
+	)
 }
 
 const EMPTY_ROW = Schema.Struct({}) as unknown as CompiledQueryRowSchema<never>

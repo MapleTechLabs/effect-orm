@@ -149,6 +149,7 @@ export {
 } from "./ch/compile"
 
 export {
+	CurrentDialect,
 	type Dialect,
 	type DialectClauses,
 	type DialectTransactions,
