@@ -510,7 +510,7 @@ placeholders, double-quoted identifiers.
 | `SqlQuery`, `compileQuery`                                                                       | `/sql`            |
 | `ClickHouseStatement`, `parseStatement`, `renderStatement`, `withSettings`, `withFormat`         | `/sql`            |
 | `ClickHouseStatementFromString`, `splitTerminalClauses`, `maskLiteralsAndComments`               | `/sql`            |
-| Schema tooling: `isSchemaObject`, `makeSnapshot`, `renderSchema`, `diffSchemas`, `diffPgSchemas`, `fromDrizzleSnapshot`, snapshot and entity schemas (`PgEnumEntity`, `PgUniqueEntity`, …), `Hint`; for SQLite, `sqliteEntitiesOf`, `renderSqliteSchema`, `renderSqliteCreateTable`, `renderSqliteCreateIndex` and the `SqliteTableEntity`, `SqliteColumnEntity`, `SqliteIndexEntity`, `SqliteUniqueEntity` schemas | `/schema`         |
+| Schema tooling: `isSchemaObject`, `makeSnapshot`, `renderSchema`, `diffSchemas`, `diffPgSchemas`, `fromDrizzleSnapshot`, snapshot and entity schemas (`PgEnumEntity`, `PgUniqueEntity`, …), `Hint`; for SQLite, `sqliteEntitiesOf`, `renderSqliteSchema`, `renderSqliteCreateTable`, `renderSqliteCreateIndex`, `diffSqliteSchemas`, `fromDrizzleSqliteSnapshot`, `SqliteMigrationOp`, `renderSqliteOp`, `renderSqliteMigrationSql`, `labelOfSqlite`, `rebuildName`, the `SqliteSnapshot` schema and the `SqliteTableEntity`, `SqliteColumnEntity`, `SqliteIndexEntity`, `SqliteUniqueEntity` schemas | `/schema`         |
 | `run`, `status`, `verify`, `baseline`, `MigrationDriver` and the migrate errors                  | `/migrate`        |
 | `Database`, `run`, `sql`, `query`, `execute`, `transaction`, `requireTransaction`, `retryContention`, `Transaction` | `/database` |
 | `DatabaseError`, `TransactionCommitFailed`, `TransactionRollbackFailed` and the other transaction errors | `/database` |
@@ -594,5 +594,6 @@ drizzle-kit 1.0 writes and names it.
 **Types** — `ColumnInput`, `ColumnSpec`, `ColumnsOf`, `IndexSpec`, `TableDdl`, `SqliteSchemaTable`,
 `DdlExpr`, `DdlKey`, `DefinitionProblem`. A definition that cannot render records a problem;
 `S.sqliteEntitiesOf` fails with a `SchemaDefinitionError`, and `S.renderSqliteSchema` writes
-the `CREATE TABLE` and `CREATE INDEX` statements. There is no SQLite diff, snapshot or migration
-runner yet.
+the `CREATE TABLE` and `CREATE INDEX` statements. `effect-orm generate` with `dialect: "sqlite"`
+writes migrations for them; see [SQLite migrations](./migrations.md#sqlite). The `/migrate`
+runner does not apply SQLite migrations yet.

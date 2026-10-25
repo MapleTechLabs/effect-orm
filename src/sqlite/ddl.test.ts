@@ -5,6 +5,7 @@ import { expect, it } from "vitest"
 import * as Db from "../database"
 import { canonicalJson, renderSqliteSchema, SqliteSchemaEntity, sqliteEntitiesOf } from "../schema"
 import * as SQLite from "../sqlite"
+import { shapeAfter } from "./shape.test-support"
 
 // drizzle-kit 0.31.11 (drizzle-orm 0.45.4) `generate` output for the same table.
 const drizzleShortLink = `CREATE TABLE \`short_link\` (
@@ -55,26 +56,6 @@ const ShortLink = SQLite.table("short_link", {
 })
 
 const drizzleStatements = (sql: string) => sql.split("--> statement-breakpoint").map((s) => s.trim()).filter((s) => s.length > 0)
-
-/** What SQLite reports about every table and index after running `statements` on an empty database. */
-const shapeAfter = (statements: ReadonlyArray<string>) =>
-	Effect.runPromise(Effect.gen(function* () {
-		const db = Db.fromSqlClient(yield* SqlClient.SqlClient, { dialect: SQLite.sqliteDialect })
-		for (const sql of statements) yield* db.execute({ sql })
-		const tables = yield* db.query({ sql: "SELECT name FROM sqlite_schema WHERE type = 'table' ORDER BY name" })
-		const shape: Record<string, unknown> = {}
-		for (const { name } of tables as ReadonlyArray<{ name: string }>) {
-			const columns = yield* db.query({ sql: `SELECT * FROM pragma_table_info('${name}')` })
-			const list = yield* db.query({ sql: `SELECT name, "unique", origin, partial FROM pragma_index_list('${name}') ORDER BY name` })
-			const indexes = []
-			for (const index of list as ReadonlyArray<{ name: string }>) {
-				const keys = yield* db.query({ sql: `SELECT seqno, cid, name, "desc", coll, "key" FROM pragma_index_xinfo('${index.name}')` })
-				indexes.push({ ...index, keys })
-			}
-			shape[name] = { columns, indexes }
-		}
-		return shape
-	}).pipe(Effect.provide(SqliteClient.layer({ filename: ":memory:" }))))
 
 const ddlOf = (tables: Parameters<typeof sqliteEntitiesOf>[0]) => Effect.runPromise(Effect.map(sqliteEntitiesOf(tables), renderSqliteSchema))
 

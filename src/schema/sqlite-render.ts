@@ -25,6 +25,7 @@ export const renderSqliteCreateTable = (
 	table: SqliteTableEntity,
 	columns: ReadonlyArray<SqliteColumnEntity>,
 	uniques: ReadonlyArray<SqliteUniqueEntity> = [],
+	options: { readonly ifNotExists?: boolean } = {},
 ): string => {
 	const key = table.primaryKey?.columns ?? []
 	const inline = key.length === 1 ? key[0] : undefined
@@ -34,7 +35,7 @@ export const renderSqliteCreateTable = (
 		.map((column) => renderSqliteColumnDefinition(column, column.name === inline, inlineUnique.has(column.name)))
 	if (key.length > 1) body.push(`PRIMARY KEY (${list(key)})`)
 	for (const unique of uniques) if (unique.columns.length > 1) body.push(`UNIQUE (${list(unique.columns)})`)
-	return `CREATE TABLE IF NOT EXISTS ${sqliteIdent(table.name)} (\n\t${body.join(",\n\t")}\n)`
+	return `CREATE TABLE ${options.ifNotExists === false ? "" : "IF NOT EXISTS "}${sqliteIdent(table.name)} (\n\t${body.join(",\n\t")}\n)`
 }
 
 export const renderSqliteCreateIndex = (index: SqliteIndexEntity): string =>

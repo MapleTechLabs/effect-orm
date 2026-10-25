@@ -111,3 +111,6 @@ assert.deepEqual(await Effect.runPromise(Effect.map(S.sqliteEntitiesOf([sqliteLi
 	'CREATE TABLE IF NOT EXISTS "consumer_links" (\n\t"id" text PRIMARY KEY NOT NULL,\n\t"org_id" text\n)',
 	'CREATE INDEX IF NOT EXISTS "consumer_links_org" ON "consumer_links" ("org_id")',
 ])
+const sqliteNext = await Effect.runPromise(S.sqliteEntitiesOf([sqliteLinks]))
+assert.deepEqual(S.diffSqliteSchemas(sqliteNext, sqliteNext).ops, [])
+assert.equal((await Effect.runPromise(S.makeSnapshot(sqliteNext, [S.ORIGIN_ID], "sqlite"))).dialect, "sqlite")
