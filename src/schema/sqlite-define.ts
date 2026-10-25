@@ -12,6 +12,7 @@ import { withDialect } from "../ch/dialect"
 import { encodeColumnLiteral } from "../ch/literal"
 import { columnSqlName, type CHType, type ColumnDefs, type InferTS } from "../ch/types"
 import { sqliteDialect } from "../sqlite/dialect"
+import { createColumnAccessor } from "../ch/query"
 import { ddlRenderer } from "./ddl-expr"
 import { externalTable, type DdlExpr, type DdlKey } from "./define"
 import { sortEntities } from "./entities"
@@ -66,9 +67,9 @@ export interface ColumnSpec<
 /** A column with options. A bare column type works too where none is needed. */
 export const column = <T extends CHType<string, any, any>, Given extends keyof ColumnOptions<T> = never>(
 	type: T,
-	options: ColumnOptions<T> & { readonly [K in Given]: unknown } = {} as ColumnOptions<T> & {
-		readonly [K in Given]: unknown
-	},
+	// A default must be a value: `default: undefined` would make the column optional on insert
+	// while writing no DEFAULT, so the insert would fail on NOT NULL.
+	options: ColumnOptions<T> & { readonly [K in Given]: K extends "default" | "defaultExpr" ? {} : unknown } = {} as never,
 ): ColumnSpec<T, Given> => ({ _tag: "SqliteColumnSpec", type, options })
 
 export type ColumnInput = CHType<string, any, any> | ColumnSpec<CHType<string, any, any>, any>
@@ -132,8 +133,27 @@ const columnDefault = (
 	if (options.default !== undefined && options.defaultExpr !== undefined) {
 		problems.push({ object: `${table}.${name}`, message: "a column takes one of default, defaultExpr" })
 	}
+	for (const key of ["default", "defaultExpr"] as const) {
+		if (Object.hasOwn(options, key) && options[key] === undefined) {
+			problems.push({ object: `${table}.${name}`, message: `${key} is undefined; leave it out, or the column is optional on insert with no DEFAULT` })
+		}
+	}
 	if (options.defaultExpr !== undefined) {
-		return typeof options.defaultExpr === "string" ? options.defaultExpr : `(${ddl.expr(options.defaultExpr, columns)})`
+		if (typeof options.defaultExpr === "string") return options.defaultExpr
+		// SQLite refuses a DEFAULT that reads a column ("default value of column is not constant").
+		const read: Array<string> = []
+		const accessor = createColumnAccessor(columns)
+		const tracked = new Proxy(accessor, {
+			get: (target, key, receiver) => {
+				if (typeof key === "string" && Object.hasOwn(columns, key)) read.push(key)
+				return Reflect.get(target, key, receiver)
+			},
+		})
+		const sql = ddl.value(options.defaultExpr(tracked as typeof accessor))
+		if (read.length > 0) {
+			problems.push({ object: `${table}.${name}`, message: `defaultExpr reads ${[...new Set(read)].join(", ")}; SQLite requires a constant default` })
+		}
+		return `(${sql})`
 	}
 	if (options.default === undefined || options.default === null) return null
 	// SQLite reads TRUE / FALSE as 1 / 0; drizzle-kit writes them as keywords.
@@ -233,7 +253,20 @@ function buildTable<const Name extends string, const Columns extends Record<stri
 		}
 	})
 
+	// SQLite compares column names without case, so `Id` and `id` are one column.
+	const seen = new Map<string, string>()
+	for (const [column] of inputs) {
+		const other = seen.get(sqlName(column).toLowerCase())
+		if (other !== undefined) problems.push({ object: `${name}.${column}`, message: `${sqlName(column)} has the same SQL name as ${other} (SQLite ignores case in names)` })
+		else seen.set(sqlName(column).toLowerCase(), column)
+	}
+	const repeated = (object: string, keys: ReadonlyArray<string>) => {
+		const dupes = keys.filter((key, i) => keys.indexOf(key) !== i)
+		if (dupes.length > 0) problems.push({ object, message: `${[...new Set(dupes)].join(", ")} is listed more than once` })
+	}
+
 	const pkColumns = definition.primaryKey ?? []
+	repeated(`${name} primary key`, pkColumns)
 	if (definition.primaryKey !== undefined) {
 		if (pkColumns.length === 0) problems.push({ object: name, message: "a primary key needs columns" })
 		for (const column of pkColumns) {
@@ -250,6 +283,7 @@ function buildTable<const Name extends string, const Columns extends Record<stri
 	const indexEntities: ReadonlyArray<SqliteIndexEntity> = (definition.indexes ?? []).map((spec): SqliteIndexEntity => {
 		checkName(problems, `${name} index`, spec.name)
 		if (Array.isArray(spec.on)) {
+			repeated(`${name} index ${spec.name}`, spec.on)
 			for (const column of spec.on) {
 				if (!has(column)) problems.push({ object: `${name} index ${spec.name}`, message: `${column} is not a column` })
 			}

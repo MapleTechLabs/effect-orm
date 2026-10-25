@@ -194,6 +194,36 @@ it("records every definition problem, and sqliteEntitiesOf fails with all of the
 	}
 })
 
+it("refuses definitions SQLite would only reject when it runs the DDL", async () => {
+	// Each of these renders, then fails in SQLite: duplicate column name, a repeated key column,
+	// "default value of column is not constant", or an insert hitting NOT NULL.
+	const Bad = SQLite.table("bad_ddl", {
+		columns: {
+			id: SQLite.text,
+			Id: SQLite.text,
+			a: SQLite.column(SQLite.text, { name: "b" }),
+			b: SQLite.text,
+			copy: SQLite.column(SQLite.text, { defaultExpr: ($) => $.b }),
+			maybe: SQLite.column(SQLite.text, { default: undefined as never }),
+		},
+		primaryKey: ["id", "id"],
+		indexes: [SQLite.index("bad_ddl_twice", ["b", "b"])],
+	})
+	const exit = await Effect.runPromiseExit(sqliteEntitiesOf([Bad]))
+	if (exit._tag !== "Failure") throw new Error("a broken schema was accepted")
+	const messages = JSON.stringify(exit.cause)
+	for (const expected of [
+		"Id has the same SQL name as id",
+		"b has the same SQL name as a",
+		"id is listed more than once",
+		"b is listed more than once",
+		"defaultExpr reads b",
+		"default is undefined",
+	]) {
+		expect(messages).toContain(expected)
+	}
+})
+
 it("keeps entities as plain data that survive a JSON round trip, sorted the same every time", async () => {
 	const entities = await Effect.runPromise(sqliteEntitiesOf([Membership, ShortLink]))
 	const again = await Effect.runPromise(sqliteEntitiesOf([ShortLink, Membership]))

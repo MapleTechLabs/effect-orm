@@ -38,6 +38,8 @@ SQLite.insertInto(Links).values({ id: "a", code: "c" })
 SQLite.insertInto(Links).values({ id: "a" })
 // @ts-expect-error a primary key names declared columns only
 SQLite.table("bad", { columns: { id: SQLite.text }, primaryKey: ["nope"] })
+// @ts-expect-error a default cannot be undefined: the column would be optional with no DEFAULT
+SQLite.column(SQLite.text, { default: undefined })
 // @ts-expect-error a default is checked against the column's type
 SQLite.table("bad", { columns: { n: SQLite.column(SQLite.integer, { default: "x" }) } })
 // @ts-expect-error an external table carries no DDL
