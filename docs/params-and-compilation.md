@@ -59,6 +59,68 @@ says so: `defineFn`, `defineCondFn` and `compileTypedFnCall` from the extending 
 hand-written `makeExpr` does not. A param the type does not see is still checked when
 compiling, as below.
 
+## Checked in the type
+
+The same channel carries two more facts, and `compile`, `compileUnion` and `run` check them
+before the query runs.
+
+**The dialect of a function.** A built-in function of one dialect marks its result:
+`CH.countIf` with `ClickHouseOnly`, `PG.countIf` with `PostgresOnly`. A query that uses one is
+a type error where it is compiled or run for the other dialect:
+
+```ts
+const slow = CH.from(Events).select(($) => ({ n: CH.countIf($.DurationMs.gt(500)) }))
+
+CH.compile(slow) // ok: ClickHouse is the /clickhouse default
+PG.compile(slow) // type error: wrongDialect "this query uses ClickHouse functions; it cannot compile for the postgres dialect"
+PG.compile(slow, {}, { dialect: CH.clickhouseDialect }) // ok: options.dialect decides
+```
+
+The target is `options.dialect` when it is given, else the entry's dialect. A `Database` built
+with `fromSqlClient(client, { dialect: postgresDialect })` is a `DatabaseApi<"postgres">`, and
+its `run` checks the same way. A dialect typed as a plain `Dialect` (a custom one, or the
+`Database` in context) is not checked against one set, but a query with functions of both
+dialects is refused everywhere (`mixedDialects`): no dialect can compile it. Portable functions
+(`nullIf`, `/clickhouse`'s `lower`) and the shared operators add nothing. `CurrentDialect` is
+read at run time, so the type cannot see it: under a `CurrentDialect` of another dialect, pass
+`options.dialect` too. The compile-time `QueryBuilderDefect` stays, for a caller past the types.
+
+**The source of a column.** A column ref names its source: the FROM alias, else the table
+name, or the join alias. A query provides its own sources, so a column of a source it does not
+have is a type error where it is compiled or run. That is a column of another query's accessor,
+kept outside the callback it came from:
+
+```ts
+let services!: CH.JoinedColumnAccessor<(typeof Services)["columns"], {}, "s">
+CH.from(Services, "s").select(($) => ((services = $), { id: $.Id }))
+
+const leaked = CH.from(Events).select("Id").where(() => [services.Team.eq("core")])
+CH.compile(leaked) // type error: sourceNotInQuery "a column of `s` is used, but no FROM or JOIN of the query is named `s`"
+```
+
+A subquery may read a source of the query it is nested in. The inner query carries the outer
+source on, and the outer query provides it, so a correlated subquery can use the outer
+accessor in place of a string `outerRef`:
+
+```ts
+CH.from(Services, "s")
+	.select(($) => ({ team: $.Team }))
+	.where(($) => [
+		$.OrgId.eq("org_123"),
+		CH.exists(
+			CH.from(Events)
+				.select((e) => ({ n: e.Name }))
+				.where((e) => [e.OrgId.eq("org_123"), e.Name.eq($.Name)]),
+		),
+	])
+// ... WHERE EXISTS (SELECT events.Name AS n FROM events WHERE ... AND events.Name = s.Name)
+```
+
+A source whose name the type does not know (a `Table<string, …>`, a non-literal alias) is not
+checked. Writes are not checked: their accessors do not name a source.
+
+_(Backed by `src/ch/dialect.test-d.ts`, `src/ch/sources.test-d.ts` and `docs/params-and-compilation.md > A correlated subquery reads the outer accessor`.)_
+
 ## What each kind accepts
 
 The declared kind is checked when the value arrives, so a value of the wrong shape is a

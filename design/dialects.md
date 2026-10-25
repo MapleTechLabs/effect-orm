@@ -85,7 +85,11 @@ What we deliberately do not copy:
 - The package is still named for ClickHouse and the root entry still exports the ClickHouse
   function catalog. Renaming, or a `core` entry without ClickHouse functions, is a packaging
   decision for a later release.
-- The ClickHouse function catalog writes ClickHouse SQL whatever the dialect. Functions could
-  refuse to compile under another dialect instead of producing SQL that fails at the server.
+- The ClickHouse function catalog writes ClickHouse SQL whatever the dialect. A built-in
+  function now refuses to compile under another dialect, and is a type error there too: its
+  result carries a `DialectEntry` beside its params, which `compile` and
+  `DatabaseApi<Functions>.run` check against the target. The `Database` in context has no
+  dialect in its type, so it checks only that a query does not mix two. A `CompiledQuery` does
+  not carry its dialect in the type yet.
 - MySQL or SQLite would need `?` placeholders (`reuse: false` already exists) and their own
   types and functions; nothing in the core should need to change.

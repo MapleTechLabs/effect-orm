@@ -607,6 +607,23 @@ describe("docs/params-and-compilation.md", () => {
 			expect(compiled.parameters).toEqual(["org_1"])
 		}),
 	)
+
+	it("A correlated subquery reads the outer accessor", () => {
+		const query = CH.from(Services, "s")
+			.select(($) => ({ team: $.Team }))
+			.where(($) => [
+				$.OrgId.eq("org_123"),
+				CH.exists(
+					CH.from(Events)
+						.select((e) => ({ n: e.Name }))
+						.where((e) => [e.OrgId.eq("org_123"), e.Name.eq($.Name)]),
+				),
+			])
+
+		const sql = oneLine(compileCHUnsafe(query).sql)
+		expect(sql).toContain("FROM services AS s")
+		expect(sql).toContain("EXISTS (SELECT events.Name AS n FROM events WHERE events.OrgId = 'org_123' AND events.Name = s.Name)")
+	})
 })
 
 // decoding-results.md

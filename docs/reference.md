@@ -88,7 +88,10 @@ to its own dialect; `options.dialect` overrides it.
 `Dialect`, `DialectClauses` and `ParamStyle` describe a database: how identifiers and literals
 are written, how params reach the server, and which clauses exist. Pass one as
 `options.dialect`, or provide it as `CurrentDialect`, a `Context.Reference<Dialect | undefined>`
-that `compile` reads when no `options.dialect` is given. `DialectTransactions` (with `IsolationLevel` and `TransactionSettings`) says
+that `compile` reads when no `options.dialect` is given. `Compile<Default>`, `CompileUnsafe<Default>`,
+`CompileUnion<Default>` and `CompileUnionUnsafe<Default>` are the types of the four compile
+functions, with `Default` the function set of the entry's dialect; their options are
+`QueryCompileOptions`, `InsertCompileOptions` and `UnionCompileOptions`. `DialectTransactions` (with `IsolationLevel` and `TransactionSettings`) says
 which transactions the database supports; see [Database](./database.md). See [Params and compilation](./params-and-compilation.md#dialects) and
 [Postgres](./postgres.md).
 
@@ -182,17 +185,23 @@ decoded type of a column), `InferEncoded` (its wire type), `ColumnDefs`, `Nullab
 **Inference** — `InferOutput`, `InferQueryOutput`, `InferUnionOutput`, `SelectRowOf`,
 `InsertRow`, `InsertRowOf`, `UpdateSet`, `UpdateSetOf`.
 
-**What `compile` checks** — `NeedsSelect<Output>` (the query has a SELECT list) and
-`ParamsSatisfied<Params, Given>` (the params object fills every required param). A helper generic
+**What `compile` checks** — `NeedsSelect<Output>` (the query has a SELECT list),
+`ParamsSatisfied<Params, Given>` (the params object fills every required param),
+`DialectSatisfied<Params, Functions>` (no built-in function of another dialect, and not two
+dialects in one query) and `SourcesSatisfied<Params>` (no column of a source that is not in the
+query's FROM or JOIN). See [Params and compilation](./params-and-compilation.md#checked-in-the-type). A helper generic
 over a query's output takes `CHQuery<…, Output> & NeedsSelect<Output>` so it can pass the query on
 to `compile`.
 
 **Params a query carries** — `ParamEntry<Name, Value>` (one `param.*` a query needs, in its type),
 `OptionalParamEntry<Name, Value>` and `OptionalParams<P>` (the same for a param under `when` /
 `whenTrue`, or one whose name is a union, which the params object may leave out) and
-`ParamsIn<X>` (the params an expression or argument list carries). You rarely write them, but
-`tsc --declaration` names them when a package exports a query with a param or a `defineFn` helper,
-so they are public.
+`ParamsIn<X>` (the params an expression or argument list carries). Beside the params, the same
+channel carries `DialectEntry<Set>` (a built-in function of one dialect: `ClickHouseOnly` or
+`PostgresOnly`; `DialectsIn<P>` reads the sets) and `SourceEntry<Name>` (a column of source
+`Name`; `SourceOf<Name>` is the entry of a ref, `BindSources<P, Sources>` removes the ones a query
+provides). You rarely write them, but `tsc --declaration` names them when a package exports a
+query with a param or a `defineFn` helper, so they are public.
 
 **Everything else** — `Table` (what `from` and the write builders accept; every `table` value is
 one), `Expr`, `ColumnRef`, `Condition`, `Comparable` (what a value of a type may be compared
