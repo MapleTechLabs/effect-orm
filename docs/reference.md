@@ -113,6 +113,7 @@ time; see [Params and compilation](./params-and-compilation.md#what-each-kind-ac
 | `undecoded(column)`       | the column as the driver sends it, typed as its wire form  |
 | `inExprList(expr, exprs)` | Same for expression lists                                  |
 | `notInList(expr, values)` | `expr NOT IN ('a', 'b')`                                   |
+| `escapeLike(text)`        | `text` with `%`, `_` and `\` escaped, for a `.like()` pattern |
 | `not(condition)`          | `NOT (…)`                                                  |
 | `and(...conds)` / `or(...conds)` | One flat `(… AND …)` / `(… OR …)`; skips `undefined`, returns `undefined` when none are left |
 | `dynamicColumn(name, t?)` | An `Expr` from a runtime column name — a `GROUP BY` alias  |
@@ -123,7 +124,9 @@ time; see [Params and compilation](./params-and-compilation.md#what-each-kind-ac
 
 `Expr<T>` methods: `eq`, `neq`, `gt`, `gte`, `lt`, `lte`, `in_`, `notIn`, `between`, `notBetween`,
 `isNull`, `isNotNull`, `like`, `notLike`,
-`ilike` (string-only), and `add`, `sub`, `mul`, `div`, `mod` (number-only, **no parentheses**). `div` and `mod` decode
+`ilike`, `contains`, `startsWith`, `endsWith` (string-only; the last three escape `%`, `_` and `\`
+in the value and take `TextMatchOptions`, `{ insensitive?: boolean }`, see
+[Text search](./expressions.md#text-search)), and `add`, `sub`, `mul`, `div`, `mod` (number-only, **no parentheses**). `div` and `mod` decode
 as `number | null` — ClickHouse sends `inf`/`nan` as JSON `null` — except by a numeric literal of
 magnitude ≥ 1 (`Quotient<L, R>`), which keeps the dividend's nullability; use
 `ifNull(ifNotFinite(expr, 0), lit(0))` for a guaranteed number otherwise.
