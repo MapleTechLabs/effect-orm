@@ -2,7 +2,7 @@
 // tracer that records spans, against the OpenTelemetry database conventions.
 import { PgliteClient } from "@effect/sql-pglite"
 import { assert, describe, expect, it, layer } from "@effect/vitest"
-import { Effect, Exit, Layer, Option, Tracer } from "effect"
+import { Effect, Exit, Layer, Option, Redacted, Schema, Tracer } from "effect"
 import * as SqlClient from "effect/sql/SqlClient"
 import * as PG from "../postgres"
 import { postgresDialect } from "../pg/dialect"
@@ -110,6 +110,86 @@ layer(Live)("Database statement spans", (it) => {
 			const span = dbSpan(spans)
 			expect(span.attributes.get("error.type")).toBe("SqlSyntaxError")
 			expect(span.status._tag).toBe("Ended")
+		}),
+	)
+})
+
+const doorCode = PG.brand(PG.text, Schema.RedactedFromValue(Schema.String))
+const Codes = PG.table("traced_codes", { columns: { id: PG.int4, code: doorCode }, primaryKey: ["id"] })
+
+/** A second `Database` over the same client, with the given options. */
+const withOptions = (options: Omit<Db.FromSqlClientOptions, "dialect">) =>
+	Effect.map(Effect.service(SqlClient.SqlClient), (sql) => Db.fromSqlClient(sql, { dialect: postgresDialect, ...options }))
+
+layer(Live)("observeExit", (it) => {
+	it.effect("creates the table", () =>
+		Db.execute(Db.sql`CREATE TABLE traced_codes (id int4 PRIMARY KEY, code text NOT NULL)`),
+	)
+
+	it.effect("reports each statement once it ends: its names, rows and duration", () =>
+		Effect.gen(function* () {
+			const seen: Array<Db.StatementObservation> = []
+			const db = yield* withOptions({ observeExit: (observation) => Effect.sync(() => void seen.push(observation)) })
+			yield* db.run(PG.insertInto(Codes).values({ id: 1, code: Redacted.make("4821") }).returning(($) => ({ id: $.id })))
+			expect(seen).toHaveLength(1)
+			const [observation] = seen
+			assert(observation !== undefined)
+			expect(observation).toMatchObject({
+				system: "postgresql",
+				operation: "INSERT",
+				collection: "traced_codes",
+				summary: "INSERT traced_codes",
+				tenantScope: "untenanted",
+				rows: 1,
+			})
+			expect(observation.durationMillis).toBeGreaterThanOrEqual(0)
+			expect(observation.errorType).toBeUndefined()
+		}),
+	)
+
+	it.effect("keeps a Redacted value Redacted in the observed parameters", () =>
+		Effect.gen(function* () {
+			const seen: Array<Db.StatementObservation> = []
+			const db = yield* withOptions({ observeExit: (observation) => Effect.sync(() => void seen.push(observation)) })
+			yield* db.run(PG.from(Codes).select(($) => ({ id: $.id })).where(($) => [$.id.eq(1), $.code.eq(Redacted.make("4821"))]))
+			const [observation] = seen
+			assert(observation !== undefined)
+			const [id, code] = observation.parameters
+			expect(id).toBe(1)
+			assert(Redacted.isRedacted(code))
+			expect(String(code)).toBe("<redacted>")
+			expect(observation.rows).toBe(1)
+		}),
+	)
+
+	it.effect("reports error.type and no rows when the statement fails", () =>
+		Effect.gen(function* () {
+			const seen: Array<Db.StatementObservation> = []
+			const db = yield* withOptions({ observeExit: (observation) => Effect.sync(() => void seen.push(observation)) })
+			const exit = yield* Effect.exit(db.execute(Db.sql`SELEKT ${Redacted.make("4821")}`))
+			assert(Exit.isFailure(exit))
+			const [observation] = seen
+			assert(observation !== undefined)
+			expect(observation.errorType).toBe("SqlSyntaxError")
+			expect(observation.rows).toBeUndefined()
+			expect(observation.operation).toBeUndefined()
+		}),
+	)
+
+	it.effect("puts no values on a span unless spanParameters is on", () =>
+		Effect.gen(function* () {
+			const query = PG.from(Codes).select(($) => ({ id: $.id })).where(($) => [$.id.eq(1), $.code.eq(Redacted.make("4821"))])
+			const quiet = yield* traced(Db.run(query))
+			expect([...dbSpan(quiet.spans).attributes.keys()].filter((key) => key.startsWith("db.query.parameter."))).toEqual([])
+
+			const db = yield* withOptions({ spanParameters: true })
+			const loud = yield* traced(db.run(query))
+			const span = dbSpan(loud.spans)
+			expect(span.attributes.get("db.query.parameter.0")).toBe("1")
+			expect(span.attributes.get("db.query.parameter.1")).toBe("<redacted>")
+			for (const recorded of loud.spans) {
+				expect(JSON.stringify(Object.fromEntries(recorded.attributes))).not.toContain("4821")
+			}
 		}),
 	)
 })

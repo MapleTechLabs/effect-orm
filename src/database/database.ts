@@ -31,7 +31,7 @@ import {
 } from "./errors"
 import { isSqlTemplate, renderTemplate, type SqlTemplate } from "./sql"
 import { firstLine, reasonOf, sqlStateOf, toDatabaseError } from "./sql-error"
-import { traceStatement, type TracedStatement } from "./tracing"
+import { traceStatement, type StatementObservation, type TraceOptions, type TracedStatement } from "./tracing"
 
 /** SQL and the values bound to its placeholders. A `CompiledQuery` is one. */
 export interface Statement {
@@ -160,6 +160,19 @@ export interface FromSqlClientOptions {
 	 */
 	readonly observe?: (statement: Statement) => Effect.Effect<void>
 	/**
+	 * Called with every statement once it has ended: its names, duration, row
+	 * count or `error.type`. Values given as `Redacted` stay `Redacted` in its
+	 * `parameters`. For metrics, slow-query logs, or a statement collector.
+	 */
+	readonly observeExit?: (observation: StatementObservation) => Effect.Effect<void>
+	/**
+	 * Put each bound value on the statement span as
+	 * `db.query.parameter.<index>`, as the OpenTelemetry conventions allow. Off
+	 * by default, so spans carry no values. A value given as `Redacted` is
+	 * written `<redacted>`.
+	 */
+	readonly spanParameters?: boolean
+	/**
 	 * Refuse, as a `TenantScopeViolation` defect, any compiled statement whose
 	 * `tenantScope` is `"cross-tenant"` unless it was declared with
 	 * `.crossTenant()`. Off by default. Plain SQL given to `query` and
@@ -213,6 +226,7 @@ export const fromSqlClient = (sql: SqlClient.SqlClient, options: FromSqlClientOp
 	const capabilities = dialect.transactions ?? noTransactions
 	const command = options.command ?? ((effect) => effect)
 	const observe = options.observe ?? (() => Effect.void)
+	const traceOptions: TraceOptions = { spanParameters: options.spanParameters, observeExit: options.observeExit }
 	// Result names exactly as the server sent them: the compiled decoder reads
 	// the aliases it wrote.
 	const raw = sql.withoutTransforms()
@@ -259,6 +273,7 @@ export const fromSqlClient = (sql: SqlClient.SqlClient, options: FromSqlClientOp
 				Effect.mapError(toDatabaseError(statement.sql)),
 			),
 			(rows) => rows.length,
+			traceOptions,
 		)
 
 	const decodeWith =
@@ -291,6 +306,8 @@ export const fromSqlClient = (sql: SqlClient.SqlClient, options: FromSqlClientOp
 					Effect.asVoid,
 					Effect.mapError(toDatabaseError(resolved.sql)),
 				),
+				undefined,
+				traceOptions,
 			),
 		)
 
