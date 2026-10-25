@@ -70,3 +70,14 @@ it("writes a first migration as migration.sql plus a sqlite snapshot, then nothi
 	await expectMigratedToEqualFresh(v1)
 	expect((await generateFrom(v1)).written).toBeUndefined()
 })
+
+it("adds a nullable column, and a NOT NULL one with a literal default, with ALTER TABLE ADD COLUMN", async () => {
+	await generateFrom(links(`id: SQLite.text, url: SQLite.text`))
+	const v2 = links(`id: SQLite.text, url: SQLite.text, note: SQLite.nullable(SQLite.text), hits: SQLite.column(SQLite.integer, { default: 0 })`)
+	const second = await generateFrom(v2)
+	expect(second.plan.flatMap((p) => p.sql)).toEqual([
+		'ALTER TABLE "links" ADD COLUMN "note" text',
+		'ALTER TABLE "links" ADD COLUMN "hits" integer NOT NULL DEFAULT 0',
+	])
+	await expectMigratedToEqualFresh(v2)
+})
