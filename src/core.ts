@@ -158,3 +158,7 @@ export {
 } from "./ch/dialect"
 
 export { QueryBuilderError, QueryBuilderDefect } from "./ch/errors"
+
+// The pipeable, data-last query API: `Query.where(...)` and friends, each the
+// fluent method as a `dual`.
+export * as Query from "./ch/query-pipe"
