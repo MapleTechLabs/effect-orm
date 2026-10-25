@@ -3,7 +3,18 @@
 // A Table carries its name and column definitions at both the type level
 // (for inference) and runtime (for SQL generation).
 
+import type { Effect } from "effect"
 import type { ColumnDefs, InferTS } from "./types"
+
+/**
+ * Columns the client fills, as an Effect per column: `insert` runs for a
+ * column an insert leaves out, `update` for a column an update does not set.
+ * `Database.run` runs them; see `fillDefaults`.
+ */
+export interface ClientDefaults {
+	readonly insert: Readonly<Record<string, Effect.Effect<unknown, never, any>>>
+	readonly update: Readonly<Record<string, Effect.Effect<unknown, never, any>>>
+}
 
 /**
  * `Defaulted` and `Computed` describe inserts: the columns an insert may leave
@@ -11,12 +22,17 @@ import type { ColumnDefs, InferTS } from "./types"
  * (ClickHouse `MATERIALIZED` and `ALIAS`). Both default to `string`, read as
  * "unknown", so a `Table` with more of either still satisfies a `Table<N, C>`
  * written without them; the insert row type treats a bare `string` as none.
+ *
+ * `InsertR` and `UpdateR` are what the table's client defaults need: the
+ * services an insert or an update of it requires to run.
  */
 export interface Table<
 	Name extends string,
 	Columns extends ColumnDefs,
 	Defaulted extends string = string,
 	Computed extends string = string,
+	InsertR = never,
+	UpdateR = never,
 > {
 	readonly _tag: "Table"
 	readonly name: Name
@@ -37,6 +53,13 @@ export interface Table<
 	readonly defaults?: ReadonlyArray<Defaulted>
 	/** Columns the database computes, which an insert may not write. */
 	readonly computed?: ReadonlyArray<Computed>
+	/** Columns the client fills with an Effect; see `ClientDefaults`. */
+	readonly clientDefaults?: ClientDefaults
+	/**
+	 * phantom: the requirements of the client defaults. Contravariant, so a
+	 * table that needs a service still satisfies a `Table` type written without one.
+	 */
+	readonly _requirements?: { readonly insert: (r: InsertR) => void; readonly update: (r: UpdateR) => void }
 }
 
 export interface TableOptions<

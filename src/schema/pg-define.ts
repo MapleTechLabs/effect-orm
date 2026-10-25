@@ -7,13 +7,14 @@
 // rendered once, here, with the Postgres dialect. A definition that cannot
 // become DDL records a problem, and `pgEntitiesOf` fails with it.
 
-import { Schema } from "effect"
+import { Schema, type Effect } from "effect"
 import { compile as compileFragment } from "../sql/sql-fragment"
 import { withDialect } from "../ch/dialect"
 import type { Condition, Expr } from "../ch/expr"
 import { encodeColumnLiteral } from "../ch/literal"
+import type { InsertValue } from "../ch/insert"
 import { createColumnAccessor, type ColumnAccessor } from "../ch/query"
-import type { Table } from "../ch/table"
+import type { ClientDefaults, Table } from "../ch/table"
 import { columnSqlName, type CHType, type ColumnDefs, type InferTS } from "../ch/types"
 import type { PgType } from "../pg/types"
 import { postgresDialect } from "../pg/dialect"
@@ -52,7 +53,7 @@ const renderKeyParts = <Cols extends ColumnDefs>(key: DdlKey<Cols>, columns: Col
 
 // Columns
 
-export interface ColumnOptions<T extends CHType<string, any, any>> {
+export interface ColumnOptions<T extends CHType<string, any, any>, DefaultR = never, UpdateR = never> {
 	/**
 	 * The column's name in the database, when it differs from its key in
 	 * `columns`: `orgId: PG.column(PG.text, { name: "org_id" })` is read and
@@ -73,6 +74,20 @@ export interface ColumnOptions<T extends CHType<string, any, any>> {
 	 * `<table>_<column>_unique`, drizzle-orm's name; a string names it.
 	 */
 	readonly unique?: true | string | UniqueColumnOptions
+	/**
+	 * A client-side default: an Effect that `Database.run` runs for each row
+	 * an insert leaves the column out of, such as `DateTime.now` or an id from
+	 * a service. Its requirements become the insert's. No DDL.
+	 */
+	readonly defaultFn?: Effect.Effect<InsertValue<T>, never, DefaultR>
+	/**
+	 * A client-side value for every update: an Effect that `Database.run` runs
+	 * once for an update that does not set the column, such as `DateTime.now`
+	 * for an `updatedAt`. An insert that leaves the column out runs it too,
+	 * when the column has no other default. Its requirements become the
+	 * update's. No DDL.
+	 */
+	readonly onUpdate?: Effect.Effect<InsertValue<T>, never, UpdateR>
 }
 
 export interface UniqueColumnOptions {
@@ -82,35 +97,46 @@ export interface UniqueColumnOptions {
 	readonly nullsNotDistinct?: boolean
 }
 
-/** `Given` records which options were set, so the table knows which columns an insert may leave out. */
+/**
+ * `Given` records which options were set, so the table knows which columns an
+ * insert may leave out. `DefaultR` and `UpdateR` are what its `defaultFn` and
+ * `onUpdate` need.
+ */
 export interface ColumnSpec<
 	T extends CHType<string, any, any>,
 	Given extends keyof ColumnOptions<T> = keyof ColumnOptions<T>,
+	DefaultR = never,
+	UpdateR = never,
 > {
 	readonly _tag: "PgColumnSpec"
 	readonly type: T
-	readonly options: ColumnOptions<T>
+	readonly options: ColumnOptions<T, DefaultR, UpdateR>
 	readonly _given?: Given
 }
 
 /** A column with a default. A bare column type works too where none is needed. */
-export const column = <T extends CHType<string, any, any>, Given extends keyof ColumnOptions<T> = never>(
+export const column = <
+	T extends CHType<string, any, any>,
+	Given extends keyof ColumnOptions<T> = never,
+	DefaultR = never,
+	UpdateR = never,
+>(
 	type: T,
-	options: ColumnOptions<T> & { readonly [K in Given]: unknown } = {} as ColumnOptions<T> & {
+	options: ColumnOptions<T, DefaultR, UpdateR> & { readonly [K in Given]: unknown } = {} as ColumnOptions<T, DefaultR, UpdateR> & {
 		readonly [K in Given]: unknown
 	},
-): ColumnSpec<T, Given> => ({ _tag: "PgColumnSpec", type, options })
+): ColumnSpec<T, Given, NoInfer<DefaultR>, NoInfer<UpdateR>> => ({ _tag: "PgColumnSpec", type, options })
 
-export type ColumnInput = CHType<string, any, any> | ColumnSpec<CHType<string, any, any>, any>
+export type ColumnInput = CHType<string, any, any> | ColumnSpec<CHType<string, any, any>, any, any, any>
 
 /** The query-side column types of a `columns` record. */
 export type ColumnsOf<I extends Record<string, ColumnInput>> = {
-	readonly [K in keyof I]: I[K] extends ColumnSpec<infer T, any> ? T : I[K] extends CHType<string, any, any> ? I[K] : never
+	readonly [K in keyof I]: I[K] extends ColumnSpec<infer T, any, any, any> ? T : I[K] extends CHType<string, any, any> ? I[K] : never
 }
 
-/** Columns declared with `default`, `defaultExpr` or `identity`: an insert may leave them out. */
+/** Columns declared with `default`, `defaultExpr`, `identity`, `defaultFn` or `onUpdate`: an insert may leave them out. */
 export type DefaultedColumnsOf<I extends Record<string, ColumnInput>> = {
-	[K in keyof I]: I[K] extends ColumnSpec<any, infer Given>
+	[K in keyof I]: I[K] extends ColumnSpec<any, infer Given, any, any>
 		? [Exclude<Given, "name" | "unique">] extends [never]
 			? never
 			: K
@@ -118,7 +144,24 @@ export type DefaultedColumnsOf<I extends Record<string, ColumnInput>> = {
 }[keyof I] &
 	string
 
-const isColumnSpec = (input: ColumnInput): input is ColumnSpec<CHType<string, any, any>, any> =>
+/**
+ * What an insert into a table with these columns requires: each `defaultFn`'s
+ * requirements, or the `onUpdate`'s of a column without one.
+ */
+export type InsertRequirementsOf<I extends Record<string, ColumnInput>> = {
+	[K in keyof I]: I[K] extends ColumnSpec<any, infer Given, infer DefaultR, infer UpdateR>
+		? "defaultFn" extends Given
+			? DefaultR
+			: UpdateR
+		: never
+}[keyof I]
+
+/** What an update of a table with these columns requires: each `onUpdate`'s requirements. */
+export type UpdateRequirementsOf<I extends Record<string, ColumnInput>> = {
+	[K in keyof I]: I[K] extends ColumnSpec<any, any, any, infer UpdateR> ? UpdateR : never
+}[keyof I]
+
+const isColumnSpec = (input: ColumnInput): input is ColumnSpec<CHType<string, any, any>, any, any, any> =>
 	"_tag" in input && input._tag === "PgColumnSpec"
 
 /** The query-side type of a column input, carrying its `name` as `sqlName`. */
@@ -340,8 +383,13 @@ export interface TableDdl {
 	readonly enums: ReadonlyArray<PgEnumEntity>
 }
 
-export interface PgSchemaTable<Name extends string, Cols extends ColumnDefs, Defaulted extends string = string>
-	extends Table<Name, Cols, Defaulted, never> {
+export interface PgSchemaTable<
+	Name extends string,
+	Cols extends ColumnDefs,
+	Defaulted extends string = string,
+	InsertR = never,
+	UpdateR = never,
+> extends Table<Name, Cols, Defaulted, never, InsertR, UpdateR> {
 	readonly ddl: TableDdl
 	/** What is wrong with the definition; `pgEntitiesOf` fails when any table has one. */
 	readonly problems: ReadonlyArray<DefinitionProblem>
@@ -401,7 +449,7 @@ const columnDefault = (
 	problems: ProblemSink,
 	table: string,
 	name: string,
-	spec: ColumnSpec<CHType<string, any, any>>,
+	spec: ColumnSpec<CHType<string, any, any>, any, any, any>,
 	columns: ColumnDefs,
 ): string | null => {
 	const { options } = spec
@@ -424,31 +472,65 @@ const columnDefault = (
 export function table<const Name extends string, const Columns extends Record<string, ColumnInput>>(
 	name: Name,
 	definition: ExternalTableDefinition<Columns>,
-): Table<Name, ColumnsOf<Columns>, DefaultedColumnsOf<Columns>, never>
+): Table<
+	Name,
+	ColumnsOf<Columns>,
+	DefaultedColumnsOf<Columns>,
+	never,
+	InsertRequirementsOf<Columns>,
+	UpdateRequirementsOf<Columns>
+>
 export function table<const Name extends string, const Columns extends Record<string, ColumnInput>>(
 	name: Name,
 	definition: TableDefinition<Columns>,
-): PgSchemaTable<Name, ColumnsOf<Columns>, DefaultedColumnsOf<Columns>>
+): PgSchemaTable<
+	Name,
+	ColumnsOf<Columns>,
+	DefaultedColumnsOf<Columns>,
+	InsertRequirementsOf<Columns>,
+	UpdateRequirementsOf<Columns>
+>
 export function table<const Name extends string, const Columns extends Record<string, ColumnInput>>(
 	name: Name,
 	definition: TableDefinition<Columns> | ExternalTableDefinition<Columns>,
-): PgSchemaTable<Name, ColumnsOf<Columns>, DefaultedColumnsOf<Columns>> | Table<Name, any, any, any> {
+): PgSchemaTable<Name, ColumnsOf<Columns>, DefaultedColumnsOf<Columns>, never, never> | Table<Name, any, any, any, never, never> {
 	if ("external" in definition) {
-		return externalTable(
+		const external = externalTable(
 			name,
 			definition,
-			(input): input is ColumnSpec<CHType<string, any, any>> => isColumnSpec(input as ColumnInput),
+			(input): input is ColumnSpec<CHType<string, any, any>, any, any, any> => isColumnSpec(input as ColumnInput),
 			[],
-			(spec) => columnTypeOfInput(spec as ColumnSpec<CHType<string, any, any>>),
+			(spec) => columnTypeOfInput(spec as ColumnSpec<CHType<string, any, any>, any, any, any>),
 		)
+		const clientDefaults = clientDefaultsOf(definition.columns)
+		return clientDefaults === undefined ? external : { ...external, clientDefaults }
 	}
 	return withRenderProblems(name, () => buildTable(name, definition))
+}
+
+/**
+ * The Effects behind `defaultFn` and `onUpdate`, or `undefined` when no column
+ * has one. An insert runs a column's `defaultFn`, or its `onUpdate` when it
+ * has no default of any kind.
+ */
+const clientDefaultsOf = (columns: Record<string, ColumnInput>): ClientDefaults | undefined => {
+	const insert: Record<string, Effect.Effect<unknown, never, any>> = {}
+	const update: Record<string, Effect.Effect<unknown, never, any>> = {}
+	for (const [column, input] of Object.entries(columns)) {
+		if (!isColumnSpec(input)) continue
+		const { defaultFn, onUpdate, default: literal, defaultExpr, identity } = input.options
+		const databaseDefault = literal !== undefined || defaultExpr !== undefined || identity !== undefined
+		if (defaultFn !== undefined) insert[column] = defaultFn
+		else if (onUpdate !== undefined && !databaseDefault) insert[column] = onUpdate
+		if (onUpdate !== undefined) update[column] = onUpdate
+	}
+	return Object.keys(insert).length === 0 && Object.keys(update).length === 0 ? undefined : { insert, update }
 }
 
 function buildTable<const Name extends string, const Columns extends Record<string, ColumnInput>>(
 	name: Name,
 	definition: TableDefinition<Columns>,
-): PgSchemaTable<Name, ColumnsOf<Columns>, DefaultedColumnsOf<Columns>> {
+): PgSchemaTable<Name, ColumnsOf<Columns>, DefaultedColumnsOf<Columns>, never, never> {
 	const problems: ProblemSink = []
 	checkIdentifier(problems, name, name)
 	const inputs = Object.entries(definition.columns)
@@ -459,7 +541,7 @@ function buildTable<const Name extends string, const Columns extends Record<stri
 
 	const columnEntities = inputs.map(([column, input], position): PgColumnEntity => {
 		checkIdentifier(problems, `${name}.${column}`, sqlName(column))
-		const spec: ColumnSpec<CHType<string, any, any>> = isColumnSpec(input)
+		const spec: ColumnSpec<CHType<string, any, any>, any, any, any> = isColumnSpec(input)
 			? input
 			: { _tag: "PgColumnSpec", type: input as CHType<string, any, any>, options: {} }
 		return {
@@ -590,12 +672,14 @@ function buildTable<const Name extends string, const Columns extends Record<stri
 	const defaults = inputs
 		.filter((_, position) => columnEntities[position]!.default !== null || columnEntities[position]!.identity !== null)
 		.map(([column]) => column)
+	const clientDefaults = clientDefaultsOf(definition.columns)
 	return {
 		_tag: "Table",
 		name,
 		columns: types,
 		...(definition.tenantColumn !== undefined ? { tenantColumn: definition.tenantColumn } : undefined),
 		...(defaults.length > 0 ? { defaults: defaults as unknown as Array<DefaultedColumnsOf<Columns>> } : undefined),
+		...(clientDefaults !== undefined ? { clientDefaults } : undefined),
 		ddl: {
 			dialect: "postgres",
 			table: tableEntity,

@@ -16,7 +16,7 @@ export {
 } from "./ch/types"
 
 // Tables, as the query builder sees them. Define one with the dialect's `table`.
-export { type SelectRowOf, type Table } from "./ch/table"
+export { type ClientDefaults, type SelectRowOf, type Table } from "./ch/table"
 
 // Core expression primitives
 export {
@@ -131,6 +131,9 @@ export {
 	deleteFrom,
 	update,
 } from "./ch/update"
+
+// Client-side defaults: the `defaultFn` / `onUpdate` Effects of a write's table.
+export { fillDefaults, type RequirementsOf } from "./ch/client-defaults"
 
 export { unionAll, type CHUnionQuery, type InferUnionOutput } from "./ch/union"
 

@@ -14,6 +14,7 @@ import { isSqlError } from "effect/sql/SqlError"
 import { compileCH, compileUnion, CompiledQueryDecodeError, type CompiledQuery } from "../ch/compile"
 import { noTransactions, type Dialect, type IsolationLevel, type TransactionSettings } from "../ch/dialect"
 import type { QueryBuilderError } from "../ch/errors"
+import { fillDefaults, type RequirementsOf } from "../ch/client-defaults"
 import type { AnyInsert } from "../ch/insert"
 import type { CHDelete, CHUpdate } from "../ch/update"
 import type { CHQuery, NeedsSelect } from "../ch/query"
@@ -47,7 +48,7 @@ export type Runnable =
 	| CHQuery<any, any, any, any>
 	| CHUnionQuery<any>
 	| AnyInsert
-	| CHUpdate<any, any, any>
+	| CHUpdate<any, any, any, "ready", never, any>
 	| CHDelete<any, any>
 	| CompiledQuery<any, any>
 
@@ -103,12 +104,13 @@ export interface DatabaseApi {
 	 * Compile a query for this database's dialect, run it, and decode its rows.
 	 * A write returns its RETURNING rows, or none without `returning`.
 	 * `params` fills the query's `param.*` markers. A query compiled elsewhere
-	 * runs as it is, if it was compiled for this dialect.
+	 * runs as it is, if it was compiled for this dialect. A write first runs
+	 * its table's client defaults (`fillDefaults`), so it requires what they need.
 	 */
 	readonly run: <Q extends Runnable, const Given extends object = {}>(
 		query: Q & RunCheck<Q> & ParamsSatisfied<QueryParams<Q>, Given>,
 		params?: Given,
-	) => Effect.Effect<ReadonlyArray<RowOf<Q>>, DatabaseError | QueryBuilderError | CompiledQueryDecodeError>
+	) => Effect.Effect<ReadonlyArray<RowOf<Q>>, DatabaseError | QueryBuilderError | CompiledQueryDecodeError, RequirementsOf<Q>>
 	/** Run a statement and return its rows, decoded through `schema` when given. */
 	readonly query: {
 		(statement: StatementInput): Effect.Effect<ReadonlyArray<Record<string, unknown>>, DatabaseError>
@@ -316,11 +318,13 @@ export const fromSqlClient = (sql: SqlClient.SqlClient, options: FromSqlClientOp
 	// does: through `command`, which a ClickHouse client needs for a statement
 	// with no result set.
 	const run: DatabaseApi["run"] = (runnable, params) =>
-		Effect.flatMap(Effect.flatMap(compileFor(runnable, params ?? {}), checkScope), (compiled) =>
-			compiled.kind !== "select" && compiled.returning === undefined
-				? Effect.as(execute(compiled), [])
-				: Effect.flatMap(rows(compiled), (wire) => compiled.decodeRows(wire)),
-		)
+		Effect.flatMap(fillDefaults(runnable as Runnable), (filled) =>
+			Effect.flatMap(Effect.flatMap(compileFor(filled, params ?? {}), checkScope), (compiled) =>
+				compiled.kind !== "select" && compiled.returning === undefined
+					? Effect.as(execute(compiled), [])
+					: Effect.flatMap(rows(compiled), (wire) => compiled.decodeRows(wire)),
+			),
+		) as Effect.Effect<any, any, any>
 
 	const retryContention = <A, E, R>(effect: Effect.Effect<A, E, R>, retry?: RetryOptions) =>
 		Effect.flatMap(Effect.serviceOption(sql.transactionService), (open): Effect.Effect<A, E | TransactionOptionsRejected, R> =>
@@ -486,8 +490,11 @@ export const layerSqlClient = (options: FromSqlClientOptions): Layer.Layer<Datab
 export const run = <Q extends Runnable, const Given extends object = {}>(
 	query: Q & RunCheck<Q> & ParamsSatisfied<QueryParams<Q>, Given>,
 	params?: Given,
-): Effect.Effect<ReadonlyArray<RowOf<Q>>, DatabaseError | QueryBuilderError | CompiledQueryDecodeError, Database> =>
-	Effect.flatMap(Effect.service(Database), (db) => db.run(query, params))
+): Effect.Effect<
+	ReadonlyArray<RowOf<Q>>,
+	DatabaseError | QueryBuilderError | CompiledQueryDecodeError,
+	Database | RequirementsOf<Q>
+> => Effect.flatMap(Effect.service(Database), (db) => db.run(query, params))
 
 /** `query` on the `Database` in context. */
 export const query: {
