@@ -64,7 +64,7 @@ Roughly in reading order.
 | [Extending the DSL](./extending.md)                   | `defineFn`, raw escape hatches, handwritten SQL                                     |
 | [Postgres](./postgres.md)                             | The Postgres dialect, its column types and functions                                |
 | [Schema and migrations](./migrations.md)              | DDL from `CH.table` / `PG.table`, `materializedView`, `effect-orm generate`, applying migrations, adopting drizzle-kit |
-| [Statements and transactions](./database.md)          | `Database` over your `SqlClient`: `run`, `execute`, `transaction`, retry            |
+| [Statements and transactions](./database.md)          | `Database` over your `SqlClient`: `run`, `execute`, `transaction`, retry, repositories |
 
 ## Reference
 

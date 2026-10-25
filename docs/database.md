@@ -284,6 +284,81 @@ Db.run(query, params).pipe(Db.withQuerySummary("dashboard.revenue_by_day"))
 
 The table is also on the compiled query, as `compiled.collection`.
 
+## Repositories
+
+`makeRepository(table, options)` builds the plain CRUD of a table on the `Database` in
+context, as `SqlModel.makeRepository` does for a `Model.Class`. The row types come from
+[`tableSchemas(table)`](./tables-and-types.md#row-schemas): `insert` takes its `insert` row and
+`update` its `update` row.
+
+```ts
+import * as Db from "@maple-dev/effect-orm/database"
+import * as PG from "@maple-dev/effect-orm/postgres"
+import { Effect, Option } from "effect"
+
+const Tickets = PG.table("tickets", {
+	columns: {
+		id: PG.column(PG.int4, { identity: "always" }),
+		org: PG.text,
+		title: PG.text,
+		note: PG.nullable(PG.text),
+	},
+	primaryKey: ["id"],
+	tenantColumn: "org",
+})
+
+const program = Effect.gen(function* () {
+	const tickets = yield* Db.makeRepository(Tickets, { idColumn: "id", tenantColumn: "org" })
+	const ticket = yield* tickets.insert("acme", { title: "Board" }) // the stored row, with its id
+	yield* tickets.update("acme", ticket.id, { note: "moved" }) // Option of the changed row
+	yield* tickets.findById("other", ticket.id) // Option.none(): not this tenant's row
+	yield* tickets.delete("acme", ticket.id)
+})
+```
+
+| Method                       | Does                                                         |
+| ---------------------------- | ------------------------------------------------------------ |
+| `insert(row)`                | INSERT ... RETURNING, and gives back the stored row           |
+| `insertVoid(row)`            | INSERT                                                       |
+| `update(id, patch)`          | UPDATE ... RETURNING: `Option` of the changed row             |
+| `updateVoid(id, patch)`      | UPDATE                                                       |
+| `findById(id)`               | SELECT ... LIMIT 1: `Option` of the row                       |
+| `delete(id)`                 | DELETE                                                       |
+
+`idColumn` names the column a row is found by. A patch cannot set it. A key left out of a
+patch (or `undefined`) keeps its value, as in [`set`](./updates-and-deletes.md#set). A patch
+with no keys is a `QueryBuilderError`.
+
+### Tenant tables
+
+When the table declares a [tenant column](./tenant-scoping.md), the repository is a
+`TenantRepository`, and every method takes the tenant first:
+
+- `insert` and `insertVoid` write the tenant column from that argument. The row type has no
+  tenant column.
+- `update`, `updateVoid`, `findById` and `delete` filter on the tenant column and the id. A row
+  of another tenant is not found, not changed and not deleted. A patch cannot set the tenant
+  column, so it cannot move a row to another tenant.
+- Each statement compiles as `"single-tenant"`, so a `Database` with `requireTenantScope` runs
+  it.
+
+A method called without the tenant does not type-check. The `Table` type does not carry its
+tenant column, so `makeRepository` checks `tenantColumn` against the table when it is built: a
+tenant table without it, or a `tenantColumn` on a table without one, is a `QueryBuilderDefect`.
+
+### ClickHouse
+
+ClickHouse has no `RETURNING`, so `insert` and `update` are defects there
+(`QueryBuilderDefect`), and nothing is written. Use `insertVoid` and `updateVoid`, and
+`findById` to read the row. `updateVoid` is a mutation with `mutations_sync = 2`, and `delete`
+a lightweight delete with `lightweight_deletes_sync = 2`: both wait, so a `findById` after them
+reads what they wrote. Mutations rewrite whole parts, so keep `updateVoid` for occasional
+corrections, as [Updating and deleting rows](./updates-and-deletes.md#clickhouse) says.
+`findById` reads without `FINAL`, so on a `ReplacingMergeTree` it can return an older version.
+
+_(Backed by `src/database/repository.test.ts`, `src/database/repository.test-d.ts` and
+`tests/repository.clickhouse.test.ts`.)_
+
 ## Writes
 
 The builder compiles SELECTs, [INSERTs](./inserts.md) and
