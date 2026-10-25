@@ -18,6 +18,7 @@ import { Effect, Exit, Option, Schema } from "effect"
 import * as CH from "./ch/index"
 import * as T from "./ch/types"
 import * as CHE from "./clickhouse"
+import * as PG from "./postgres"
 import { parseStatement, renderStatement, withSettings } from "./sql/statement"
 import { compileCHUnsafe, compileUnionUnsafe } from "./ch/compile"
 import { raw as rawFragment, compile as compileFragment } from "./sql/sql-fragment"
@@ -277,6 +278,24 @@ describe("docs/expressions.md", () => {
 			expect(Exit.isSuccess(yield* Effect.exit(added.decodeRows([{ total: null }])))).toBe(true)
 		}),
 	)
+
+	it("Text search escapes LIKE wildcards", () => {
+		const search = (text: string) =>
+			CH.from(Events)
+				.select(($) => ({ name: $.Name }))
+				.where(($) => [$.OrgId.eq("org_123"), $.Name.contains(text, { insensitive: true })])
+		expect(oneLine(compileCHUnsafe(search("50%_off"), {}).sql)).toBe(
+			String.raw`SELECT events.Name AS name FROM events WHERE events.OrgId = 'org_123' AND events.Name ILIKE '%50\\%\\_off%'`,
+		)
+
+		const Users = PG.table("users", { columns: { id: PG.text, name: PG.text }, primaryKey: ["id"] })
+		const compiled = PG.compileUnsafe(PG.from(Users).select("id").where(($) => [$.name.startsWith("50%")]))
+		expect(oneLine(compiled.sql)).toBe(String.raw`SELECT "users"."id" AS "id" FROM "users" WHERE "users"."name" LIKE $1 ESCAPE '\'`)
+		expect(compiled.parameters).toEqual([String.raw`50\%%`])
+
+		// `.like()` takes a pattern; escapeLike makes text safe inside one.
+		expect(CHE.escapeLike("50%_off")).toBe(String.raw`50\%\_off`)
+	})
 
 	it("Optional predicates with when", () => {
 		const build = (nameFilter?: string) =>

@@ -135,6 +135,19 @@ numExpr.ilike("%test%")
 // @ts-expect-error — .notLike() requires Expr<string>
 numExpr.notLike("%test%")
 
+expectTypeOf(strExpr.contains("50%")).toMatchTypeOf<Condition>()
+expectTypeOf(strExpr.startsWith("a", { insensitive: true })).toMatchTypeOf<Condition>()
+expectTypeOf(strExpr.endsWith(strExpr)).toMatchTypeOf<Condition>()
+
+// @ts-expect-error — .contains() requires Expr<string>
+numExpr.contains("1")
+
+// @ts-expect-error — the value is a string, not a number
+strExpr.startsWith(1)
+
+// @ts-expect-error — insensitive is a boolean
+strExpr.endsWith("a", { insensitive: "yes" })
+
 // ColumnRef .get() — only valid for Map columns
 
 const mapRef = makeColumnRef<"Attrs", CHMap<CHString, CHString>>("Attrs")
