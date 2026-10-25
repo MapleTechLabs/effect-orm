@@ -456,6 +456,33 @@ layer(Live, { excludeTestServices: true })("Database on PGlite", (it) => {
 		}),
 	)
 
+	it.effect("excluded and excludedAll copy the proposed row into the existing one", () =>
+		Effect.gen(function* () {
+			yield* Db.execute(
+				Db.sql`CREATE TABLE units (id text PRIMARY KEY, name text NOT NULL, rent int4 NOT NULL, created text NOT NULL DEFAULT 'seed')`,
+			)
+			const Units = CH.table("units", { id: PG.text, name: PG.text, rent: PG.int4, created: PG.text }, { defaults: ["created"] })
+			yield* Db.run(CH.insertInto(Units).values({ id: "u1", name: "A", rent: 1, created: "first" }))
+			yield* Db.run(
+				CH.insertInto(Units)
+					.values({ id: "u1", name: "B", rent: 2, created: "second" })
+					.onConflictDoUpdate({ target: ["id"], set: CH.excluded(["name"]) }),
+			)
+			expect(yield* Db.run(CH.from(Units).select("name", "rent", "created"))).toEqual([{ name: "B", rent: 1, created: "first" }])
+			// The rows leave `created` out, so excludedAll keeps it rather than writing the default.
+			const synced = yield* Db.run(
+				CH.insertInto(Units)
+					.values([{ id: "u1", name: "C", rent: 3 }, { id: "u2", name: "D", rent: 4 }])
+					.onConflictDoUpdate({ target: ["id"], set: CH.excludedAll() })
+					.returning("id", "name", "rent", "created"),
+			)
+			expect([...synced].sort((x, y) => x.id.localeCompare(y.id))).toEqual([
+				{ id: "u1", name: "C", rent: 3, created: "first" },
+				{ id: "u2", name: "D", rent: 4, created: "seed" },
+			])
+		}),
+	)
+
 	it.effect("insert ... select copies rows, with ON CONFLICT and RETURNING", () =>
 		Effect.gen(function* () {
 			yield* Db.execute(Db.sql`CREATE TABLE src (org text NOT NULL, n int4 NOT NULL)`)

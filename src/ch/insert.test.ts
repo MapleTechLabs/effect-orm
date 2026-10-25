@@ -187,6 +187,71 @@ describe("insertInto", () => {
 			expect(compiled.parameters).toEqual(["o", "k", 1, false, true, false])
 		})
 
+		it("excluded(columns) sets each named column from the proposed row", () => {
+			const compiled = PG.compileUnsafe(
+				CH.insertInto(Counters).values(row).onConflictDoUpdate({ target: ["org", "key"], set: CH.excluded(["count", "locked"]) }),
+			)
+			expect(compiled.sql).toMatch(
+				/\nON CONFLICT \("org", "key"\) DO UPDATE SET "count" = "excluded"\."count", "locked" = "excluded"\."locked"$/,
+			)
+			expect(compiled.parameters).toEqual(["o", "k", 1, false])
+		})
+
+		it("excludedAll(except) sets each written column but the target's and the excepted ones", () => {
+			const upsert = (set: CH.ExcludedAll<"locked" | "count">) =>
+				PG.compileUnsafe(CH.insertInto(Counters).values(row).onConflictDoUpdate({ target: ["org", "key"], set })).sql
+			expect(upsert(CH.excludedAll())).toMatch(
+				/ DO UPDATE SET "count" = "excluded"\."count", "locked" = "excluded"\."locked"$/,
+			)
+			expect(upsert(CH.excludedAll(["locked"]))).toMatch(/ DO UPDATE SET "count" = "excluded"\."count"$/)
+			// A column the rows leave out is not set: its EXCLUDED value would be the default.
+			const keys = PG.compileUnsafe(
+				CH.insertInto(Keys)
+					.values({ id: "00000000-0000-0000-0000-000000000000", org_id: "o", name: "n", meta: {} })
+					.onConflictDoUpdate({ target: ["id"], set: CH.excludedAll(["org_id"]) }),
+			)
+			expect(keys.sql).toMatch(/ DO UPDATE SET "name" = "excluded"\."name", "meta" = "excluded"\."meta"$/)
+		})
+
+		it("setting the tenant column from the proposed row keeps the rows' tenant scope", () => {
+			const scope = (org: string) =>
+				PG.compileUnsafe(
+					CH.insertInto(Counters).values({ ...row, org }).onConflictDoUpdate({ target: ["key"], set: CH.excludedAll() }),
+				)
+			expect(scope("o").sql).toMatch(/ DO UPDATE SET "org" = "excluded"\."org", "count" = /)
+			expect(scope("o").tenantScope).toBe("single-tenant")
+			const twoTenants = PG.compileUnsafe(
+				CH.insertInto(Counters)
+					.values([row, { ...row, org: "p" }])
+					.onConflictDoUpdate({ target: ["key"], set: ($, excluded) => ({ org: excluded.org }) }),
+			)
+			expect(twoTenants.tenantScope).toBe("cross-tenant")
+		})
+
+		it.effect("excluded with an unknown column, or excludedAll that leaves none, fails", () =>
+			Effect.gen(function* () {
+				const insert = CH.insertInto(Counters).values(row)
+				const unknown = yield* Effect.flip(
+					PG.compile(insert.onConflictDoUpdate({ target: ["key"], set: CH.excluded(["nope"]) as any })),
+				)
+				expect(unknown.code).toBe("InvalidArguments")
+				expect(unknown.message).toContain('"nope"')
+				const unknownExcept = yield* Effect.flip(
+					PG.compile(insert.onConflictDoUpdate({ target: ["key"], set: CH.excludedAll(["nope"]) as any })),
+				)
+				expect(unknownExcept.code).toBe("InvalidArguments")
+				expect(unknownExcept.message).toContain('"nope"')
+				const none = yield* Effect.flip(
+					PG.compile(
+						CH.insertInto(Counters)
+							.values({ org: "o", key: "k", count: 1, locked: false })
+							.onConflictDoUpdate({ target: ["org", "key"], set: CH.excludedAll(["count", "locked"]) }),
+					),
+				)
+				expect(none.message).toContain("sets no columns")
+			}),
+		)
+
 		it("a SET that writes another tenant makes the insert cross-tenant", () => {
 			const insert = CH.insertInto(Counters).values(row)
 			const scope = (org: string) =>
