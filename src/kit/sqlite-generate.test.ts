@@ -171,3 +171,27 @@ it("drops a table only once the data loss is confirmed", async () => {
 	expect(second.plan).toEqual([{ label: "destructive", sql: ['DROP TABLE IF EXISTS "old"'] }])
 	await expectMigratedToEqualFresh(v2)
 })
+
+it("renames a table and a column when a hint says so, keeping rows and indexes", async () => {
+	await generateFrom(links(`id: SQLite.text, url: SQLite.text`, `indexes: [SQLite.index("links_url", ["url"])],`))
+	const v2 = `
+export const Urls = SQLite.table("urls", {
+	columns: { id: SQLite.text, target: SQLite.text },
+	primaryKey: ["id"],
+	indexes: [SQLite.index("links_url", ["target"])],
+})`
+	// Unconfirmed, a rename is a drop plus a create.
+	await expect(generateFrom(v2)).rejects.toMatchObject({ code: "missing_hints" })
+	const second = await generateFrom(v2, {
+		hints: [
+			{ type: "confirm_rename", kind: "table", entity: "links", to: "urls" },
+			{ type: "confirm_rename", kind: "column", entity: "urls.url", to: "target" },
+		],
+	})
+	expect(second.plan).toEqual([
+		{ label: "metadata", sql: ['ALTER TABLE "links" RENAME TO "urls"'] },
+		{ label: "metadata", sql: ['ALTER TABLE "urls" RENAME COLUMN "url" TO "target"'] },
+	])
+	await expectMigratedToEqualFresh(v2)
+	expect(await rowsAfter(allStatements(seedLinks), 'SELECT "target" FROM "urls" ORDER BY "id"')).toEqual([{ target: "https://a" }, { target: "https://b" }])
+})

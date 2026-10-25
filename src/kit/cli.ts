@@ -68,7 +68,9 @@ const promptConfirm = (hint: Hint): Effect.Effect<boolean> =>
 		const rl = createInterface({ input: process.stdin, output: process.stdout })
 		const answer = await rl.question(
 			hint.type === "confirm_rename"
-				? `Rename enum label ${hint.entity} to ${JSON.stringify(hint.to)}? Rows holding it will hold the new label. [y/N] `
+				? hint.kind === "enum_value"
+					? `Rename enum label ${hint.entity} to ${JSON.stringify(hint.to)}? Rows holding it will hold the new label. [y/N] `
+					: `Rename ${hint.kind} ${hint.entity} to ${hint.to}? [y/N] `
 				: `Drop ${hint.kind} ${hint.entity}? ${hint.kind === "enum" ? "Postgres refuses while a column uses it." : "Its data will be lost."} [y/N] `,
 		)
 		rl.close()

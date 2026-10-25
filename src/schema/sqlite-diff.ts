@@ -4,9 +4,10 @@
 // dropping a table or a column needs a `confirm_data_loss` hint.
 
 import { canonicalJson, entityKey } from "./entities"
-import { hintKey, type DiffResult, type Hint } from "./diff"
+import { hintKey, type DiffResult, type Hint, type UnsupportedChange } from "./diff"
 import type { SqliteColumnEntity, SqliteIndexEntity, SqliteSchemaEntity, SqliteTableEntity, SqliteUniqueEntity } from "./sqlite-entities"
 import type { SqliteMigrationOp } from "./sqlite-ops"
+import { sqliteIdent } from "./sqlite-render"
 
 const same = (a: unknown, b: unknown): boolean => canonicalJson(a) === canonicalJson(b)
 
@@ -29,13 +30,16 @@ const opOrder: Record<SqliteMigrationOp["op"], number> = {
 }
 
 export const diffSqliteSchemas = (
-	prev: ReadonlyArray<SqliteSchemaEntity>,
+	original: ReadonlyArray<SqliteSchemaEntity>,
 	next: ReadonlyArray<SqliteSchemaEntity>,
 	hints: ReadonlyArray<Hint> = [],
 ): DiffResult<SqliteMigrationOp> => {
 	const given = new Set(hints.map(hintKey))
 	const ops: Array<SqliteMigrationOp> = []
 	const missingHints: Array<Hint> = []
+	const unsupported: Array<UnsupportedChange> = []
+	// Renames run first; everything after compares the renamed schema with the next one.
+	const prev = applyRenames(original, next, hints, ops, unsupported)
 	/** Push `op` once every hint it needs was given; otherwise report the missing ones. */
 	const confirm = (needed: Hint | ReadonlyArray<Hint>, op: SqliteMigrationOp): void => {
 		const missing = (Array.isArray(needed) ? needed : [needed]).filter((hint) => !given.has(hintKey(hint)))
@@ -90,7 +94,7 @@ export const diffSqliteSchemas = (
 			.sort(([a, i], [b, j]) => opOrder[a.op] - opOrder[b.op] || i - j)
 			.map(([op]) => op),
 		missingHints,
-		unsupported: [],
+		unsupported,
 	}
 }
 
@@ -159,3 +163,51 @@ const diffTable = (
 
 const byName = (uniques: ReadonlyArray<SqliteUniqueEntity>) =>
 	[...uniques].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+
+/**
+ * Apply the `confirm_rename` hints for tables and columns: an op for each, and
+ * `prev` as it reads after them. SQLite's RENAME rewrites the indexes and
+ * constraints that name the table or column, so they are renamed here too.
+ * A hint that does not match the two schemas is reported.
+ */
+const applyRenames = (
+	prev: ReadonlyArray<SqliteSchemaEntity>,
+	next: ReadonlyArray<SqliteSchemaEntity>,
+	hints: ReadonlyArray<Hint>,
+	ops: Array<SqliteMigrationOp>,
+	unsupported: Array<UnsupportedChange>,
+): ReadonlyArray<SqliteSchemaEntity> => {
+	let entities = prev
+	const has = (list: ReadonlyArray<SqliteSchemaEntity>, kind: "table" | "column", table: string, name?: string) =>
+		list.some((e) => (kind === "table" ? e.kind === "table" && e.name === table : e.kind === "column" && e.table === table && e.name === name))
+	for (const hint of hints) {
+		if (hint.type !== "confirm_rename" || hint.kind !== "table") continue
+		if (!has(entities, "table", hint.entity) || has(entities, "table", hint.to) || !has(next, "table", hint.to) || has(next, "table", hint.entity)) {
+			unsupported.push({ entity: hint.entity, message: `cannot rename to ${hint.to}: the old table must exist only before, and the new one only after` })
+			continue
+		}
+		ops.push({ op: "rename_table", from: hint.entity, to: hint.to })
+		entities = entities.map((e) => (e.kind === "table" ? (e.name === hint.entity ? { ...e, name: hint.to } : e) : e.table === hint.entity ? { ...e, table: hint.to } : e))
+	}
+	for (const hint of hints) {
+		if (hint.type !== "confirm_rename" || hint.kind !== "column") continue
+		const dot = hint.entity.lastIndexOf(".")
+		const table = hint.entity.slice(0, dot)
+		const from = hint.entity.slice(dot + 1)
+		if (dot <= 0 || !has(entities, "column", table, from) || has(entities, "column", table, hint.to) || !has(next, "column", table, hint.to) || has(next, "column", table, from)) {
+			unsupported.push({ entity: hint.entity, message: `cannot rename to ${hint.to}: the old column must exist only before, and the new one only after` })
+			continue
+		}
+		ops.push({ op: "rename_column", table, from, to: hint.to })
+		const rename = (name: string) => (name === from ? hint.to : name)
+		const quoted = sqliteIdent(from)
+		entities = entities.map((e): SqliteSchemaEntity => {
+			if (e.kind === "table") return e.name === table && e.primaryKey !== null ? { ...e, primaryKey: { columns: e.primaryKey.columns.map(rename) } } : e
+			if (e.table !== table) return e
+			if (e.kind === "column") return { ...e, name: rename(e.name) }
+			if (e.kind === "unique") return { ...e, columns: e.columns.map(rename) }
+			return { ...e, columns: e.columns.map((part) => part.split(quoted).join(sqliteIdent(hint.to))) }
+		})
+	}
+	return entities
+}
