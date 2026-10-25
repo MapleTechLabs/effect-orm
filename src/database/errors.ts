@@ -4,17 +4,62 @@ import { Schema } from "effect"
  * A statement failed: the server rejected it, or the connection failed while it ran.
  *
  * `reason` is the driver's classification (`SqlError.reason._tag`:
- * `UniqueViolation`, `SerializationError`, `DeadlockError`, ...) and `sqlState`
- * the server's error code when the driver reported one, so callers can branch
- * without digging through `cause`.
+ * `UniqueViolation`, `SerializationError`, `DeadlockError`, ...), `sqlState`
+ * the server's five-character code (Postgres) and `errorCode` its numeric code
+ * (ClickHouse), when the driver reported one, so callers can branch without
+ * digging through `cause`. `refineConstraints` turns a constraint failure into
+ * a `ConstraintViolation`.
  */
 export class DatabaseError extends Schema.TaggedError<DatabaseError>()("@maple-dev/effect-orm/DatabaseError", {
 	message: Schema.String,
 	sql: Schema.String,
 	reason: Schema.String,
 	sqlState: Schema.optional(Schema.String),
+	errorCode: Schema.optional(Schema.Number),
 	cause: Schema.Defect(),
 }) {}
+
+// What every constraint violation carries. `constraint`, `table` and `column`
+// are present when the server named them: Postgres names the constraint and
+// table, and the column for NOT NULL; ClickHouse names the CHECK constraint.
+// `cause` is the `DatabaseError` or `TransactionCommitFailed` it came from.
+const ViolationFields = {
+	message: Schema.String,
+	sql: Schema.optional(Schema.String),
+	constraint: Schema.optional(Schema.String),
+	table: Schema.optional(Schema.String),
+	column: Schema.optional(Schema.String),
+	sqlState: Schema.optional(Schema.String),
+	errorCode: Schema.optional(Schema.Number),
+	cause: Schema.Defect(),
+}
+
+/** A row would duplicate a unique key or primary key. Postgres SQLSTATE 23505. */
+export class UniqueViolation extends Schema.TaggedError<UniqueViolation>()(
+	"@maple-dev/effect-orm/UniqueViolation",
+	ViolationFields,
+) {}
+
+/** A row references a missing row, or a delete leaves rows that reference it. Postgres SQLSTATE 23503. */
+export class ForeignKeyViolation extends Schema.TaggedError<ForeignKeyViolation>()(
+	"@maple-dev/effect-orm/ForeignKeyViolation",
+	ViolationFields,
+) {}
+
+/** A NOT NULL column got NULL. Postgres SQLSTATE 23502. */
+export class NotNullViolation extends Schema.TaggedError<NotNullViolation>()(
+	"@maple-dev/effect-orm/NotNullViolation",
+	ViolationFields,
+) {}
+
+/** A row fails a CHECK constraint. Postgres SQLSTATE 23514, ClickHouse code 469 (`VIOLATED_CONSTRAINT`). */
+export class CheckViolation extends Schema.TaggedError<CheckViolation>()(
+	"@maple-dev/effect-orm/CheckViolation",
+	ViolationFields,
+) {}
+
+/** The constraint violations `refineConstraints` lifts out of `DatabaseError` and `TransactionCommitFailed`. */
+export type ConstraintViolation = UniqueViolation | ForeignKeyViolation | NotNullViolation | CheckViolation
 
 /** The database's dialect has no transactions (ClickHouse), or none at this nesting depth. */
 export class TransactionUnsupported extends Schema.TaggedError<TransactionUnsupported>()(
@@ -42,6 +87,7 @@ export class TransactionCommitFailed extends Schema.TaggedError<TransactionCommi
 		message: Schema.String,
 		reason: Schema.String,
 		sqlState: Schema.optional(Schema.String),
+		errorCode: Schema.optional(Schema.Number),
 		cause: Schema.Defect(),
 	},
 ) {}

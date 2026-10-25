@@ -92,6 +92,8 @@ Calling `withdraw(1, 30)` outside `transfer` does not compile: `requireTransacti
 | `retryContention(options?)` | Re-run on serialization failure or deadlock |
 | `Transaction` | The open transaction (`depth`, `isolationLevel`, `accessMode`) |
 | `isContention(error)` | Whether an error is a serialization failure or deadlock |
+| `refineConstraints(effect)` | Fail with a typed `ConstraintViolation` where a statement broke a constraint ([Constraint violations](#constraint-violations)) |
+| `constraintViolation(error)` | The `ConstraintViolation` an error reports, as an `Option` |
 
 `run`, `query`, `execute`, `transaction` and `retryContention` are also methods on
 `DatabaseApi`.
@@ -214,11 +216,47 @@ again. `read uncommitted` is not offered because Postgres runs it as `read commi
 
 | Error | When |
 | --- | --- |
-| `DatabaseError` | A statement failed. `reason` is the driver's classification (`UniqueViolation`, `SerializationError`, ...) and `sqlState` the server's code |
-| `TransactionCommitFailed` | COMMIT failed: a deferred constraint, a serialization failure at commit, a dropped connection. Carries `reason` and `sqlState` |
+| `DatabaseError` | A statement failed. `reason` is the driver's classification (`UniqueViolation`, `SerializationError`, ...), `sqlState` the server's five-character code (Postgres) and `errorCode` its numeric code (ClickHouse) |
+| `TransactionCommitFailed` | COMMIT failed: a deferred constraint, a serialization failure at commit, a dropped connection. Carries `reason`, `sqlState` and `errorCode` |
 | `TransactionRollbackFailed` | ROLLBACK failed after the body failed. `bodyCause` is the body's failure, `cause` the rollback's |
 | `TransactionOptionsRejected` | A setting the dialect does not support, or settings on a nested transaction |
 | `TransactionUnsupported` | The dialect has no transactions (ClickHouse) |
+
+### Constraint violations
+
+`refineConstraints(effect)` turns a `DatabaseError` or `TransactionCommitFailed` for a broken
+constraint into one tagged error per kind, so you can `catchTag` a duplicate key instead of
+reading SQLSTATEs. Every other failure passes through unchanged.
+
+| Error | Postgres SQLSTATE | ClickHouse code |
+| --- | --- | --- |
+| `UniqueViolation` | 23505 | — |
+| `ForeignKeyViolation` | 23503 | — |
+| `NotNullViolation` | 23502 | — |
+| `CheckViolation` | 23514 | 469 (`VIOLATED_CONSTRAINT`) |
+
+Each carries `message`, `sql`, the server's `sqlState` or `errorCode`, and `cause` (the error it
+came from). It also carries `constraint`, `table` and `column` when the server named them:
+Postgres names the constraint and the table, and the column for NOT NULL. ClickHouse names the
+CHECK constraint and the table (`db.table`) in its message. ClickHouse has no unique, foreign key
+or NOT NULL constraints to violate.
+
+```ts title="database-constraints.ts"
+import { Effect } from "effect"
+import * as Db from "@maple-dev/effect-orm/database"
+
+// An idempotent write: a duplicate email is "already exists", not a failure.
+export const register = (email: string) =>
+	Db.execute(Db.sql`INSERT INTO users (email) VALUES (${email})`).pipe(
+		Db.refineConstraints,
+		Effect.as("created" as const),
+		Effect.catchTag("@maple-dev/effect-orm/UniqueViolation", () => Effect.succeed("exists" as const)),
+	)
+// Effect<"created" | "exists", DatabaseError | ForeignKeyViolation | NotNullViolation | CheckViolation, Database>
+```
+
+A deferred constraint fails at COMMIT, so put `refineConstraints` outside the `transaction`
+to see it.
 
 Effect 4.0.0 turns a failed COMMIT or ROLLBACK into a defect and, when ROLLBACK fails, drops
 the body's own failure. `transaction` turns both back into the typed errors above. Defects

@@ -30,7 +30,7 @@ import {
 	type TransactionError,
 } from "./errors"
 import { isSqlTemplate, renderTemplate, type SqlTemplate } from "./sql"
-import { firstLine, reasonOf, sqlStateOf, toDatabaseError } from "./sql-error"
+import { errorCodeOf, firstLine, reasonOf, sqlStateOf, toDatabaseError } from "./sql-error"
 import { traceStatement, type TracedStatement } from "./tracing"
 
 /** SQL and the values bound to its placeholders. A `CompiledQuery` is one. */
@@ -445,11 +445,13 @@ const restoreCause = <E>(
 		const error = defect.success
 		if (bodyExit !== undefined && Exit.isSuccess(bodyExit)) {
 			const sqlState = sqlStateOf(error)
+			const errorCode = errorCodeOf(error)
 			return Effect.fail(
 				new TransactionCommitFailed({
 					message: `${depth === 0 ? "COMMIT" : "releasing the savepoint"} failed: ${firstLine(error)}`,
 					reason: reasonOf(error),
 					...(sqlState === undefined ? undefined : { sqlState }),
+					...(errorCode === undefined ? undefined : { errorCode }),
 					cause: error,
 				}),
 			)

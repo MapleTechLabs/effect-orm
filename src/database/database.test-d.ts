@@ -77,3 +77,10 @@ expectTypeOf(Db.run(upsert, { count: 1 })).toEqualTypeOf<Effect.Effect<ReadonlyA
 // @ts-expect-error the param is still required
 Db.run(upsert)
 expectTypeOf(PG.compileUnsafe(upsert, { count: 1 })).toEqualTypeOf<CH.CompiledQuery<{ readonly count: number }, undefined>>()
+
+// `refineConstraints` adds the violations; catching one removes it.
+const write = Db.execute(Db.sql`INSERT INTO t VALUES (1)`).pipe(Db.refineConstraints)
+expectTypeOf(write).toEqualTypeOf<Effect.Effect<void, Db.DatabaseError | Db.ConstraintViolation, Db.Database>>()
+expectTypeOf(write.pipe(Effect.catchTag("@maple-dev/effect-orm/UniqueViolation", (error) => Effect.succeed(error.constraint)))).toEqualTypeOf<
+	Effect.Effect<string | undefined | void, Db.DatabaseError | Db.ForeignKeyViolation | Db.NotNullViolation | Db.CheckViolation, Db.Database>
+>()
