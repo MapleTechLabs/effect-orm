@@ -14,7 +14,7 @@ import type { Expr } from "../ch/expr"
 import { encodeColumnLiteral } from "../ch/literal"
 import { createColumnAccessor, type CHQuery, type ColumnAccessor, type NeedsSelect } from "../ch/query"
 import { table, type Table } from "../ch/table"
-import type { CHType, ColumnDefs, InferTS } from "../ch/types"
+import { columnSqlName, type CHType, type ColumnDefs, type InferTS } from "../ch/types"
 import { compile as compileFragment } from "../sql/sql-fragment"
 import type {
 	ColumnDefault,
@@ -24,6 +24,7 @@ import type {
 	MaterializedViewEntity,
 	TableEntity,
 } from "./entities"
+import { casedName, type Casing } from "./casing"
 import { checkIdentifier, withRenderProblems, type DefinitionProblem, type ProblemSink } from "./problems"
 
 export { SchemaDefinitionError, type DefinitionProblem } from "./problems"
@@ -45,13 +46,22 @@ const renderExpr = <Cols extends ColumnDefs>(expr: DdlExpr<Cols>, columns: Cols)
 	typeof expr === "string" ? expr : renderExprValue(expr(createColumnAccessor(columns)))
 
 const renderKey = <Cols extends ColumnDefs>(key: DdlKey<Cols>, columns: Cols): string => {
-	const parts = typeof key === "function" ? key(createColumnAccessor(columns)).map(renderExprValue) : [...key]
+	const parts =
+		typeof key === "function"
+			? key(createColumnAccessor(columns)).map(renderExprValue)
+			: key.map((column) => columnSqlName(columns, column))
 	return parts.length === 1 ? parts[0]! : `(${parts.join(", ")})`
 }
 
 // Columns
 
 export interface ColumnOptions<T extends CHType<string, any, any>> {
+	/**
+	 * The column's name in the database, when it differs from its key in
+	 * `columns`: `orgId: CH.column(CH.string, { name: "org_id" })` is read and
+	 * written as `$.orgId` and stored as `org_id`.
+	 */
+	readonly name?: string
 	/** A literal default, encoded through the column's own type. */
 	readonly default?: InferTS<T>
 	/** `DEFAULT <expr>`, for a computed default. */
@@ -122,6 +132,20 @@ export type ComputedColumnsOf<I extends Record<string, ColumnInput>> = {
 const isColumnSpec = (input: ColumnInput): input is ColumnSpec<CHType<string, any, any>, any> =>
 	"_tag" in input && input._tag === "ColumnSpec"
 
+/**
+ * A column type that carries its database name as `sqlName` when that differs
+ * from its key: the column's own `name`, else the one the table's `casing` gives.
+ */
+export const namedColumnType = (
+	key: string,
+	type: CHType<string, any, any>,
+	name: string | undefined,
+	casing: Casing | undefined,
+): CHType<string, any, any> => {
+	const sqlName = name ?? casedName(key, casing)
+	return sqlName === undefined || sqlName === key ? type : { ...type, sqlName }
+}
+
 // Engines
 
 const engineOf = (family: string, ...params: ReadonlyArray<string | undefined>): EngineSpec => ({
@@ -189,6 +213,8 @@ export interface TableDefinition<Columns extends Record<string, ColumnInput>> {
 	readonly comment?: string
 	/** The column carrying row-level tenancy; see docs/tenant-scoping.md. */
 	readonly tenantColumn?: keyof Columns & string
+	/** Database names for the columns that give no `name`: `"snake_case"` stores `orgId` as `org_id`. */
+	readonly casing?: Casing
 }
 
 /**
@@ -201,6 +227,7 @@ export interface ExternalTableDefinition<Columns extends Record<string, ColumnIn
 	readonly external: true
 	readonly columns: Columns
 	readonly tenantColumn?: keyof Columns & string
+	readonly casing?: Casing
 }
 
 /**
@@ -209,11 +236,9 @@ export interface ExternalTableDefinition<Columns extends Record<string, ColumnIn
  */
 export const externalTable = <const Name extends string>(
 	name: Name,
-	definition: { readonly columns: Record<string, unknown>; readonly tenantColumn?: string },
+	definition: { readonly columns: Record<string, unknown>; readonly tenantColumn?: string; readonly casing?: Casing },
 	isSpec: (input: unknown) => input is { readonly type: CHType<string, any, any>; readonly options: object },
 	computedOptions: ReadonlyArray<string>,
-	/** The query-side type of a spec; the Postgres one carries the column's `name`. */
-	typeOf: (spec: { readonly type: CHType<string, any, any>; readonly options: object }) => CHType<string, any, any> = (spec) => spec.type,
 ): Table<Name, any, any, any> => {
 	const inputs = Object.entries(definition.columns)
 	const specs = inputs.filter((entry): entry is [string, { readonly type: CHType<string, any, any>; readonly options: object }] =>
@@ -225,7 +250,14 @@ export const externalTable = <const Name extends string>(
 		Object.entries(options).some(([key, value]) => key !== "name" && value !== undefined)
 	return table(
 		name,
-		Object.fromEntries(inputs.map(([column, input]) => [column, isSpec(input) ? typeOf(input) : input])) as ColumnDefs,
+		Object.fromEntries(
+			inputs.map(([column, input]) => [
+				column,
+				isSpec(input)
+					? namedColumnType(column, input.type, (input.options as { readonly name?: string }).name, definition.casing)
+					: namedColumnType(column, input as CHType<string, any, any>, undefined, definition.casing),
+			]),
+		) as ColumnDefs,
 		{
 			...(definition.tenantColumn !== undefined ? { tenantColumn: definition.tenantColumn } : undefined),
 			defaults: specs.filter(([, spec]) => given(spec.options) && !isComputed(spec.options)).map(([column]) => column),
@@ -318,8 +350,14 @@ function buildTable<const Name extends string, const Columns extends Record<stri
 	const inputs = Object.entries(definition.columns)
 	if (inputs.length === 0) problems.push({ object: name, message: "a table needs columns" })
 	const types = Object.fromEntries(
-		inputs.map(([column, input]) => [column, isColumnSpec(input) ? input.type : input]),
+		inputs.map(([column, input]) => [
+			column,
+			isColumnSpec(input)
+				? namedColumnType(column, input.type, input.options.name, definition.casing)
+				: namedColumnType(column, input, undefined, definition.casing),
+		]),
 	) as ColumnsOf<Columns>
+	const sqlName = (column: string) => columnSqlName(types, column)
 
 	if (isMergeTreeFamily(definition.engine) && definition.orderBy === undefined) {
 		problems.push({ object: name, message: `${definition.engine.family} needs orderBy (use [] for ORDER BY tuple())` })
@@ -334,14 +372,14 @@ function buildTable<const Name extends string, const Columns extends Record<stri
 	}
 
 	const columnEntities = inputs.map(([column, input], position): ColumnEntity => {
-		checkIdentifier(problems, `${name}.${column}`, column)
+		checkIdentifier(problems, `${name}.${column}`, sqlName(column))
 		const spec: ColumnSpec<CHType<string, any, any>> = isColumnSpec(input)
 			? input
 			: { _tag: "ColumnSpec", type: input as CHType<string, any, any>, options: {} }
 		return {
 			kind: "column",
 			table: name,
-			name: column,
+			name: sqlName(column),
 			position,
 			type: spec.type.sql,
 			default: columnDefault(problems, name, column, spec, types),
@@ -381,10 +419,11 @@ function buildTable<const Name extends string, const Columns extends Record<stri
 		comment: definition.comment ?? null,
 	}
 
-	const defaults = columnEntities.filter((c) => c.default?.kind === "DEFAULT").map((c) => c.name)
-	const computed = columnEntities
-		.filter((c) => c.default?.kind === "MATERIALIZED" || c.default?.kind === "ALIAS")
-		.map((c) => c.name)
+	// Keys, not database names: the insert row type speaks keys.
+	const keysWhere = (kinds: ReadonlyArray<string>) =>
+		inputs.flatMap(([column], position) => (kinds.includes(columnEntities[position]!.default?.kind ?? "") ? [column] : []))
+	const defaults = keysWhere(["DEFAULT"])
+	const computed = keysWhere(["MATERIALIZED", "ALIAS"])
 	return {
 		_tag: "Table",
 		name,
@@ -440,12 +479,26 @@ export function materializedView<
 		? unknown
 		: { readonly targetCannotTake: MisfitColumns<Output, Cols> }),
 ): MaterializedView<Name> {
-	return withRenderProblems(name, () => buildView(name, options.to.name, options.as))
+	return withRenderProblems(name, () => buildView(name, options.to, options.as))
 }
 
-function buildView<const Name extends string>(name: Name, to: string, as: CHQuery<any, any, any, any>): MaterializedView<Name> {
+function buildView<const Name extends string>(
+	name: Name,
+	target: Table<string, ColumnDefs, any, any>,
+	as: CHQuery<any, any, any, any>,
+): MaterializedView<Name> {
 	const problems: ProblemSink = []
+	const to = target.name
 	checkIdentifier(problems, name, name)
+	// The view's SELECT names its output by key, and ClickHouse fills the target by database name.
+	for (const [column, type] of Object.entries(target.columns)) {
+		if (type.sqlName !== undefined && type.sqlName !== column) {
+			problems.push({
+				object: name,
+				message: `${to} renames ${column} to ${type.sqlName}; a materialized view writes its output by database name, so give the target column no name`,
+			})
+		}
+	}
 	const source = leftmostTable(as)
 	if (source === undefined) {
 		problems.push({ object: name, message: "a materialized view cannot read FROM a union; define one view per branch" })

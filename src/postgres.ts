@@ -53,6 +53,7 @@ export {
 	type ExternalTableDefinition,
 } from "./schema/pg-define"
 export { SchemaDefinitionError, type DefinitionProblem, type DdlExpr, type DdlKey } from "./schema/define"
+export { type Casing } from "./schema/casing"
 
 /** `compile`, for Postgres unless `options.dialect` says otherwise. */
 // Typed through `any` and cast: `compileCH` is overloaded (queries and inserts),
