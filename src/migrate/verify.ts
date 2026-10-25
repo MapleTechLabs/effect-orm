@@ -1,4 +1,5 @@
-// Drift: the live schema against the snapshot of the last applied migration.
+// Drift: the live schema against the snapshot of the last applied migration
+// (`verify`), or against any snapshot (`verifySnapshot`).
 //
 // Not against the code's latest schema: a database three migrations behind is
 // behind, not drifted. Expressions and types are normalized by the server
@@ -12,7 +13,7 @@
 
 import { Effect } from "effect"
 import { quoteClickHouseString } from "../sql/sql-fragment"
-import type { SchemaDialect, ClickHouseSnapshot, ColumnEntity, IndexEntity, MaterializedViewEntity, TableEntity } from "../schema/entities"
+import type { SchemaDialect, ClickHouseSnapshot, ColumnEntity, IndexEntity, MaterializedViewEntity, Snapshot, TableEntity } from "../schema/entities"
 import { MigrationDriver } from "./driver"
 import { readClickHouseCatalog, splitEngineFull, stripDatabase, type CatalogRow } from "./introspect"
 import type { MigrateSourceError, MigrateSqlError } from "./errors"
@@ -122,9 +123,21 @@ export const verify = (
 		const against = [...migrations].reverse().find((m) => appliedNames.has(m.name) && m.snapshot !== undefined)
 		const snapshot = against?.snapshot
 		if (against === undefined || snapshot === undefined) return { against: undefined, drift: [] }
-		if (snapshot.dialect === "postgres") return { against: against.name, drift: yield* verifyPg(snapshot, against.name, options) }
-		return { against: against.name, drift: yield* verifyClickHouse(snapshot) }
+		return { against: against.name, drift: yield* verifySnapshot(snapshot, options, against.name) }
 	})
+
+/**
+ * Compare the database with any snapshot, with no migrations folder and no
+ * ledger: the one `makeSnapshot` builds from the table definitions, say. The
+ * dialect is the snapshot's. `verify` is this, with the snapshot of the last
+ * applied migration. `label` names the snapshot in a Postgres error.
+ */
+export const verifySnapshot = (
+	snapshot: Snapshot,
+	options: PgVerifyOptions = {},
+	label = "snapshot",
+): Effect.Effect<ReadonlyArray<Drift>, MigrateSqlError | MigrateSourceError, MigrationDriver> =>
+	snapshot.dialect === "postgres" ? verifyPg(snapshot, label, options) : verifyClickHouse(snapshot)
 
 const verifyClickHouse = (snapshot: ClickHouseSnapshot): Effect.Effect<ReadonlyArray<Drift>, MigrateSqlError, MigrationDriver> =>
 	Effect.gen(function* () {

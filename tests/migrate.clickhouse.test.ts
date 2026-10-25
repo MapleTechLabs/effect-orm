@@ -315,5 +315,27 @@ describe("migrate", () => {
 				),
 			)
 		})
+
+		it("compares a snapshot of the definitions with a database that has no ledger", async () => {
+			await Effect.runPromise(
+				withDatabase(
+					Effect.gen(function* () {
+						// Created by hand, as another tool would: no migrations folder, no ledger.
+						const entities = yield* S.entitiesOf([Events, Totals, TotalsMv])
+						const sql = yield* ClickhouseClient.ClickhouseClient
+						for (const statement of S.renderSchema(entities)) yield* sql.asCommand(sql.unsafe(statement))
+						const snapshot = yield* S.makeSnapshot(entities, [S.ORIGIN_ID])
+						expect(yield* Migrate.verifySnapshot(snapshot)).toEqual([])
+
+						yield* sql.asCommand(sql.unsafe("ALTER TABLE events MODIFY COLUMN Name Nullable(String)"))
+						yield* sql.asCommand(sql.unsafe("ALTER TABLE events DROP INDEX idx_name"))
+						expect(yield* Migrate.verifySnapshot(snapshot)).toEqual([
+							{ entity: "events.Name", problem: "type", expected: "String", actual: "Nullable(String)" },
+							{ entity: "events.idx_name", problem: "missing" },
+						])
+					}),
+				),
+			)
+		})
 	})
 })
