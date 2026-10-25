@@ -9,7 +9,7 @@ import { Hints, type Hint } from "../schema/diff"
 import { check, generate, KitError, readMigrations, type KitConfig } from "./generate"
 import { pull } from "./pull"
 
-const help = `effect-orm: schema migrations for ClickHouse and Postgres
+const help = `effect-orm: schema migrations for ClickHouse and Postgres, and generated SQLite migrations
 
   generate [--name x] [--custom]   Diff the schema against the migrations folder and write the next migration
            [--hints <json>] [--hints-file <path>]
@@ -19,7 +19,7 @@ const help = `effect-orm: schema migrations for ClickHouse and Postgres
                                    Write table definitions from the database (ClickHouse). Default --out: the
                                    config's schema module, when it names one. Then run generate --baseline
   check                            Validate the migrations folder (snapshot chain, branch conflicts)
-  migrate [--strict]               Apply pending migrations (needs config.driver)
+  migrate [--strict]               Apply pending migrations (needs config.driver; not SQLite yet)
   status                           Applied, pending, partial, or changed, per migration
   verify                           Compare the database with the last applied snapshot
   baseline <migration>             Record <migration> and every one before it as applied, without running them
