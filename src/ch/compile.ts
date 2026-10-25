@@ -22,7 +22,8 @@ import { activeLiteralBinder, withLiteralBinder } from "../sql/literal-binder"
 import { compileQuery, type SqlQuery } from "../sql/sql-query"
 import { track, untracked, type RenderTrack } from "../sql/render-tracker"
 import { PARAM_MARKER_PREFIX, PARAM_PLACEHOLDER_PATTERN, param, paramColumnTypeOf, paramSchema, type ParamKind } from "./param"
-import { mergeResultSchemas } from "./define-fn"
+import { mergeResultSchemas, withoutNull } from "./define-fn"
+import { notNullFactsOf } from "./facts"
 import { encodeValue } from "./literal"
 import { checkedLiteral, clickhouseDialect, currentDialect, withDialect, type Dialect } from "./dialect"
 import { Effect, Option, Schema } from "effect"
@@ -1176,7 +1177,11 @@ function deriveTenantScope(
  * Shared with `selectExprsOf` below, which needs the same accessor to read a
  * query's output schemas without compiling it.
  */
-function makeAccessor(state: CHQueryState): any {
+function makeAccessor(
+	state: CHQueryState,
+	/** Joined columns proven not NULL, as `alias` → column keys. */
+	notNull?: ReadonlyMap<string, ReadonlySet<string>>,
+): any {
 	const joinAliases = state.typedJoins.map((j) => j.alias)
 	const hasJoins = joinAliases.length > 0
 	if (!hasJoins) return createQualifiedColumnAccessor(sourceAlias(state), state.tenantColumn, columnsOf(state))
@@ -1188,8 +1193,38 @@ function makeAccessor(state: CHQueryState): any {
 		mainAlias,
 		state.tenantColumn,
 		Object.fromEntries(state.typedJoins.map((j) => [j.alias, j.tenantColumn])),
-		Object.fromEntries(state.typedJoins.map((j) => [j.alias, joinColumnsOf(j)])),
+		Object.fromEntries(state.typedJoins.map((j) => [j.alias, joinColumnsOf(j, notNull?.get(j.alias))])),
 	)
+}
+
+/**
+ * The joined columns the WHERE conditions before `select` prove not NULL,
+ * `undefined` when none. Read off the same top-level AND list whose type
+ * `where` narrows, so the row schema drops `null` exactly where the type does.
+ */
+function selectNotNullOf(state: CHQueryState): ReadonlyMap<string, ReadonlySet<string>> | undefined {
+	if (state.selectWhereFn === undefined || state.typedJoins.length === 0) return undefined
+	const proven = new Map<string, Set<string>>()
+	for (const condition of state.selectWhereFn(makeAccessor(state))) {
+		if (condition == null) continue
+		for (const fact of notNullFactsOf(condition)) {
+			const columns = proven.get(fact.source) ?? new Set<string>()
+			columns.add(fact.column)
+			proven.set(fact.source, columns)
+		}
+	}
+	return proven.size === 0 ? undefined : proven
+}
+
+/** A column type proven not NULL: a `Nullable` column's inner type, or its schema without the `null` member. */
+function nonNullColumn(type: CHType<string, any, any>): CHType<string, any, any> {
+	if (type._tag === "Nullable" && type.element !== undefined) {
+		return type.sqlName === undefined ? type.element : { ...type.element, sqlName: type.sqlName }
+	}
+	const schema = withoutNull(type.schema)
+	return schema === undefined
+		? type
+		: { ...type, schema, literalSchema: withoutNull(type.literalSchema) ?? type.literalSchema }
 }
 
 /**
@@ -1199,22 +1234,30 @@ function makeAccessor(state: CHQueryState): any {
  * `innerJoinQuery` records no columns (there is no table to read them from), so
  * without this every `$.alias.field` off a joined subquery is untyped.
  */
-function joinColumnsOf(join: {
-	readonly type: "INNER" | "LEFT" | "CROSS"
-	readonly columns?: ColumnDefs
-	readonly innerQuery?: CHQuery<any, any, any>
-}): ColumnDefs | undefined {
+function joinColumnsOf(
+	join: {
+		readonly type: "INNER" | "LEFT" | "CROSS"
+		readonly columns?: ColumnDefs
+		readonly innerQuery?: CHQuery<any, any, any>
+	},
+	/** The columns a WHERE condition proves not NULL: they lose `null`, the LEFT JOIN's included. */
+	notNull?: ReadonlySet<string>,
+): ColumnDefs | undefined {
 	const exprs = join.innerQuery === undefined ? undefined : selectExprsOf(join.innerQuery)
 	const columns = join.columns ?? (exprs === undefined ? undefined : synthesizeColumns(exprs))
-	if (columns === undefined || join.type !== "LEFT") return columns
+	if (columns === undefined || (join.type !== "LEFT" && notNull === undefined)) return columns
 	return Object.fromEntries(
 		Object.entries(columns).map(([name, type]) => [
 			name,
-			{
-				...type,
-				schema: Schema.NullOr(type.schema),
-				literalSchema: Schema.NullOr(type.literalSchema),
-			},
+			notNull?.has(name) === true
+				? nonNullColumn(type)
+				: join.type !== "LEFT"
+					? type
+					: {
+							...type,
+							schema: Schema.NullOr(type.schema),
+							literalSchema: Schema.NullOr(type.literalSchema),
+						},
 		]),
 	)
 }
@@ -1294,6 +1337,8 @@ function selectExprsOf(query: CHQuery<any, any, any>): Record<string, unknown> |
  * bare `select()` over a subquery or union, every alias that source selects.
  */
 function selectRecordOf(state: CHQueryState, $: any): Record<string, any> | undefined {
+	const notNull = selectNotNullOf(state)
+	if (notNull !== undefined) $ = makeAccessor(state, notNull)
 	if (state.selectAll) {
 		const source = state.fromUnion ? unionExprsOf(state.fromUnion._state.queries) : state.fromQuery ? selectExprsOf(state.fromQuery) : undefined
 		return source === undefined ? undefined : Object.fromEntries(Object.keys(source).map((alias) => [alias, $[alias]]))
