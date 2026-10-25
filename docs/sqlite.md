@@ -29,7 +29,18 @@ Unlike the ClickHouse and Postgres entries, SQLite has no schema diff, introspec
 ledger or kit dialect yet. A `table` value here cannot be passed to the DDL generators.
 
 The entry exports `text`, `integer` (a safe JavaScript integer), `real` (finite numbers),
-`boolean` (0/1), `blob`, `timestamp` (ISO text), `json(schema)`, `nullable`, `custom` and `brand`.
+`boolean` (0/1), `blob`, `timestamp`, `json(schema)`, `nullable`, `custom` and `brand`.
+
+`integer` refuses a stored value past 2^53 with a decode error: as a JavaScript number it would
+no longer be the stored integer (D1 rounds it; node:sqlite refuses it). Use `custom` with a
+bigint codec for such columns.
+
+`timestamp` stores an instant as SQLite's own text form, `YYYY-MM-DD HH:MM:SS.SSS` in UTC, the
+form `strftime('%Y-%m-%d %H:%M:%f')` and `datetime(..., 'subsec')` write. It reads that form
+and ISO-8601; text without a zone is UTC. SQLite compares text by bytes, so a timestamp column
+orders by time only when every value in it has one form: write them through the builder or with
+`strftime('%Y-%m-%d %H:%M:%f', ...)`. `CURRENT_TIMESTAMP` writes no milliseconds
+(`2026-01-01 00:00:00`), which compares as earlier than the same instant written with them.
 `blob` accepts the Uint8Array wire form from Node and the array-of-bytes form from D1.
 `json` always uses the supplied schema to validate decoded JSON.
 Use `text` when a stored date/time must remain a string.

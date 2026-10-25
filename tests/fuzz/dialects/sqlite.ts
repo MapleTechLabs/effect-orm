@@ -24,7 +24,7 @@ const semantics: Semantics = {
 
 // SQLite stores U+0000, but its drivers end text there, so the dialect refuses it.
 const strings: StringRules = { nul: false, leadingBom: true }
-// The range DateTime.formatIso writes as `YYYY-…`, so text order is time order.
+// The years SQLite's text timestamps and date functions cover.
 const MIN_TS = Date.UTC(0, 0, 1)
 const MAX_TS = Date.UTC(9999, 11, 31, 23, 59, 59, 999)
 
@@ -79,8 +79,13 @@ const literals = (dialect: string): ReadonlyArray<LiteralType> => {
 		literal("integer", SQLite.integer, fc.maxSafeInteger()),
 		literal("real", SQLite.real, finite, { source: (v) => exactReal(v as number) }),
 		literal("boolean", SQLite.boolean, fc.boolean()),
+		// The reference row is SQLite's own text: datetime() writes the date and time, so a builder
+		// value compares equal to what the database itself writes, not just to itself.
 		literal("timestamp", SQLite.timestamp, fc.integer({ min: MIN_TS, max: MAX_TS }).map(utc), {
-			wire: (value) => DateTime.formatIso(value as DateTime.Utc),
+			source: (value) => {
+				const ms = DateTime.toEpochMillis(value as DateTime.Utc)
+				return `SELECT datetime(${Math.floor(ms / 1000)}, 'unixepoch') || '.' || printf('%03d', ${((ms % 1000) + 1000) % 1000}) AS "v"`
+			},
 		}),
 		literal("blob", SQLite.blob, fc.uint8Array({ maxLength: 8 }), { wire: (value) => hex(value as Uint8Array), read: (v) => `unhex(${v})` }),
 		literal("json", SQLite.json(Schema.Struct({ message: Schema.String })), fc.record({ message: nasty }), {

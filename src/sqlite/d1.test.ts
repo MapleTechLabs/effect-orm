@@ -86,3 +86,15 @@ it("decodes D1 JSON and blob wire values and returns typed errors for malformed 
 	if (!Exit.isFailure(seen.malformed)) throw new Error("malformed JSON was accepted")
 	expect(Cause.findError(seen.malformed.cause)).toMatchObject({ success: { _tag: "@maple-dev/effect-orm/CompiledQueryDecodeError" } })
 }, 30_000)
+
+it("refuses a D1 integer past 2^53 instead of decoding a different number", async () => {
+	const Big = SQLite.table("big", { id: SQLite.integer })
+	const exit = await withD1((db) => Effect.gen(function* () {
+		yield* db.execute({ sql: "CREATE TABLE big (id INTEGER)" })
+		// D1 reads 9007199254740993 as the JS number 9007199254740992: no longer the stored value.
+		yield* db.execute({ sql: "INSERT INTO big VALUES (9007199254740993)" })
+		return yield* Effect.exit(db.run(SQLite.from(Big).select().crossTenant()))
+	}))
+	if (!Exit.isFailure(exit)) throw new Error(`an unsafe integer decoded as ${JSON.stringify(exit.value)}`)
+	expect(Cause.findError(exit.cause)).toMatchObject({ success: { _tag: "@maple-dev/effect-orm/CompiledQueryDecodeError" } })
+}, 30_000)

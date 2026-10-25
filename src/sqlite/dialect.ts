@@ -3,7 +3,8 @@ import { noTransactions, type Dialect } from "../ch/dialect"
 import { QueryBuilderError } from "../ch/errors"
 import { fail } from "../ch/failure"
 import { PARAM_MARKER_PREFIX } from "../ch/param"
-import { PgTimestampLiteral, timestampLiteral } from "../pg/types"
+import { timestampLiteral } from "../pg/types"
+import { SqliteTimestampLiteral, sqliteTimestampText } from "./timestamp"
 
 const hex = (value: Uint8Array): string =>
 	Array.from(value, (byte) => byte.toString(16).padStart(2, "0")).join("")
@@ -39,7 +40,7 @@ export const sqliteDialect: Dialect = {
 	quoteIdent: (name) => `"${name.replace(/"/g, '""')}"`,
 	quoteString,
 	literal,
-	dateTimeLiteral: (value) => quoteString(DateTime.formatIso(value)),
+	dateTimeLiteral: (value) => quoteString(sqliteTimestampText(DateTime.toEpochMillis(value))),
 	params: { _tag: "bind", placeholder: () => "?", reuse: false, maxParameters: 32766, nulInText: false },
 	clauses: {
 		format: false,
@@ -56,8 +57,8 @@ export const sqliteDialect: Dialect = {
 		distinctOn: false,
 	},
 	paramCodecs: {
-		dateTime: PgTimestampLiteral,
-		dateTimeSeconds: timestampLiteral((millis) => new Date(Math.floor(millis / 1000) * 1000).toISOString()),
+		dateTime: SqliteTimestampLiteral,
+		dateTimeSeconds: timestampLiteral((millis) => sqliteTimestampText(Math.floor(millis / 1000) * 1000)),
 	},
 	transactions: {
 		support: "full",
