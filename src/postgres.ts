@@ -79,8 +79,8 @@ export const compileUnsafe = ((query: any, params?: any, options?: any) =>
 
 /** `compileUnion` for Postgres. */
 export const compileUnion: CompileUnion<"postgres"> = (union, params, options) =>
-	Effect.suspend(() => compileUnionCH(union as any, params, pgOptions(options)))
+	Effect.suspend(() => compileUnionCH(union, params, pgOptions(options)))
 
 /** `compileUnionUnsafe` for Postgres. */
 export const compileUnionUnsafe: CompileUnionUnsafe<"postgres"> = (union, params, options) =>
-	compileUnionUnsafeCH(union as any, params, pgOptions(options))
+	compileUnionUnsafeCH(union, params, pgOptions(options))
