@@ -25,3 +25,11 @@ export const shapeAfter = (statements: ReadonlyArray<string>) =>
 		return shape
 	}).pipe(Effect.provide(SqliteClient.layer({ filename: ":memory:" }))))
 
+
+/** The rows `select` returns after running `statements` on an empty database. */
+export const rowsAfter = (statements: ReadonlyArray<string>, select: string) =>
+	Effect.runPromise(Effect.gen(function* () {
+		const db = Db.fromSqlClient(yield* SqlClient.SqlClient, { dialect: sqliteDialect })
+		for (const sql of statements) yield* db.execute({ sql })
+		return yield* db.query({ sql: select })
+	}).pipe(Effect.provide(SqliteClient.layer({ filename: ":memory:" }))))

@@ -9,7 +9,7 @@ import { afterEach, beforeEach, expect, it } from "vitest"
 import { generate, type GenerateOptions, type KitConfig } from "../kit"
 import { STATEMENT_BREAKPOINT } from "../migrate/source"
 import { renderSqliteSchema, sqliteEntitiesOf, type SqliteSchemaTable } from "../schema"
-import { shapeAfter } from "../sqlite/shape.test-support"
+import { rowsAfter, shapeAfter } from "../sqlite/shape.test-support"
 
 const src = resolve(import.meta.dirname, "..")
 let dir = ""
@@ -33,13 +33,16 @@ const folders = () => readdirSync(join(dir, "migrations")).sort()
 const migrationSql = (folder: string) => readFileSync(join(dir, "migrations", folder, "migration.sql"), "utf8")
 
 /** Every statement of every migration, in folder order, split as Alchemy and drizzle split them. */
-const allStatements = () =>
-	folders().flatMap((folder) =>
+const allStatements = (seed: ReadonlyArray<string> = []) =>
+	folders().flatMap((folder, i) => [...(i === 1 ? seed : []), ...statementsOf(folder)])
+
+const statementsOf = (folder: string) => (
+
 		migrationSql(folder)
 			.split(STATEMENT_BREAKPOINT)
 			.map((s) => s.trim())
-			.filter((s) => s.replace(/^\s*--.*$/gm, "").trim().length > 0),
-	)
+			.filter((s) => s.replace(/^\s*--.*$/gm, "").trim().length > 0)
+)
 
 /** The schema module's tables, created fresh. */
 const freshShape = async (body: string) => {
@@ -79,5 +82,92 @@ it("adds a nullable column, and a NOT NULL one with a literal default, with ALTE
 		'ALTER TABLE "links" ADD COLUMN "note" text',
 		'ALTER TABLE "links" ADD COLUMN "hits" integer NOT NULL DEFAULT 0',
 	])
+	await expectMigratedToEqualFresh(v2)
+})
+
+const seedLinks = [`INSERT INTO "links" ("id", "url") VALUES ('a', 'https://a'), ('b', 'https://b')`]
+
+it("drops a column only once the data loss is confirmed, and keeps the other columns' rows", async () => {
+	await generateFrom(links(`id: SQLite.text, url: SQLite.text, note: SQLite.nullable(SQLite.text)`))
+	const v2 = links(`id: SQLite.text, url: SQLite.text`)
+	await expect(generateFrom(v2)).rejects.toMatchObject({ code: "missing_hints" })
+	expect(folders()).toHaveLength(1)
+	const second = await generateFrom(v2, { hints: [{ type: "confirm_data_loss", kind: "column", entity: "links.note" }] })
+	expect(second.plan).toEqual([{ label: "destructive", sql: ['ALTER TABLE "links" DROP COLUMN "note"'] }])
+	await expectMigratedToEqualFresh(v2)
+	expect(await rowsAfter(allStatements(seedLinks), 'SELECT * FROM "links" ORDER BY "id"')).toEqual([
+		{ id: "a", url: "https://a" },
+		{ id: "b", url: "https://b" },
+	])
+})
+
+const rebuilds: ReadonlyArray<readonly [string, string, string]> = [
+	["a column type", `id: SQLite.text, url: SQLite.text, hits: SQLite.nullable(SQLite.text)`, `id: SQLite.text, url: SQLite.text, hits: SQLite.nullable(SQLite.integer)`],
+	["nullability", `id: SQLite.text, url: SQLite.nullable(SQLite.text)`, `id: SQLite.text, url: SQLite.text`],
+	["a default", `id: SQLite.text, url: SQLite.text`, `id: SQLite.text, url: SQLite.column(SQLite.text, { default: "none" })`],
+	["a UNIQUE column", `id: SQLite.text, url: SQLite.text`, `id: SQLite.text, url: SQLite.column(SQLite.text, { unique: true })`],
+	["a NOT NULL column with an expression default", `id: SQLite.text, url: SQLite.text`, `id: SQLite.text, url: SQLite.text, at: SQLite.column(SQLite.text, { defaultExpr: "(CURRENT_TIMESTAMP)" })`],
+]
+
+it.each(rebuilds)("rebuilds the table for %s, keeps its rows and recreates its indexes", async (_, before, after) => {
+	const index = `indexes: [SQLite.index("links_url", ["url"])],`
+	await generateFrom(links(before, index))
+	const v2 = links(after, index)
+	const second = await generateFrom(v2)
+	expect(second.plan.map((p) => p.label)).toEqual(["rebuild", "metadata"])
+	expect(second.plan[0]!.sql).toEqual([
+		"PRAGMA foreign_keys=OFF",
+		expect.stringMatching(/^CREATE TABLE "__new_links" \(/),
+		expect.stringMatching(/^INSERT INTO "__new_links"\("id", "url"(, "hits")?\) SELECT "id", "url"(, "hits")? FROM "links"$/),
+		'DROP TABLE "links"',
+		'ALTER TABLE "__new_links" RENAME TO "links"',
+		"PRAGMA foreign_keys=ON",
+	])
+	expect(second.plan[1]!.sql).toEqual(['CREATE INDEX IF NOT EXISTS "links_url" ON "links" ("url")'])
+	await expectMigratedToEqualFresh(v2)
+	const rows = await rowsAfter(allStatements(seedLinks), 'SELECT "id", "url" FROM "links" ORDER BY "id"')
+	expect(rows).toEqual([{ id: "a", url: "https://a" }, { id: "b", url: "https://b" }])
+})
+
+it("rebuilds the table for a primary key change", async () => {
+	await generateFrom(links(`id: SQLite.text, url: SQLite.text`))
+	const v2 = `
+export const Links = SQLite.table("links", {
+	columns: { id: SQLite.text, url: SQLite.text },
+	primaryKey: ["id", "url"],
+})`
+	const second = await generateFrom(v2)
+	expect(second.plan.map((p) => p.label)).toEqual(["rebuild"])
+	await expectMigratedToEqualFresh(v2)
+	expect(await rowsAfter(allStatements(seedLinks), 'SELECT count(*) AS n FROM "links"')).toEqual([{ n: 2 }])
+})
+
+it("creates and drops indexes without touching the table", async () => {
+	await generateFrom(links(`id: SQLite.text, url: SQLite.text, org: SQLite.text`, `indexes: [SQLite.index("links_url", ["url"])],`))
+	const v2 = links(`id: SQLite.text, url: SQLite.text, org: SQLite.text`, `indexes: [SQLite.uniqueIndex("links_org_url", ["org", "url"])],`)
+	const second = await generateFrom(v2)
+	expect(second.plan).toEqual([
+		{ label: "metadata", sql: ['DROP INDEX IF EXISTS "links_url"'] },
+		{ label: "metadata", sql: ['CREATE UNIQUE INDEX IF NOT EXISTS "links_org_url" ON "links" ("org", "url")'] },
+	])
+	await expectMigratedToEqualFresh(v2)
+})
+
+it("asks to confirm a column a rebuild leaves behind", async () => {
+	await generateFrom(links(`id: SQLite.text, url: SQLite.text, note: SQLite.nullable(SQLite.text)`))
+	const v2 = links(`id: SQLite.text, url: SQLite.integer`)
+	await expect(generateFrom(v2)).rejects.toMatchObject({ code: "missing_hints", details: [expect.stringContaining("links.note")] })
+	const second = await generateFrom(v2, { hints: [{ type: "confirm_data_loss", kind: "column", entity: "links.note" }] })
+	expect(second.plan.map((p) => p.label)).toEqual(["rebuild"])
+	expect(second.plan[0]!.sql[2]).toBe('INSERT INTO "__new_links"("id", "url") SELECT "id", "url" FROM "links"')
+	await expectMigratedToEqualFresh(v2)
+})
+
+it("drops a table only once the data loss is confirmed", async () => {
+	await generateFrom(`${links(`id: SQLite.text, url: SQLite.text`)}\nexport const Old = SQLite.table("old", { columns: { id: SQLite.text }, indexes: [SQLite.index("old_id", ["id"])] })`)
+	const v2 = links(`id: SQLite.text, url: SQLite.text`)
+	await expect(generateFrom(v2)).rejects.toMatchObject({ code: "missing_hints" })
+	const second = await generateFrom(v2, { hints: [{ type: "confirm_data_loss", kind: "table", entity: "old" }] })
+	expect(second.plan).toEqual([{ label: "destructive", sql: ['DROP TABLE IF EXISTS "old"'] }])
 	await expectMigratedToEqualFresh(v2)
 })
