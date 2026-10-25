@@ -8,6 +8,7 @@ import * as Migrate from "../migrate"
 import { Hints, type Hint } from "../schema/diff"
 import { check, generate, KitError, readMigrations, type KitConfig } from "./generate"
 import { pull } from "./pull"
+import { verifySchema } from "./verify-schema"
 
 const help = `effect-orm: schema migrations for ClickHouse and Postgres
 
@@ -21,7 +22,8 @@ const help = `effect-orm: schema migrations for ClickHouse and Postgres
   check                            Validate the migrations folder (snapshot chain, branch conflicts)
   migrate [--strict]               Apply pending migrations (needs config.driver)
   status                           Applied, pending, partial, or changed, per migration
-  verify                           Compare the database with the last applied snapshot
+  verify [--schema]                Compare the database with the last applied snapshot; with --schema, with
+                                   the schema modules, without reading the migrations folder or the ledger
   baseline <migration>             Record <migration> and every one before it as applied, without running them
   resolve <migration> <step>       Record what a step left "started" did, after checking the database:
           --ran | --not-ran        --ran skips it on the next migrate, --not-ran runs it
@@ -43,6 +45,7 @@ const options = {
 	out: { type: "string" },
 	tables: { type: "string" },
 	force: { type: "boolean" },
+	schema: { type: "boolean" },
 	ran: { type: "boolean" },
 	"not-ran": { type: "boolean" },
 	json: { type: "boolean" },
@@ -74,6 +77,9 @@ const promptConfirm = (hint: Hint): Effect.Effect<boolean> =>
 		rl.close()
 		return /^y(es)?$/i.test(answer.trim())
 	})
+
+const describeDrift = (d: Migrate.Drift): string =>
+	`  ${d.entity}: ${d.problem}${d.expected !== undefined || d.actual !== undefined ? ` (expected ${d.expected ?? "-"}, actual ${d.actual ?? "-"})` : ""}`
 
 const withDriver = <A, E>(config: KitConfig, body: Effect.Effect<A, E, Migrate.MigrationDriver>) =>
 	config.driver === undefined
@@ -195,6 +201,13 @@ const program = (args: ReadonlyArray<string>, print: (line: string) => void) =>
 			case "migrate":
 			case "status":
 			case "verify": {
+				if (command === "verify" && parsed.values.schema === true) {
+					const result = yield* verifySchema(config, cwd)
+					out(result, () =>
+						result.drift.length === 0 ? ["No drift against the schema modules."] : ["Drift against the schema modules:", ...result.drift.map(describeDrift)],
+					)
+					return result.drift.length === 0 ? 0 : 3
+				}
 				const migrations = yield* readMigrations(resolve(cwd, config.out))
 				const render = config.render ?? {}
 				const dialect = config.dialect !== undefined ? { dialect: config.dialect } : undefined
@@ -214,7 +227,7 @@ const program = (args: ReadonlyArray<string>, print: (line: string) => void) =>
 						? ["No applied migration with a snapshot to compare against."]
 						: result.drift.length === 0
 							? [`No drift against ${result.against}.`]
-							: [`Drift against ${result.against}:`, ...result.drift.map((d) => `  ${d.entity}: ${d.problem}${d.expected !== undefined || d.actual !== undefined ? ` (expected ${d.expected ?? "-"}, actual ${d.actual ?? "-"})` : ""}`)],
+							: [`Drift against ${result.against}:`, ...result.drift.map(describeDrift)],
 				)
 				return result.drift.length === 0 ? 0 : 3
 			}

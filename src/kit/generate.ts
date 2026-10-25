@@ -84,6 +84,24 @@ export const loadSchema = (config: KitConfig, cwd: string): Effect.Effect<Readon
 		return mine
 	})
 
+/** The entities the schema modules define, for the config's dialect. */
+export const schemaEntities = (config: KitConfig, cwd: string): Effect.Effect<ReadonlyArray<AnySchemaEntity>, KitError> =>
+	Effect.gen(function* () {
+		const objects = yield* loadSchema(config, cwd)
+		const entities: Effect.Effect<ReadonlyArray<AnySchemaEntity>, SchemaDefinitionError> =
+			(config.dialect ?? "clickhouse") === "postgres" ? pgEntitiesOf(objects) : entitiesOf(objects)
+		return yield* entities.pipe(
+			Effect.mapError(
+				(error) =>
+					new KitError({
+						code: "config",
+						message: "the schema definitions have problems",
+						details: error.problems.map((problem) => `${problem.object}: ${problem.message}`),
+					}),
+			),
+		)
+	})
+
 /** Read `<out>/<name>/...` with node:fs. */
 export const readMigrations = (out: string): Effect.Effect<ReadonlyArray<LoadedMigration>, KitError> =>
 	Effect.gen(function* () {
@@ -210,19 +228,7 @@ export const generate = (config: KitConfig, cwd: string, options: GenerateOption
 			snapshotEntities = imported.entities
 			prevIds = [ORIGIN_ID]
 		} else {
-			const objects = yield* loadSchema(config, cwd)
-			const entities: Effect.Effect<ReadonlyArray<AnySchemaEntity>, SchemaDefinitionError> =
-				dialect === "postgres" ? pgEntitiesOf(objects) : entitiesOf(objects)
-			const next = yield* entities.pipe(
-				Effect.mapError(
-					(error) =>
-						new KitError({
-							code: "config",
-							message: "the schema definitions have problems",
-							details: error.problems.map((problem) => `${problem.object}: ${problem.message}`),
-						}),
-				),
-			)
+			const next = yield* schemaEntities(config, cwd)
 			snapshotEntities = next
 			if (options.baseline === "schema") prevIds = [ORIGIN_ID]
 			else if (options.custom === true) snapshotEntities = analysis.base
