@@ -192,6 +192,28 @@ describe("docs/tables-and-types.md", () => {
 			"SELECT counters.Hits AS hits FROM counters WHERE counters.OrgId = 'org_123' AND counters.Live = 1",
 		)
 	})
+
+	it("Row Schemas", () => {
+		const Requests = CHE.table("requests", {
+			columns: {
+				OrgId: CHE.string,
+				Timestamp: CHE.column(CHE.dateTime, { defaultExpr: "now()" }),
+				Route: CHE.string,
+				Status: CHE.column(CHE.uint16, { default: 200 }),
+				Hour: CHE.column(CHE.dateTime, { materialized: "toStartOfHour(Timestamp)" }),
+			},
+			engine: CHE.engine.mergeTree(),
+			orderBy: ["OrgId", "Route", "Timestamp"],
+		})
+		const { select, jsonCreate } = CH.tableSchemas(Requests)
+
+		const body = Schema.decodeUnknownSync(jsonCreate)({ OrgId: "org_1", Route: "/" })
+		expect(body).toEqual({ OrgId: "org_1", Route: "/" })
+		expect(oneLine(compileCHUnsafe(CH.insertInto(Requests).values(body)).sql)).toBe(
+			"INSERT INTO requests (OrgId, Route) VALUES ('org_1', '/')",
+		)
+		expect(Object.keys(select.fields)).toEqual(["OrgId", "Timestamp", "Route", "Status", "Hour"])
+	})
 })
 
 // queries.md

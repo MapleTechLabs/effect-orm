@@ -251,6 +251,34 @@ Related utilities: `ColumnDefs` (the shape of a `columns` record), `OutputToColu
 (converts a query's output row back into column defs, used by `fromQuery`), and
 `NullableColumnDefs` (what `leftJoin` applies to the joined side).
 
+## Row Schemas
+
+`tableSchemas(table)` derives the Effect Schemas of a table's rows from its columns, so an
+`HttpApi` endpoint or a repository uses the same definition as the queries. The variant names are
+the ones `Model.Class` uses:
+
+| Variant      | Columns                                              | Decodes from       |
+| ------------ | ---------------------------------------------------- | ------------------ |
+| `select`     | every column                                         | the database wire  |
+| `insert`     | no computed column; defaulted and nullable optional  | the database wire  |
+| `update`     | no computed column; every column optional            | the database wire  |
+| `json`       | as `select`                                          | JSON               |
+| `jsonCreate` | as `insert`                                          | JSON               |
+| `jsonUpdate` | as `update`                                          | JSON               |
+
+The JSON variants are `Schema.toCodecJson` of each row's type, so a `DateTime` is an ISO string
+and a branded column keeps its brand. An optional key also takes `undefined`, as in an insert row.
+
+```ts
+const { select, jsonCreate } = CH.tableSchemas(Requests)
+
+type Request = typeof select.Type // SelectRowOf<typeof Requests>
+const body = Schema.decodeUnknownSync(jsonCreate)({ OrgId: "org_1", Route: "/" })
+CH.insertInto(Requests).values(body) // a decoded body is an insert row
+```
+
+_(Backed by `docs/tables-and-types.md > Row Schemas`.)_
+
 ## Map columns
 
 `Map` columns get a `.get(key)` accessor that compiles to ClickHouse's bracket syntax:
