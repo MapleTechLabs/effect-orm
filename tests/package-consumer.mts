@@ -102,3 +102,12 @@ assert.equal(sqliteCompiled.dialect, "sqlite")
 const sqliteDecoded: ReadonlyArray<{ readonly id: number; readonly note: string }> = await Effect.runPromise(sqliteCompiled.decodeRows([{ id: 1, note: "sqlite" }]))
 assert.deepEqual(sqliteDecoded, [{ id: 1, note: "sqlite" }])
 assert.equal(SQLite.compileUnsafe(sqliteQuery, { id: 1 }, { dialect: SQLite.d1Dialect }).dialect, "d1")
+const sqliteLinks = SQLite.table("consumer_links", {
+	columns: { id: SQLite.text, orgId: SQLite.column(SQLite.nullable(SQLite.text), { name: "org_id" }) },
+	primaryKey: ["id"],
+	indexes: [SQLite.index("consumer_links_org", ["orgId"])],
+})
+assert.deepEqual(await Effect.runPromise(Effect.map(S.sqliteEntitiesOf([sqliteLinks]), S.renderSqliteSchema)), [
+	'CREATE TABLE IF NOT EXISTS "consumer_links" (\n\t"id" text PRIMARY KEY NOT NULL,\n\t"org_id" text\n)',
+	'CREATE INDEX IF NOT EXISTS "consumer_links_org" ON "consumer_links" ("org_id")',
+])
