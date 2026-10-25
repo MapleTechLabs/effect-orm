@@ -8,11 +8,14 @@
 
 import { Effect } from "effect"
 import type { Table } from "../ch/table"
+import { withDialect } from "../ch/dialect"
+import { encodeColumnLiteral } from "../ch/literal"
 import { columnSqlName, type CHType, type ColumnDefs, type InferTS } from "../ch/types"
 import { sqliteDialect } from "../sqlite/dialect"
 import { ddlRenderer } from "./ddl-expr"
 import { externalTable, type DdlExpr, type DdlKey } from "./define"
 import { sortEntities } from "./entities"
+import { sqliteIdent } from "./sqlite-render"
 import { checkIdentifier, definitionError, withRenderProblems, type DefinitionProblem, type ProblemSink, type SchemaDefinitionError } from "./problems"
 import {
 	canonicalSqliteType,
@@ -33,6 +36,19 @@ export interface ColumnOptions<T extends CHType<string, any, any>> {
 	 * and written as `$.orgId` and stored as `org_id`.
 	 */
 	readonly name?: string
+	/** A literal default, encoded through the column's own type. A boolean is written `true` / `false`. */
+	readonly default?: InferTS<T>
+	/**
+	 * `DEFAULT <expr>`. A string is written as given, so put an expression in
+	 * the parentheses SQLite requires: `"(unixepoch())"`. A DSL expression is
+	 * parenthesized for you.
+	 */
+	readonly defaultExpr?: DdlExpr<ColumnDefs>
+	/**
+	 * A one-column unique index, which is what drizzle-kit writes for
+	 * `.unique()`. `true` names it `<table>_<column>_unique`; a string names it.
+	 */
+	readonly unique?: true | string
 }
 
 /** `Given` records which options were set, so the table knows which columns an insert may leave out. */
@@ -103,6 +119,26 @@ export const uniqueIndex = <Cols extends ColumnDefs>(name: string, on: DdlKey<Co
 	unique: true,
 	on,
 })
+
+const columnDefault = (
+	problems: ProblemSink,
+	table: string,
+	name: string,
+	spec: ColumnSpec<CHType<string, any, any>>,
+	columns: ColumnDefs,
+): string | null => {
+	const { options } = spec
+	if (options.default !== undefined && options.defaultExpr !== undefined) {
+		problems.push({ object: `${table}.${name}`, message: "a column takes one of default, defaultExpr" })
+	}
+	if (options.defaultExpr !== undefined) {
+		return typeof options.defaultExpr === "string" ? options.defaultExpr : `(${ddl.expr(options.defaultExpr, columns)})`
+	}
+	if (options.default === undefined || options.default === null) return null
+	// SQLite reads TRUE / FALSE as 1 / 0; drizzle-kit writes them as keywords.
+	if (typeof options.default === "boolean") return options.default ? "true" : "false"
+	return withDialect(sqliteDialect, () => encodeColumnLiteral(spec.type, options.default, name))
+}
 
 // Tables
 
@@ -181,15 +217,17 @@ function buildTable<const Name extends string, const Columns extends Record<stri
 
 	const columnEntities = inputs.map(([column, input], position): SqliteColumnEntity => {
 		checkIdentifier(problems, `${name}.${column}`, sqlName(column))
-		const type = isColumnSpec(input) ? input.type : (input as CHType<string, any, any>)
+		const spec: ColumnSpec<CHType<string, any, any>> = isColumnSpec(input)
+			? input
+			: { _tag: "SqliteColumnSpec", type: input as CHType<string, any, any>, options: {} }
 		return {
 			kind: "column",
 			table: name,
 			name: sqlName(column),
 			position,
-			type: canonicalSqliteType(type.sql),
-			notNull: type._tag !== "Nullable",
-			default: null,
+			type: canonicalSqliteType(spec.type.sql),
+			notNull: spec.type._tag !== "Nullable",
+			default: columnDefault(problems, name, column, spec, types),
 		}
 	})
 
@@ -207,7 +245,7 @@ function buildTable<const Name extends string, const Columns extends Record<stri
 		}
 	}
 
-	const indexEntities = (definition.indexes ?? []).map((spec): SqliteIndexEntity => {
+	const indexEntities: Array<SqliteIndexEntity> = (definition.indexes ?? []).map((spec): SqliteIndexEntity => {
 		checkName(problems, `${name} index`, spec.name)
 		if (Array.isArray(spec.on)) {
 			for (const column of spec.on) {
@@ -218,6 +256,14 @@ function buildTable<const Name extends string, const Columns extends Record<stri
 		if (columns.length === 0) problems.push({ object: `${name} index ${spec.name}`, message: "an index needs columns" })
 		return { kind: "index", table: name, name: spec.name, unique: spec.unique, columns }
 	})
+
+	for (const [column, input] of inputs) {
+		const option = isColumnSpec(input) ? input.options.unique : undefined
+		if (option === undefined) continue
+		const uniqueName = option === true ? `${name}_${sqlName(column)}_unique` : option
+		checkName(problems, `${name}.${column} unique`, uniqueName)
+		indexEntities.push({ kind: "index", table: name, name: uniqueName, unique: true, columns: [sqliteIdent(sqlName(column))] })
+	}
 
 	const tableEntity: SqliteTableEntity = {
 		kind: "table",

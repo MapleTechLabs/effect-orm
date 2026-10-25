@@ -1,5 +1,5 @@
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient"
-import { Effect } from "effect"
+import { Effect, Schema } from "effect"
 import * as SqlClient from "effect/sql/SqlClient"
 import { expect, it } from "vitest"
 import * as Db from "../database"
@@ -82,4 +82,53 @@ it("creates short_link exactly as drizzle-kit's SQL does, by PRAGMA table_info a
 	const ours = await shapeAfter(await ddlOf([ShortLink]))
 	expect(ours).toEqual(await shapeAfter(drizzleStatements(drizzleShortLink)))
 	expect(Object.keys(ours)).toEqual(["short_link"])
+})
+
+// drizzle-kit 0.31.11 for: composite primaryKey, .default(...) literals, sql`(CURRENT_TIMESTAMP)`,
+// text("email").unique(), real, blob, numeric, a two-column index.
+const drizzleMembership = `CREATE TABLE \`membership\` (
+	\`org_id\` text NOT NULL,
+	\`user_id\` text NOT NULL,
+	\`role\` text DEFAULT 'member' NOT NULL,
+	\`weight\` real DEFAULT 1.5 NOT NULL,
+	\`active\` integer DEFAULT true NOT NULL,
+	\`avatar\` blob,
+	\`amount\` numeric,
+	\`email\` text,
+	\`created_at\` text DEFAULT (CURRENT_TIMESTAMP) NOT NULL,
+	PRIMARY KEY(\`org_id\`, \`user_id\`)
+);
+--> statement-breakpoint
+CREATE UNIQUE INDEX \`membership_email_unique\` ON \`membership\` (\`email\`);--> statement-breakpoint
+CREATE INDEX \`membership_user_role\` ON \`membership\` (\`user_id\`,\`role\`);`
+
+const Membership = SQLite.table("membership", {
+	columns: {
+		orgId: named(SQLite.text, "org_id"),
+		userId: named(SQLite.text, "user_id"),
+		role: SQLite.column(SQLite.text, { default: "member" }),
+		weight: SQLite.column(SQLite.real, { default: 1.5 }),
+		active: SQLite.column(SQLite.boolean, { default: true }),
+		avatar: SQLite.nullable(SQLite.blob),
+		amount: SQLite.nullable(SQLite.custom("numeric", Schema.Finite)),
+		email: SQLite.column(SQLite.nullable(SQLite.text), { unique: true }),
+		createdAt: SQLite.column(SQLite.text, { name: "created_at", defaultExpr: "(CURRENT_TIMESTAMP)" }),
+	},
+	primaryKey: ["orgId", "userId"],
+	indexes: [SQLite.index("membership_user_role", ["userId", "role"])],
+	tenantColumn: "orgId",
+})
+
+it("creates composite keys, defaults, unique columns and every storage class as drizzle-kit does", async () => {
+	expect(await shapeAfter(await ddlOf([Membership]))).toEqual(await shapeAfter(drizzleStatements(drizzleMembership)))
+})
+
+it("lets an insert leave out defaulted columns, and SQLite fills them", async () => {
+	const rows = await Effect.runPromise(Effect.gen(function* () {
+		const db = Db.fromSqlClient(yield* SqlClient.SqlClient, { dialect: SQLite.sqliteDialect })
+		for (const sql of yield* Effect.map(sqliteEntitiesOf([Membership]), renderSqliteSchema)) yield* db.execute({ sql })
+		yield* db.run(SQLite.insertInto(Membership).values({ orgId: "o", userId: "u", avatar: null, amount: null, email: null }))
+		return yield* db.run(SQLite.from(Membership).select("role", "weight", "active"))
+	}).pipe(Effect.provide(SqliteClient.layer({ filename: ":memory:" }))))
+	expect(rows).toEqual([{ role: "member", weight: 1.5, active: true }])
 })
