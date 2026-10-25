@@ -172,10 +172,10 @@ const pathSchema = (
 			}
 }
 
-/** A value as JSON text through `schema`, bound, cast to jsonb. */
+/** A value as JSON text through `schema`, bound, cast to jsonb. `null` is JSON null; `undefined` has no JSON. */
 const jsonValue = (schema: Schema.Codec<unknown, unknown>, value: unknown, context: string): string =>
-	value === undefined || value === null
-		? fail(new QueryBuilderError({ code: "InvalidArguments", message: `${context}: no value given; write JSON null as a value of a nullable field's schema` }), "NULL")
+	value === undefined
+		? fail(new QueryBuilderError({ code: "InvalidArguments", message: `${context}: undefined has no JSON form` }), "NULL")
 		: `${encodeLiteral(Schema.fromJsonString(schema), value, context)}::jsonb`
 
 /**

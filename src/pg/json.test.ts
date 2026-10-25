@@ -180,4 +180,22 @@ describe("jsonb_set", () => {
 		expect(row?.payload.profile).toEqual({ city: "Kyiv", zip: "01001", visits: 11 })
 		expect(row?.payload.tags).toEqual(["z", "b"])
 	})
+
+	it("writes JSON null where the field's schema takes it, and refuses it where it does not", async () => {
+		const compiled = PG.compileUnsafe(
+			PG.update(docs)
+				.set(($) => ({ payload: PG.jsonSet($.payload, ["archived"], null) }))
+				.where(($) => [$.id.eq(2)])
+				.returning(($) => ({ archived: PG.jsonPath($.payload, "archived") })),
+			{},
+		)
+		expect(compiled.parameters).toEqual(["null", 2])
+		expect(await run(compiled)).toEqual([{ archived: null }])
+
+		const refused = PG.update(docs)
+			// @ts-expect-error -- city is not nullable
+			.set(($) => ({ payload: PG.jsonSet($.payload, ["profile", "city"], null) }))
+			.where(($) => [$.id.eq(2)])
+		expect(() => PG.compileUnsafe(refused, {})).toThrow(/jsonSet \["profile","city"\]: null is not a valid value/)
+	})
 })
