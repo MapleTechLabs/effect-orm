@@ -45,6 +45,12 @@ export type ParamStyle =
 			 * at the server or by being split into several statements.
 			 */
 			readonly maxParameters?: number
+			/**
+			 * False where the driver ends text at U+0000 (SQLite's), so a bound
+			 * string containing one would arrive cut short. Such a value fails to
+			 * compile instead.
+			 */
+			readonly nulInText?: boolean
 	  }
 
 /** Clauses that exist in some dialects and not others. */
@@ -60,12 +66,24 @@ export interface DialectClauses {
 	/** Whether each `UNION ALL` branch is wrapped in parentheses. Postgres needs
 	 *  it for a branch with its own WITH, ORDER BY or LIMIT. */
 	readonly parenthesizeUnionBranches: boolean
+	/** SQLite preserves branch-local ORDER BY/LIMIT by selecting from each branch. */
+	readonly wrapUnionBranches?: boolean
+	/** SQLite requires LIMIT -1 before OFFSET when the caller omitted a limit. */
+	readonly offsetRequiresLimit?: boolean
 	/** `RETURNING` after an INSERT. Absent means no: an insert with
 	 *  `.returning()` fails to compile for the dialect. */
 	readonly returning?: boolean
 	/** `ON CONFLICT ... DO NOTHING / DO UPDATE` after an INSERT. Absent means
 	 *  no: an insert with `onConflict*` fails to compile for the dialect. */
 	readonly onConflict?: boolean
+	/** Whether ON CONFLICT can name a constraint rather than columns. */
+	readonly onConflictConstraint?: boolean
+	/** SQLite disambiguates INSERT SELECT ... ON CONFLICT with a WHERE. */
+	readonly insertSelectNeedsWhere?: boolean
+	/** Whether a VALUES tuple can contain DEFAULT for a missing cell. */
+	readonly defaultInValues?: boolean
+	/** Whether SELECT DISTINCT ON is supported. Undefined preserves existing dialects. */
+	readonly distinctOn?: boolean
 	/** `SETTINGS` on an INSERT, UPDATE or DELETE (ClickHouse). Absent means
 	 *  no: a write with `.settings()` fails to compile for the dialect. */
 	readonly writeSettings?: boolean
@@ -151,6 +169,15 @@ export interface Dialect extends Omit<SqlSyntax, "dialect"> {
 	 * unchecked: a custom dialect says which set it renders, if either.
 	 */
 	readonly functions?: string
+	/**
+	 * The ORDER BY keys for a numeric UNION ALL column whose branches may have
+	 * different types. ClickHouse has no common type for `UInt64` and `Int64`
+	 * (or `Int64` and `Float64`): the column is a `Variant`, which ORDER BY
+	 * refuses as a key. The values are left as they are (an INSERT ... SELECT or
+	 * an IN over the union keeps them exact); only the sort key is converted.
+	 * Absent: the dialect orders such a column as it is.
+	 */
+	readonly unionNumberOrderKeys?: (column: string) => ReadonlyArray<string>
 }
 
 /** ClickHouse, with params written into the SQL as literals. The default. */
@@ -173,6 +200,8 @@ export const clickhouseDialect: Dialect = {
 	},
 	transactions: noTransactions,
 	functions: "clickhouse",
+	// CAST, not toFloat64: ClickHouse 26.2's toFloat64 refuses a Variant. Float64 orders every number; the Int128 tiebreak keeps integers past 2^53 (one Float64) in exact order.
+	unionNumberOrderKeys: (column) => [`CAST(${column} AS Nullable(Float64))`, `accurateCastOrNull(${column}, 'Int128')`],
 }
 
 // The dialect of the enclosing compile, beside the syntax installed for the
@@ -206,6 +235,10 @@ export const checkedLiteral = (dialect: Dialect, value: unknown, context: string
 
 const checkedSyntax = (dialect: Dialect): SqlSyntax => ({
 	dialect: dialect.name,
+	ilike: dialect.ilike,
+	likeEscape: dialect.likeEscape,
+	inexactNumberText: dialect.inexactNumberText,
+	integerComparesFraction: dialect.integerComparesFraction,
 	quoteIdent: dialect.quoteIdent,
 	quoteString: (value) => checked(dialect, dialect.quoteString(value), "a string literal"),
 	literal: (value, context) => checkedLiteral(dialect, value, context),

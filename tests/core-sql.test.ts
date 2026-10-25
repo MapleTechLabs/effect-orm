@@ -9,7 +9,7 @@ const elideFixtures = (dialect: DialectName, sql: string) =>
 		.replaceAll(fixtureSql(dialect, "orders"), "<orders fixture>")
 		.replaceAll(fixtureSql(dialect, "customers"), "<customers fixture>")
 
-for (const dialect of ["clickhouse", "postgres"] as const) {
+for (const dialect of ["clickhouse", "postgres", "sqlite", "d1"] as const) {
 	describe(`core SQL (${dialect})`, () => {
 		for (const fixture of coreCases) {
 			it(fixture.id, () => {

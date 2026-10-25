@@ -8,17 +8,15 @@
 // become DDL records a problem, and `pgEntitiesOf` fails with it.
 
 import { Schema } from "effect"
-import { compile as compileFragment } from "../sql/sql-fragment"
 import { withDialect } from "../ch/dialect"
-import type { Condition, Expr } from "../ch/expr"
 import { encodeColumnLiteral } from "../ch/literal"
-import { createColumnAccessor, type ColumnAccessor } from "../ch/query"
 import type { Table } from "../ch/table"
 import { columnSqlName, type CHType, type ColumnDefs, type InferTS } from "../ch/types"
 import type { PgType } from "../pg/types"
 import { postgresDialect } from "../pg/dialect"
+import { ddlRenderer, type DdlPredicate } from "./ddl-expr"
 import { externalTable, type DdlExpr, type DdlKey } from "./define"
-import { withRenderProblems, type DefinitionProblem, type ProblemSink } from "./problems"
+import { checkDistinctNames, checkNoRepeats, withRenderProblems, type DefinitionProblem, type ProblemSink } from "./problems"
 import {
 	canonicalPgType,
 	PG_MAX_IDENTIFIER,
@@ -33,22 +31,11 @@ import {
 	type PgUniqueEntity,
 } from "./pg-entities"
 
-const quoteIdent = (name: string): string => `"${name.replace(/"/g, '""')}"`
+const ddl = ddlRenderer(postgresDialect)
+const renderExpr = ddl.expr
+const renderKeyParts = ddl.keyParts
 
-const renderValue = (value: Expr<any> | Condition | string): string =>
-	typeof value === "string" ? value : withDialect(postgresDialect, () => compileFragment(value.toFragment()))
-
-/** A partial index's predicate: SQL, or a condition built with the DSL. */
-export type DdlPredicate<Cols extends ColumnDefs> = string | (($: ColumnAccessor<Cols>) => Condition | Expr<any> | string)
-
-const renderExpr = <Cols extends ColumnDefs>(expr: DdlExpr<Cols> | DdlPredicate<Cols>, columns: Cols): string =>
-	typeof expr === "string" ? expr : renderValue(expr(createColumnAccessor(columns)))
-
-/** Key parts: a column name is written quoted, an expression as it renders. */
-const renderKeyParts = <Cols extends ColumnDefs>(key: DdlKey<Cols>, columns: Cols): ReadonlyArray<string> =>
-	typeof key === "function"
-		? key(createColumnAccessor(columns)).map(renderValue)
-		: key.map((column) => quoteIdent(columnSqlName(columns, column)))
+export type { DdlPredicate }
 
 // Columns
 
@@ -482,8 +469,12 @@ function buildTable<const Name extends string, const Columns extends Record<stri
 		}
 	}
 
+	// Postgres refuses these when it runs the DDL ("column specified more than once").
+	checkDistinctNames(problems, name, inputs.map(([column]) => [column, sqlName(column)] as const), { ignoreCase: false })
+
 	const pk = definition.primaryKey
 	const pkColumns = pk === undefined ? [] : "columns" in pk ? pk.columns : pk
+	checkNoRepeats(problems, `${name} primary key`, pkColumns)
 	const pkName = pk !== undefined && "columns" in pk && pk.name !== undefined ? pk.name : `${name}_pkey`
 	if (pk !== undefined) {
 		checkIdentifier(problems, `${name} primary key`, pkName)
@@ -502,6 +493,7 @@ function buildTable<const Name extends string, const Columns extends Record<stri
 	const indexEntities = (definition.indexes ?? []).map((spec): PgIndexEntity => {
 		checkIdentifier(problems, `${name} index`, spec.name)
 		if (Array.isArray(spec.on)) {
+			checkNoRepeats(problems, `${name} index ${spec.name}`, spec.on)
 			for (const column of spec.on) {
 				if (!has(column)) problems.push({ object: `${name} index ${spec.name}`, message: `${column} is not a column` })
 			}

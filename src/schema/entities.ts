@@ -9,6 +9,7 @@
 
 import { Schema } from "effect"
 import { PgSchemaEntity } from "./pg-entities"
+import { SqliteSchemaEntity } from "./sqlite-entities"
 
 /** `DEFAULT`, `MATERIALIZED`, or `ALIAS`, with its SQL expression. */
 export const ColumnDefault = Schema.Struct({
@@ -102,15 +103,22 @@ export const PgSnapshot = Schema.Struct({
 })
 export type PgSnapshot = typeof PgSnapshot.Type
 
+export const SqliteSnapshot = Schema.Struct({
+	...snapshotFields,
+	dialect: Schema.Literal("sqlite"),
+	entities: Schema.Array(SqliteSchemaEntity),
+})
+export type SqliteSnapshot = typeof SqliteSnapshot.Type
+
 /** The schema at one point in history. `dialect` says which entity set it holds. */
-export const Snapshot = Schema.Union([ClickHouseSnapshot, PgSnapshot])
+export const Snapshot = Schema.Union([ClickHouseSnapshot, PgSnapshot, SqliteSnapshot])
 export type Snapshot = typeof Snapshot.Type
 
 /** The dialects a schema can be written for. */
 export type SchemaDialect = Snapshot["dialect"]
 
-/** An entity of either dialect. Everything dialect-neutral (keys, ordering, hashing, the branch graph) takes this. */
-export type AnySchemaEntity = SchemaEntity | PgSchemaEntity
+/** An entity of any dialect. Everything dialect-neutral (keys, ordering, hashing, the branch graph) takes this. */
+export type AnySchemaEntity = SchemaEntity | PgSchemaEntity | SqliteSchemaEntity
 
 /** A stable key per entity, unique within a snapshot: `<kind>:<name>`, or `<kind>:<table>.<name>` for a table's parts. */
 export const entityKey = (entity: AnySchemaEntity): string =>

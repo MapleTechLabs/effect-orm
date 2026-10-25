@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Every export of the two dialect entries is named in docs/reference.md, whose
+// Every export of the three dialect entries is named in docs/reference.md, whose
 // first line claims to be the catalog. A claim like that decays the moment
 // anything is added, so it is checked rather than promised.
 //
@@ -11,7 +11,7 @@ import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..")
-const entries = ["clickhouse", "postgres"]
+const entries = ["clickhouse", "postgres", "sqlite"]
 
 const exportsOf = (entry) => {
 	const dts = join(root, `dist/${entry}.d.mts`)

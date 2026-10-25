@@ -5,9 +5,10 @@ The package has one entry per database, each self-contained:
 ```ts
 import * as CH from "@maple-dev/effect-orm/clickhouse"
 import * as PG from "@maple-dev/effect-orm/postgres"
+import * as SQLite from "@maple-dev/effect-orm/sqlite"
 ```
 
-Both carry the whole [query builder](#query-builder-both-entries). Each adds its own column
+All carry the whole [query builder](#query-builder-every-entry). Each adds its own column
 types, functions, table definitions and a `compile` that defaults to its dialect:
 [`/clickhouse`](#clickhouse) and [`/postgres`](#postgres). Everything else is on a
 [subpath](#other-subpaths) for a narrower job.
@@ -32,9 +33,9 @@ uniformly, which some codebases prefer for exactly this reason.
 
 ---
 
-## Query builder (both entries)
+## Query builder (every entry)
 
-Everything in this section is exported, identically, from both `/clickhouse` and `/postgres`.
+Everything in this section is exported, identically, from `/clickhouse`, `/postgres` and `/sqlite`.
 
 ### Query construction
 
@@ -46,7 +47,7 @@ Everything in this section is exported, identically, from both `/clickhouse` and
 | `unionAll`  | `(...queries) => CHUnionQuery`            |
 | `update`     | `(table) => CHUpdateStart`, then `CHUpdate`: `.set(record \| fn)`, `.where(fn)` or `.allRows()`, `.returning(...)`, `.settings(record)`. See [Updating and deleting](./updates-and-deletes.md) |
 | `deleteFrom` | `(table) => CHDelete`: `.where(fn)` or `.allRows()`, `.returning(...)`, `.settings(record)` |
-| `insertInto` | `(table) => CHInsertStart`, then `CHInsert`; `.values(row \| rows)` or `.select(query)` sets its rows, `.settings(record)` ClickHouse `SETTINGS`, `.returning(...)` the RETURNING list, `.onConflictDoNothing(options?)` / `.onConflictDoUpdate(options)` the ON CONFLICT clause (Postgres). See [Inserting rows](./inserts.md) |
+| `insertInto` | `(table) => CHInsertStart`, then `CHInsert`; `.values(row \| rows)` or `.select(query)` sets its rows, `.settings(record)` ClickHouse `SETTINGS`, `.returning(...)` the RETURNING list, `.onConflictDoNothing(options?)` / `.onConflictDoUpdate(options)` the ON CONFLICT clause (Postgres and SQLite). See [Inserting rows](./inserts.md) |
 
 Tables come from the dialect's `table`: [`CH.table`](#tables-and-ddl) or
 [`PG.table`](#tables-and-ddl-1).
@@ -240,7 +241,7 @@ Tag `"@maple-dev/effect-orm/CompiledQueryDecodeError"`. Fails the `decodeRows` /
 
 #### `SchemaDefinitionError`
 
-Tag `"@maple-dev/effect-orm/SchemaDefinitionError"`. Fails `S.entitiesOf`, `S.pgEntitiesOf` and
+Tag `"@maple-dev/effect-orm/SchemaDefinitionError"`. Fails `S.entitiesOf`, `S.pgEntitiesOf`, `S.sqliteEntitiesOf` and
 `TB.buildProject` when a definition cannot render: a name that is not a plain identifier, a
 MergeTree-family engine with no `orderBy`, a view reading from a union, a view writing to a table
 outside the schema. Fields: `problems` (every `DefinitionProblem`, `{ object, message }`) and
@@ -509,7 +510,7 @@ placeholders, double-quoted identifiers.
 | `SqlQuery`, `compileQuery`                                                                       | `/sql`            |
 | `ClickHouseStatement`, `parseStatement`, `renderStatement`, `withSettings`, `withFormat`         | `/sql`            |
 | `ClickHouseStatementFromString`, `splitTerminalClauses`, `maskLiteralsAndComments`               | `/sql`            |
-| Schema tooling: `isSchemaObject`, `makeSnapshot`, `renderSchema`, `diffSchemas`, `diffPgSchemas`, `fromDrizzleSnapshot`, snapshot and entity schemas (`PgEnumEntity`, `PgUniqueEntity`, …), `Hint` | `/schema`         |
+| Schema tooling: `isSchemaObject`, `makeSnapshot`, `renderSchema`, `diffSchemas`, `diffPgSchemas`, `fromDrizzleSnapshot`, snapshot and entity schemas (`PgEnumEntity`, `PgUniqueEntity`, …), `Hint`; for SQLite, `sqliteEntitiesOf`, `renderSqliteSchema`, `renderSqliteCreateTable`, `renderSqliteCreateIndex`, `diffSqliteSchemas`, `fromDrizzleSqliteSnapshot`, `SqliteMigrationOp`, `renderSqliteOp`, `renderSqliteMigrationSql`, `labelOfSqlite`, `rebuildName`, the `SqliteSnapshot` schema and the `SqliteTableEntity`, `SqliteColumnEntity`, `SqliteIndexEntity`, `SqliteUniqueEntity` schemas | `/schema`         |
 | `run`, `status`, `verify`, `baseline`, `MigrationDriver` and the migrate errors                  | `/migrate`        |
 | `Database`, `run`, `sql`, `query`, `execute`, `transaction`, `requireTransaction`, `afterCommit`, `retryContention`, `Transaction` | `/database` |
 | `DatabaseError`, `TransactionCommitFailed`, `TransactionRollbackFailed`, `AfterCommitUnavailable` and the other transaction errors | `/database` |
@@ -521,8 +522,8 @@ placeholders, double-quoted identifiers.
 | `makeHttpClient`, `makeHttpTransport`, `httpConfigFromEnv`                                       | `/benchmark/http` |
 | `runCli`                                                                                         | `/benchmark/cli`  |
 
-`/schema` reads tables; it does not declare them. Declare tables with `table` from `/clickhouse`
-or `/postgres`. See [Schema and migrations](./migrations.md), [Database](./database.md),
+`/schema` reads tables; it does not declare them. Declare tables with `table` from `/clickhouse`,
+`/postgres` or `/sqlite`. See [Schema and migrations](./migrations.md), [Database](./database.md),
 [Running a query](./running-queries.md) for what the `/sql` statement helpers are for, and
 [Benchmarking](./benchmarking.md) for the complete benchmark API, command workflow, result
 verification, and JSON protocol.
@@ -530,3 +531,69 @@ verification, and JSON protocol.
 Note `/sql` exports a `compile` (fragment → string) distinct from the dialect entries' `compile`
 (query → `CompiledQuery`), and a `when` distinct from the query builder's `when` (optional
 conditions).
+
+## SQLite and D1
+
+`@maple-dev/effect-orm/sqlite` exports the shared query builder and the four compile functions.
+`sqliteDialect` is the default; `d1Dialect` uses the same SQL with a 100-binding limit and no
+interactive transactions. See [SQLite and D1](./sqlite.md) for driver wiring and limits.
+
+| Export | Purpose |
+| --- | --- |
+| `SqliteType` | A SQLite SQL type with its Effect codec |
+| `text`, `integer`, `real` | Text, safe integer and finite number codecs |
+| `boolean` | A boolean encoded as 0/1; other integers fail decoding |
+| `timestamp` | An instant stored as SQLite's `YYYY-MM-DD HH:MM:SS.SSS` UTC text; reads ISO-8601 too |
+| `sqliteTimestampText(epochMillis)` | That text for an instant, for raw SQL and seeds |
+| `timestampNow` | A `defaultExpr` for a `timestamp` column: the current time in that text form |
+| `blob` | Bytes from a Uint8Array or D1's array wire representation |
+| `json(schema)` | JSON text decoded through the supplied schema |
+| `nullable(type)`, `custom`, `brand` | Type composition |
+| `count`, `countDistinct`, `countIf`, `sum`, `avg`, `min`, `max` | SQLite aggregates; the last four can return SQL NULL |
+| `lower`, `upper`, `length`, `coalesce` | SQLite scalar functions |
+
+### Tables and DDL
+
+```ts
+const Links = SQLite.table("short_link", {
+	columns: {
+		id: SQLite.text,
+		code: SQLite.column(SQLite.text, { unique: true }),
+		orgId: SQLite.column(SQLite.nullable(SQLite.text), { name: "org_id" }),
+		clickCount: SQLite.column(SQLite.integer, { name: "click_count", default: 0 }),
+		createdAt: SQLite.column(SQLite.text, { name: "created_at", defaultExpr: "(CURRENT_TIMESTAMP)" }),
+	},
+	primaryKey: ["id"],
+	indexes: [SQLite.index("short_link_org", ["orgId"])],
+	tenantColumn: "orgId",
+})
+```
+
+| Export | Signature |
+| --- | --- |
+| `table` | `(name, TableDefinition) => SqliteSchemaTable`, `(name, ExternalTableDefinition) => Table`, or `(name, columns, TableOptions?) => Table`, a query schema with no DDL |
+| `column` | `(type, ColumnOptions) => ColumnSpec` |
+| `index` | `(name, on) => IndexSpec`: columns, or a callback building expressions |
+| `uniqueIndex` | The same, `UNIQUE` |
+
+**`TableDefinition`** — `columns` (required), `primaryKey` (column names: one is written inline,
+several as a table constraint), `indexes`, `tenantColumn`. A column is `NOT NULL` unless its
+type is `nullable(...)`; a primary key column cannot be nullable.
+
+**`ExternalTableDefinition`** — `{ external: true, columns, tenantColumn? }`: a view, or a table
+another tool migrates. No DDL. **`TableOptions`** — `tenantColumn`, `defaults`, `computed`, for
+the bare-columns form.
+
+**`ColumnOptions`** — one of `default` (a literal, encoded through the column type; a boolean
+is written `true` / `false`) or `defaultExpr` (SQL as written, so add SQLite's parentheses, or a
+DSL callback, parenthesized for you); either lets an insert leave the column out
+(`DefaultedColumnsOf`). Also `name` (the column's name in SQL) and `unique` (`true` or a
+constraint name), an inline `UNIQUE` constraint named `<table>_<column>_unique` by default, as
+drizzle-kit 1.0 writes and names it.
+
+**Types** — `ColumnInput`, `ColumnSpec`, `ColumnsOf`, `IndexSpec`, `TableDdl`, `SqliteSchemaTable`,
+`DdlExpr`, `DdlKey`, `DefinitionProblem`. A definition that cannot render records a problem;
+`S.sqliteEntitiesOf` fails with a `SchemaDefinitionError`, and `S.renderSqliteSchema` writes
+the `CREATE TABLE` and `CREATE INDEX` statements. `effect-orm generate` with `dialect: "sqlite"`
+writes migrations for them; see [SQLite migrations](./migrations.md#sqlite). The `/migrate`
+runner does not apply SQLite migrations yet.

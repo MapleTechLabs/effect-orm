@@ -8,7 +8,7 @@
 // 4. Assembling into SqlQuery and calling the existing compileQuery()
 
 import { compiled, compiledUnsafe, fail } from "./failure"
-import { columnSqlName, custom, dateTime, dateTime64, type CHType, type ColumnDefs } from "./types"
+import { CHFloatResult, CHNumber, columnSqlName, custom, dateTime, dateTime64, type CHType, type ColumnDefs } from "./types"
 import type { CHQuery, CHQueryState, NeedsSelect } from "./query"
 import type { CHUnionQuery } from "./union"
 import { isInsert, type AnyInsert, type CHInsert } from "./insert"
@@ -22,7 +22,7 @@ import { activeLiteralBinder, withLiteralBinder } from "../sql/literal-binder"
 import { compileQuery, type SqlQuery } from "../sql/sql-query"
 import { track, untracked, type RenderTrack } from "../sql/render-tracker"
 import { PARAM_MARKER_PREFIX, PARAM_PLACEHOLDER_PATTERN, param, paramColumnTypeOf, paramSchema, type ParamKind } from "./param"
-import { mergeResultSchemas } from "./define-fn"
+import { mergeResultSchemas, schemaOf } from "./define-fn"
 import { encodeValue } from "./literal"
 import { checkedLiteral, clickhouseDialect, currentDialect, withDialect, type Dialect } from "./dialect"
 import { Effect, Option, Schema } from "effect"
@@ -936,7 +936,9 @@ function compileInner<
 			const sqlQuery: SqlQuery = {
 				distinct: state.distinct !== undefined,
 				distinctOn: Array.isArray(state.distinct)
-					? (state.distinct.length === 0
+					? (currentDialect().clauses.distinctOn === false
+						? fail<ReadonlyArray<string>>(new QueryBuilderDefect({ message: `${currentDialect().name} has no DISTINCT ON clause` }), [])
+						: state.distinct.length === 0
 							? fail<ReadonlyArray<string>>(new QueryBuilderDefect({ message: "CHQuery: distinctOn() needs at least one key" }), [])
 							: state.distinct
 						).map((key: string) => {
@@ -967,7 +969,9 @@ function compileInner<
 				orderBy: state.orderByFn === undefined
 					? orderByClause(state.orderBySpecs).map(raw)
 					: orderByExprs(state.orderByFn($)).map(raw),
-				limit: rowCount("limit", state.limitValue),
+				limit: state.limitValue == null && state.offsetValue != null && currentDialect().clauses.offsetRequiresLimit === true
+					? raw("-1")
+					: rowCount("limit", state.limitValue),
 				offset: rowCount("offset", state.offsetValue),
 				format: options?.skipFormat ? undefined : formatClause(state.formatValue),
 			}
@@ -1391,6 +1395,39 @@ export function compileUnionRaw<Output extends Record<string, any>>(
 }
 
 /** The recursion behind {@link compileUnionUnsafe}; see {@link compileInner}. */
+/** A JS-number schema: every numeric ClickHouse type and arithmetic result decodes through one of these. */
+const isNumberSchema = (schema: unknown): boolean => {
+	if (schema === CHNumber || schema === CHFloatResult) return true
+	// NullOr(CHNumber): a nullable column or arithmetic over one.
+	const members = (schema as { members?: ReadonlyArray<unknown> } | undefined)?.members
+	return Array.isArray(members) && members.some((m) => m === CHNumber || m === CHFloatResult) && members.every((m) => m === CHNumber || m === CHFloatResult || m === Schema.Null)
+}
+
+/**
+ * The union columns a dialect with `unionNumberOrderKeys` orders through those
+ * keys: every branch selects a number, and their types may differ, because the
+ * branches declare different column types or compute it differently
+ * (arithmetic has no declared type: `Id + 1` is UInt64, `Id - 1` Int64).
+ */
+function mixedNumberColumns(queries: ReadonlyArray<CHQuery<any, any, any, any>>, selectKeys: ReadonlyArray<string>): ReadonlySet<string> {
+	const casts = new Set<string>()
+	if (currentDialect().unionNumberOrderKeys === undefined || queries.length < 2) return casts
+	for (const alias of selectKeys) {
+		const exprs = queries.map((q) => (selectExprsOf(q) as Record<string, unknown> | undefined)?.[alias])
+		const kinds = exprs.map((expr) => {
+			if (!isExprLike(expr)) return undefined
+			const declared = columnTypeOf(expr as Expr<any>)
+			if (declared !== undefined) return isNumberSchema(declared.schema) ? declared.sql : undefined
+			return isNumberSchema(schemaOf(expr)) ? "computed" : undefined
+		})
+		if (kinds.some((kind) => kind === undefined)) continue
+		if (new Set(kinds).size > 1) casts.add(alias)
+		// The same computation in every branch (a `sum` over one column) has one type; different ones may not.
+		else if (kinds[0] === "computed" && new Set(exprs.map((expr) => compileSqlFragment((expr as Expr<any>).toFragment()))).size > 1) casts.add(alias)
+	}
+	return casts
+}
+
 function compileUnionInner<Output extends Record<string, any>, Params extends Record<string, any>>(
 	union: CHUnionQuery<Output>,
 	params: Params,
@@ -1419,6 +1456,7 @@ function compileUnionInner<Output extends Record<string, any>, Params extends Re
 	const subQueries = state.queries.map((q) =>
 		compileInner(q, params, { skipFormat: true, deferParams, nested: true, selectKeys, enclosingCtes }),
 	)
+	const mixedNumbers = mixedNumberColumns(state.queries, selectKeys)
 	const bounds = new Set(
 		subQueries.flatMap((q) => {
 			const bound = tenantBoundOf(q)
@@ -1442,7 +1480,9 @@ function compileUnionInner<Output extends Record<string, any>, Params extends Re
 				: "cross-tenant"
 
 	const parenthesize = currentDialect().clauses.parenthesizeUnionBranches
-	let sql = subQueries.map((q) => (parenthesize ? `(\n${q.sql}\n)` : q.sql)).join("\nUNION ALL\n")
+	let sql = subQueries.map((q) => currentDialect().clauses.wrapUnionBranches === true
+		? `SELECT * FROM (\n${q.sql}\n) AS ${quoteIdent("__union_branch")}`
+		: parenthesize ? `(\n${q.sql}\n)` : q.sql).join("\nUNION ALL\n")
 
 	// Wrap in outer SELECT if ordering/pagination is needed
 	const hasOuter =
@@ -1451,10 +1491,19 @@ function compileUnionInner<Output extends Record<string, any>, Params extends Re
 	if (hasOuter) {
 		sql = `SELECT * FROM (\n${sql}\n)${currentDialect().clauses.derivedTableAlias ? ` AS ${quoteIdent("__union")}` : ""}`
 		if (state.outerOrderBySpecs.length > 0) {
-			sql += `\nORDER BY ${orderByClause(state.outerOrderBySpecs).join(", ")}`
+			const orderKeys = currentDialect().unionNumberOrderKeys
+			const clause = orderByClause(state.outerOrderBySpecs).map((rendered, i) => {
+				const [column, direction] = state.outerOrderBySpecs[i]!
+				return orderKeys !== undefined && mixedNumbers.has(column)
+					? orderKeys(quoteIdent(column)).map((key) => `${key} ${direction.toUpperCase()}`).join(", ")
+					: rendered
+			})
+			sql += `\nORDER BY ${clause.join(", ")}`
 		}
 		if (state.outerLimitValue != null) {
 			sql += `\nLIMIT ${compileSqlFragment(rowCount("limit", state.outerLimitValue)!)}`
+		} else if (state.outerOffsetValue != null && currentDialect().clauses.offsetRequiresLimit === true) {
+			sql += "\nLIMIT -1"
 		}
 		if (state.outerOffsetValue != null) {
 			sql += `\nOFFSET ${compileSqlFragment(rowCount("offset", state.outerOffsetValue)!)}`
@@ -1541,6 +1590,12 @@ function renderParams(
 		const value = literal !== undefined ? literal.wire : encodeParam(dialect, kind as ParamKind, name, params[name])
 		if (style._tag === "inline") return checkedLiteral(dialect, value, paramContext(kind, name))
 
+		if (style.nulInText === false && typeof value === "string" && value.includes("\0")) {
+			return fail(new QueryBuilderError({
+				code: "InvalidLiteral",
+				message: `compile: ${paramContext(kind, name)} contains U+0000, which ${dialect.name} drivers end text at; the value would arrive cut short`,
+			}), "NULL")
+		}
 		const key = `${kind}\0${name}`
 		const existing = style.reuse ? bound.get(key) : undefined
 		if (existing !== undefined) return existing
@@ -1684,6 +1739,9 @@ const onConflictClause = (
 	let target = ""
 	if (conflict.target !== undefined) {
 		if ("constraint" in conflict.target) {
+			if (dialect.clauses.onConflictConstraint === false) {
+				return fail(new QueryBuilderDefect({ message: `${where}: ${dialect.name} has no ON CONSTRAINT conflict target; name its columns instead` }), "")
+			}
 			if (conflict.targetWhere !== undefined) {
 				return fail(new QueryBuilderDefect({ message: `${where}: targetWhere needs a column target, not a constraint` }), "")
 			}
@@ -1778,7 +1836,9 @@ const valueCells = (table: Table<string, ColumnDefs>, params: Record<string, unk
 	const values: Record<string, unknown> = { ...params }
 	let next = 0
 	const cell = (column: string, value: unknown, context: string): string => {
-		if (value === undefined) return "DEFAULT"
+		if (value === undefined) return currentDialect().clauses.defaultInValues === false
+			? fail(new QueryBuilderDefect({ message: `${where}: ${currentDialect().name} has no per-cell DEFAULT in VALUES; group rows by their present columns` }), "NULL")
+			: "DEFAULT"
 		if (isExprLike(value)) return compileSqlFragment(value.toFragment())
 		const wire = encodeValue(table.columns[column]!.literalSchema, value, `${where}: ${context}, column ${column}`)
 		let name = `${VALUE_PARAM}${next++}`
@@ -1954,7 +2014,9 @@ function compileInsert(insert: CHInsert<any, any, any, any>, params: Record<stri
 			} else {
 				const selected = insertSelectSource(insert, selectQuery!, values)
 				columns = selected.columns
-				source = selected.sql
+				source = insert._state.conflict !== undefined && dialect.clauses.insertSelectNeedsWhere === true
+					? `SELECT * FROM (\n${selected.sql}\n) AS ${quoteIdent("__insert_source")} WHERE 1`
+					: selected.sql
 				readScope = selected.inner.tenantScope
 				const bound = tenantBoundOf(selected.inner)
 				readBound = bound

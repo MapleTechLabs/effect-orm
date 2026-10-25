@@ -3,7 +3,7 @@
 //   plans compile cleanly   a well-typed plan is never refused, and nothing throws
 //   deterministic           compiling the same plan twice gives the same SQL and params
 //   no leaked JS            no `undefined`, `[object …]`, `NaN` or `__PARAM_` in the SQL
-//   placeholders line up    Postgres `$n` are exactly 1..parameters.length
+//   placeholders line up    the dialect's own check, e.g. Postgres `$n` are exactly 1..parameters.length
 //   tenant scope            `.crossTenant()` is always cross-tenant; a top-level tenant
 //                           predicate on an unjoined query is always single-tenant
 //   hostile values          any JS value where a value goes is compiled or refused with a
@@ -11,11 +11,9 @@
 import { describe, expect, it } from "vitest"
 import fc from "fast-check"
 import { Effect, Exit } from "effect"
-import * as CH from "@maple-dev/effect-orm/clickhouse"
-import * as PG from "@maple-dev/effect-orm/postgres"
 import type { CoreContext } from "../core-cases"
-import { scopeContexts as contexts } from "./contexts"
-import { compilePlan } from "./build"
+import { compilePlan, scopeContext } from "./build"
+import { dialects, type FuzzDialect } from "./dialects"
 import { FuzzFailure, property, skipKnown } from "./harness"
 import { knownHostileIssue, knownPlanIssue } from "./known-issues"
 import { nastyOptions, ORDER_COLUMNS, plan, type OrderColumn, type Plan } from "./plan"
@@ -25,10 +23,11 @@ const stringsIn = (value: unknown): Array<string> =>
 
 const serialize = (value: unknown) => JSON.stringify(value, (_, v) => (typeof v === "bigint" ? `${v}n` : v instanceof Date ? `Date(${v.getTime()})` : v))
 
-const compiles = (ctx: CoreContext, input: Plan) => {
-	const known = knownPlanIssue({ target: ctx.dialect, plan: input })
+const compiles = (dialect: FuzzDialect, input: Plan) => {
+	const known = knownPlanIssue({ target: dialect.name, plan: input })
 	if (known !== undefined) skipKnown(known)
-	const first = compilePlan(ctx, input)
+	const ctx = scopeContext(dialect)
+	const first = compilePlan(dialect, ctx, input)
 	if (first._tag !== "Compiled") throw new FuzzFailure(`a valid plan was not compiled (${first._tag})`, { error: first.error })
 	const { compiled } = first
 	const context = { sql: compiled.sql, parameters: serialize(compiled.parameters), tenantScope: compiled.tenantScope }
@@ -36,7 +35,7 @@ const compiles = (ctx: CoreContext, input: Plan) => {
 		throw new FuzzFailure(message, context)
 	}
 
-	const second = compilePlan(ctx, input)
+	const second = compilePlan(dialect, ctx, input)
 	if (second._tag !== "Compiled" || second.compiled.sql !== compiled.sql || serialize(second.compiled.parameters) !== serialize(compiled.parameters)) {
 		fail("compiling the same plan twice gave different output")
 	}
@@ -46,12 +45,10 @@ const compiles = (ctx: CoreContext, input: Plan) => {
 		if (compiled.sql.includes(token) && !strings.some((s) => s.includes(token))) fail(`the SQL contains ${JSON.stringify(token)}`)
 	}
 
-	if (ctx.dialect === "postgres" && !strings.some((s) => s.includes("$"))) {
-		const used = new Set([...compiled.sql.matchAll(/\$(\d+)/g)].map((m) => Number(m[1])))
-		const expected = Array.from({ length: compiled.parameters.length }, (_, i) => i + 1)
-		if (used.size !== expected.length || !expected.every((n) => used.has(n))) {
-			fail(`placeholders ${[...used].sort((a, b) => a - b).join(",")} do not match ${compiled.parameters.length} parameters`)
-		}
+	// A plan's own strings may contain placeholder syntax (`$1`, `?`) that is rightly bound, not counted.
+	if (dialect.checkPlaceholders !== undefined && !strings.some((s) => /[$?:{]/.test(s))) {
+		const problem = dialect.checkPlaceholders(compiled.sql, compiled.parameters.length)
+		if (problem !== undefined) fail(problem)
 	}
 
 	if (input.crossTenant && compiled.tenantScope !== "cross-tenant") fail(".crossTenant() did not make the query cross-tenant")
@@ -62,9 +59,9 @@ const compiles = (ctx: CoreContext, input: Plan) => {
 }
 
 describe("compile properties", () => {
-	for (const ctx of Object.values(contexts)) {
-		const name = `plans compile cleanly (${ctx.dialect})`
-		it(name, () => property(name, plan(nastyOptions(ctx.dialect)), (input) => compiles(ctx, input), { runs: 300 }), 120_000)
+	for (const dialect of dialects) {
+		const name = `plans compile cleanly (${dialect.name})`
+		it(name, () => property(name, plan(nastyOptions(dialect)), (input) => compiles(dialect, input), { runs: 300 }), 120_000)
 	}
 })
 
@@ -79,23 +76,24 @@ const hostile: fc.Arbitrary<unknown> = fc.oneof(
 
 type HostileSite = "lit" | "add" | "eq" | "neq" | "gt" | "in_" | "notIn" | "between" | "like" | "param.int" | "param.float" | "param.string" | "param.bool" | "param.dateTime" | "param.of" | "select"
 export interface HostileInput {
-	readonly dialect: "clickhouse" | "postgres"
+	readonly dialect: string
 	readonly column: OrderColumn
 	readonly site: HostileSite
 	readonly value: unknown
 }
 
-const hostileQuery = (ctx: CoreContext, input: HostileInput) => {
+const hostileQuery = (dialect: FuzzDialect, ctx: CoreContext, input: HostileInput) => {
 	const { site, value, column } = input
+	const { lit, param } = dialect.module
 	const params: Record<string, unknown> = { orgId: "org_1", h: value }
 	let q: any = ctx.from(ctx.orders)
-	if (site === "select") return { query: q.select(() => ({ id: CH.lit(1), bad: value })), params }
-	if (site === "lit") return { query: q.select(() => ({ id: CH.lit(value as never) })), params }
+	if (site === "select") return { query: q.select(() => ({ id: lit(1), bad: value })), params }
+	if (site === "lit") return { query: q.select(() => ({ id: lit(value as never) })), params }
 	if (site === "add") return { query: q.select(($: any) => ({ id: $.Amount.add(value) })), params }
 	q = q.select(($: any) => ({ id: $.Id }))
 	if (site.startsWith("param.")) {
 		const kind = site.slice("param.".length)
-		const marker = kind === "of" ? CH.param.of((ctx.orders as any).columns[column], "h") : (CH.param as any)[kind]("h")
+		const marker = kind === "of" ? param.of((ctx.orders as any).columns[column], "h") : (param as any)[kind]("h")
 		return { query: q.where(($: any) => [$[column].eq(marker)]), params }
 	}
 	return {
@@ -104,7 +102,7 @@ const hostileQuery = (ctx: CoreContext, input: HostileInput) => {
 	}
 }
 
-const hostileInput = (dialect: "clickhouse" | "postgres"): fc.Arbitrary<HostileInput> =>
+const hostileInput = (dialect: string): fc.Arbitrary<HostileInput> =>
 	fc.record({
 		dialect: fc.constant(dialect),
 		column: fc.constantFrom(...(Object.keys(ORDER_COLUMNS) as OrderColumn[])),
@@ -112,13 +110,13 @@ const hostileInput = (dialect: "clickhouse" | "postgres"): fc.Arbitrary<HostileI
 		value: hostile,
 	})
 
-const neverThrows = (ctx: CoreContext, input: HostileInput) => {
+const neverThrows = (dialect: FuzzDialect, input: HostileInput) => {
 	const known = knownHostileIssue(input)
 	if (known !== undefined) skipKnown(known)
 	let exit: Exit.Exit<unknown, unknown>
 	try {
-		const { query, params } = hostileQuery(ctx, input)
-		exit = Effect.runSyncExit(((ctx.dialect === "clickhouse" ? CH.compile : PG.compile) as any)(query, params))
+		const { query, params } = hostileQuery(dialect, scopeContext(dialect), input)
+		exit = Effect.runSyncExit(dialect.module.compile(query, params))
 	} catch (error) {
 		throw new FuzzFailure("the builder threw instead of failing with a QueryBuilderError", {
 			error: error instanceof Error ? `${error.name}: ${error.message}\n${error.stack?.split("\n").slice(1, 6).join("\n")}` : String(error),
@@ -138,8 +136,8 @@ const neverThrows = (ctx: CoreContext, input: HostileInput) => {
 }
 
 describe("hostile values", () => {
-	for (const ctx of Object.values(contexts)) {
-		const name = `hostile values are refused, never thrown (${ctx.dialect})`
-		it(name, () => property(name, hostileInput(ctx.dialect), (input) => neverThrows(ctx, input), { runs: 500 }), 120_000)
+	for (const dialect of dialects) {
+		const name = `hostile values are refused, never thrown (${dialect.name})`
+		it(name, () => property(name, hostileInput(dialect.name), (input) => neverThrows(dialect, input), { runs: 500 }), 120_000)
 	}
 })

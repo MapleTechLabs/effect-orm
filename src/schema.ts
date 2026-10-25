@@ -23,6 +23,7 @@ export {
 	SchemaEntity,
 	Snapshot,
 	SNAPSHOT_VERSION,
+	SqliteSnapshot,
 	TableEntity,
 	canonicalJson,
 	entityKey,
@@ -87,5 +88,31 @@ export {
 	type PgOpLabel,
 } from "./schema/pg-ops"
 export { diffPgSchemas } from "./schema/pg-diff"
+export { sqliteEntitiesOf, type SqliteSchemaTable } from "./schema/sqlite-define"
+export {
+	SqliteColumnEntity,
+	SqliteIndexEntity,
+	SqliteSchemaEntity,
+	SqliteTableEntity,
+	SqliteUniqueEntity,
+	canonicalSqliteType,
+} from "./schema/sqlite-entities"
+export { diffSqliteSchemas } from "./schema/sqlite-diff"
+export { fromDrizzleSqliteSnapshot, type DrizzleSqliteImport } from "./schema/sqlite-drizzle"
+export {
+	SqliteMigrationOp,
+	labelOfSqlite,
+	rebuildName,
+	renderSqliteMigrationSql,
+	renderSqliteOp,
+	type SqliteOpLabel,
+} from "./schema/sqlite-ops"
+export {
+	renderSqliteColumnDefinition,
+	renderSqliteCreateIndex,
+	renderSqliteCreateTable,
+	renderSqliteSchema,
+	sqliteIdent,
+} from "./schema/sqlite-render"
 export { fromDrizzleSnapshot, type DrizzleImport } from "./schema/drizzle"
 export { Hint, Hints, diffSchemas, type DiffResult, type UnsupportedChange } from "./schema/diff"

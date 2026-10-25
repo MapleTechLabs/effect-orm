@@ -493,9 +493,10 @@ const runHooks = (sql: SqlClient.SqlClient, hooks: ReadonlyArray<Hook>): Effect.
 
 /**
  * Turn what came out of `withTransaction` back into what the caller should see.
- * Effect dies on a failed COMMIT or ROLLBACK, and a dying ROLLBACK replaces the
- * body's own exit. Body defects were carried through as `BodyDefect`, so any
- * other defect that is a `SqlError` came from transaction control.
+ * Effect fails with the `SqlError` of a failed COMMIT (or dies, when cleanup
+ * after it failed too), and dies on a failed ROLLBACK, which replaces the body's
+ * own exit. Body defects were carried through as `BodyDefect`, so any other
+ * defect that is a `SqlError` came from transaction control.
  */
 const restoreCause = <E>(
 	cause: Cause.Cause<unknown>,
@@ -507,19 +508,27 @@ const restoreCause = <E>(
 		return Effect.failCause(failure.success.cause as Cause.Cause<E>)
 	}
 	const defect = Cause.findDefect(cause)
+	// The body succeeded, so a `SqlError` here came from COMMIT or RELEASE.
+	if (bodyExit !== undefined && Exit.isSuccess(bodyExit)) {
+		const error =
+			failure._tag === "Success" && isSqlError(failure.success)
+				? failure.success
+				: defect._tag === "Success" && isSqlError(defect.success)
+					? defect.success
+					: undefined
+		if (error === undefined) return Effect.failCause(cause as Cause.Cause<E>)
+		const sqlState = sqlStateOf(error)
+		return Effect.fail(
+			new TransactionCommitFailed({
+				message: `${depth === 0 ? "COMMIT" : "releasing the savepoint"} failed: ${firstLine(error)}`,
+				reason: reasonOf(error),
+				...(sqlState === undefined ? undefined : { sqlState }),
+				cause: error,
+			}),
+		)
+	}
 	if (defect._tag === "Success" && isSqlError(defect.success)) {
 		const error = defect.success
-		if (bodyExit !== undefined && Exit.isSuccess(bodyExit)) {
-			const sqlState = sqlStateOf(error)
-			return Effect.fail(
-				new TransactionCommitFailed({
-					message: `${depth === 0 ? "COMMIT" : "releasing the savepoint"} failed: ${firstLine(error)}`,
-					reason: reasonOf(error),
-					...(sqlState === undefined ? undefined : { sqlState }),
-					cause: error,
-				}),
-			)
-		}
 		// The body never ran: BEGIN or SAVEPOINT died, not ROLLBACK.
 		if (bodyExit === undefined) return Effect.fail(toDatabaseError(depth === 0 ? "BEGIN" : "SAVEPOINT")(error))
 		// An interrupted transaction whose ROLLBACK died stays interrupted.

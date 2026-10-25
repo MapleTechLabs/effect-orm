@@ -4,9 +4,12 @@
 > **Alpha.** The API is still changing and minor releases may break it. Pin an exact version,
 > read the [changelog](./CHANGELOG.md) before upgrading, and expect rough edges.
 
-Type-safe ClickHouse and Postgres queries, result decoding, and reproducible benchmarks for Effect and TypeScript.
+Type-safe ClickHouse, Postgres and SQLite queries, result decoding, and reproducible benchmarks for Effect and TypeScript.
 
 Formerly `@maple-dev/effect-clickhouse`.
+
+SQLite and Cloudflare D1 use the same builder and row decoder through the new
+[`/sqlite` entry](./docs/sqlite.md), which also writes SQLite table DDL. `effect-orm generate` writes SQLite migrations; effect-orm does not apply them yet.
 
 [Read the documentation](https://effect-clickhouse.maple.dev) ·
 [Getting started](./docs/getting-started.md) · [Recipes](./docs/recipes.md)
@@ -33,12 +36,12 @@ Built on [Effect](https://effect.website) (peer dependency).
 Install the package with its Effect 4 peer:
 
 ```bash
-bun add @maple-dev/effect-orm "effect@^4.0.0"
+bun add @maple-dev/effect-orm "effect@^4.0.6"
 ```
 
 See [Getting started](./docs/getting-started.md) for source builds and examples.
 
-`effect` is a peer dependency. The recommended range `^4.0.0` allows
+`effect` is a peer dependency. The recommended range `^4.0.6` allows
 newer Effect 4 releases without opting into Effect 5. Effect 3 and the Effect 4
 prereleases are incompatible.
 

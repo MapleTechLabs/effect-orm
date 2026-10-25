@@ -1,14 +1,14 @@
-// A plan as builder calls, for either dialect.
+// A plan as builder calls, for any dialect.
 //
 // The builder is driven through its public, typed surface exactly as an
 // application would; `any` here only erases the static types a random plan
 // cannot have. Params are named up front from the plan's structure so that
 // compiling the same plan twice resolves the same names to the same values.
 import { DateTime, Effect, Exit } from "effect"
-import * as CH from "@maple-dev/effect-orm/clickhouse"
-import * as PG from "@maple-dev/effect-orm/postgres"
+import type * as CH from "@maple-dev/effect-orm/clickhouse"
 import type { CoreContext } from "../core-cases"
-import type { Agg, Cond, Expr, Operand, Plan } from "./plan"
+import type { FuzzDialect } from "./dialects/types"
+import type { Agg, Cond, Expr, Operand, Plan, UnionPlan } from "./plan"
 
 const pad = (n: number, width = 2) => String(n).padStart(width, "0")
 /** `YYYY-MM-DD hh:mm:ss.sss` in UTC: the string form a DateTime comparison accepts. */
@@ -18,13 +18,13 @@ export const timeString = (ms: number): string => {
 }
 
 /** Every param operand in the plan, in a fixed walk order, with the name it compiles as. */
-const nameParams = (plan: Plan): { readonly names: Map<Operand, string>; readonly params: Record<string, unknown> } => {
+const nameParams = (plan: Plan, prefix: string): { readonly names: Map<Operand, string>; readonly params: Record<string, unknown> } => {
 	const names = new Map<Operand, string>()
 	const params: Record<string, unknown> = { orgId: plan.orgId }
 	const operand = (op: Operand) => {
 		if (op.k === "expr") return expr(op.e)
 		if (op.k !== "param") return
-		const name = `p${names.size}`
+		const name = `${prefix}p${names.size}`
 		names.set(op, name)
 		params[name] = op.kind === "dateTime" ? DateTime.makeUnsafe(op.v as number) : op.v
 	}
@@ -74,8 +74,10 @@ export interface Built {
 	readonly params: Record<string, unknown>
 }
 
-export const buildPlan = (ctx: CoreContext, plan: Plan): Built => {
-	const { names, params } = nameParams(plan)
+/** `prefix` keeps the params of union branches apart: each branch names its own from `<prefix>p0`. */
+export const buildPlan = (dialect: FuzzDialect, ctx: CoreContext, plan: Plan, prefix = ""): Built => {
+	const { lit, param, and, or, not, rawCond, fromQuery } = dialect.module
+	const { names, params } = nameParams(plan, prefix)
 
 	const expr = ($: any, e: Expr): any => {
 		switch (e.k) {
@@ -85,7 +87,7 @@ export const buildPlan = (ctx: CoreContext, plan: Plan): Built => {
 				return $.c[e.col]
 			case "num":
 			case "str":
-				return CH.lit(e.v as never)
+				return lit(e.v as never)
 			case "arith":
 				return expr($, e.l)[e.op](typeof e.r === "number" ? e.r : expr($, e.r))
 			case "coalesce":
@@ -99,7 +101,7 @@ export const buildPlan = (ctx: CoreContext, plan: Plan): Built => {
 			case "time":
 				return op.form === "DateTime" ? DateTime.makeUnsafe(op.ms) : op.form === "Date" ? new Date(op.ms) : timeString(op.ms)
 			case "param":
-				return (CH.param as any)[op.kind](names.get(op)!)
+				return (param as any)[op.kind](names.get(op)!)
 			case "expr":
 				return expr($, op.e)
 		}
@@ -119,15 +121,15 @@ export const buildPlan = (ctx: CoreContext, plan: Plan): Built => {
 			case "and":
 			case "or": {
 				const parts = c.cs.map((x) => cond($, x))
-				if (c.style === "fn") return (c.k === "and" ? CH.and : CH.or)(...parts)
+				if (c.style === "fn") return (c.k === "and" ? and : or)(...parts)
 				return parts.slice(1).reduce((acc, part) => acc[c.k](part), parts[0])
 			}
 			case "not":
-				return CH.not(cond($, c.c))
+				return not(cond($, c.c))
 			case "const":
-				return CH.rawCond(c.v ? "1 = 1" : "1 = 0")
+				return rawCond(c.v ? "1 = 1" : "1 = 0")
 			case "tenant":
-				return (c.side === "orders" ? $ : $.c).OrgId.eq(CH.param.string("orgId"))
+				return (c.side === "orders" ? $ : $.c).OrgId.eq(param.string("orgId"))
 		}
 	}
 	const agg = ($: any, a: Agg): any => {
@@ -166,13 +168,23 @@ export const buildPlan = (ctx: CoreContext, plan: Plan): Built => {
 	if (shape.limit !== undefined) q = q.limit(shape.limit)
 	if (shape.offset !== undefined) q = q.offset(shape.offset)
 	if (plan.crossTenant) q = q.crossTenant()
-	if (plan.wrap === "all") q = CH.fromQuery(q, "w").select()
+	if (plan.wrap === "all") q = fromQuery(q, "w").select()
 	if (plan.wrap === "names") {
 		const names = shape.k === "rows" ? shape.select.map(([alias]) => alias) : [...shape.keys, ...shape.aggs].map(([alias]) => alias)
-		q = CH.fromQuery(q, "w").select(...names)
+		q = fromQuery(q, "w").select(...names)
 	}
 	return { query: q, params }
 }
+
+/**
+ * The dialect's context over the plain tables, with no fixture CTEs.
+ *
+ * The fixture CTEs are bare SQL the builder cannot see into, and a CTE named
+ * `orders` shadows the `orders` table, so a query compiled against them never
+ * reports a meaningful tenant scope. Compiled here, the scope the builder
+ * reports is the one a real application gets.
+ */
+export const scopeContext = (dialect: FuzzDialect): CoreContext => ({ ...dialect.context, from: (table) => dialect.module.from(table) as any })
 
 export type Compiled =
 	| { readonly _tag: "Compiled"; readonly compiled: CH.CompiledQuery<any> }
@@ -185,11 +197,9 @@ export type Compiled =
  * `QueryBuilderError` is `Refused`; a die is a `Defect`; an exception that
  * escapes `compile` — or the builder calls before it — is `Threw`.
  */
-export const compilePlan = (ctx: CoreContext, plan: Plan): Compiled => {
+export const classify = (compile: () => Effect.Effect<CH.CompiledQuery<any>, unknown>): Compiled => {
 	try {
-		const { query, params } = buildPlan(ctx, plan)
-		const compile = ctx.dialect === "clickhouse" ? CH.compile : PG.compile
-		const exit = Effect.runSyncExit((compile as any)(query, params) as Effect.Effect<CH.CompiledQuery<any>, unknown>)
+		const exit = Effect.runSyncExit(compile())
 		if (Exit.isSuccess(exit)) return { _tag: "Compiled", compiled: exit.value }
 		const failure = exit.cause.reasons.find((reason) => reason._tag === "Fail")
 		return failure !== undefined
@@ -199,3 +209,26 @@ export const compilePlan = (ctx: CoreContext, plan: Plan): Compiled => {
 		return { _tag: "Threw", error: error instanceof Error ? `${error.name}: ${error.message}\n${error.stack}` : String(error) }
 	}
 }
+
+export const compilePlan = (dialect: FuzzDialect, ctx: CoreContext, plan: Plan): Compiled =>
+	classify(() => {
+		const { query, params } = buildPlan(dialect, ctx, plan)
+		return dialect.module.compile(query, params)
+	})
+
+/** A union plan as `unionAll(...)` of its branches, each with its own params. */
+export const buildUnion = (dialect: FuzzDialect, ctx: CoreContext, plan: UnionPlan): Built => {
+	const built = plan.branches.map((branch, i) => buildPlan(dialect, ctx, branch, `b${i}`))
+	let union: any = (dialect.module.unionAll as (...queries: ReadonlyArray<unknown>) => unknown)(...built.map((b) => b.query))
+	if (plan.orderBy.length > 0) union = union.orderBy(...plan.orderBy.map(([alias, dir]) => [alias, dir]))
+	if (plan.limit !== undefined) union = union.limit(plan.limit)
+	if (plan.offset !== undefined) union = union.offset(plan.offset)
+	if (plan.crossTenant) union = union.crossTenant()
+	return { query: union, params: Object.assign({}, ...built.map((b) => b.params)) }
+}
+
+export const compileUnionPlan = (dialect: FuzzDialect, ctx: CoreContext, plan: UnionPlan): Compiled =>
+	classify(() => {
+		const { query, params } = buildUnion(dialect, ctx, plan)
+		return dialect.module.compileUnion(query, params)
+	})

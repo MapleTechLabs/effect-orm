@@ -159,6 +159,22 @@ describe("CompiledQuery.decodeRows", () => {
 		expect(compiled.rowSchemaMismatch).toEqual({ undeclared: [], unselected: ["missing"] })
 	})
 
+	it("orders a ClickHouse union's mixed numeric column by exact keys, leaving its values alone", () => {
+		// `Id + 1` is UInt64 and `Id - 1` Int64: ClickHouse makes the column a Variant, which ORDER BY refuses.
+		const table = CH.table("orders", { Id: CH.uint32, Amount: CH.int64, Name: CH.string })
+		const branch = (offset: number) => CH.from(table).select(($) => ({ id: $.Id, shifted: $.Id.add(offset), total: $.Amount, name: $.Name }))
+		const compiled = compileUnionUnsafe(CH.unionAll(branch(1), branch(-1)).orderBy(["shifted", "desc"], ["id", "asc"], ["name", "asc"]), {})
+		// The values are not cast: an INSERT ... SELECT or IN over the union keeps integers past 2^53 exact.
+		expect(compiled.sql).not.toContain("toFloat64(orders")
+		expect(compiled.sql).toContain("ORDER BY CAST(shifted AS Nullable(Float64)) DESC, accurateCastOrNull(shifted, 'Int128') DESC, id ASC, name ASC")
+		// Different declared types are mixed too; one declared type in every branch is not.
+		const mixed = compileUnionUnsafe(
+			CH.unionAll(CH.from(table).select(($) => ({ n: $.Id, m: $.Amount })), CH.from(table).select(($) => ({ n: $.Amount, m: $.Amount }))).orderBy(["n", "asc"], ["m", "asc"]),
+			{},
+		)
+		expect(mixed.sql).toContain("ORDER BY CAST(n AS Nullable(Float64)) ASC, accurateCastOrNull(n, 'Int128') ASC, m ASC")
+	})
+
 	it.effect("decodes rows with the declared schema for handwritten SQL", () =>
 		Effect.gen(function* () {
 			const compiled = rawCompiledQuery<{ readonly name: string; readonly count: number }>({
