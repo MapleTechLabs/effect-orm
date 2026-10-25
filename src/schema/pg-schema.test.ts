@@ -135,6 +135,10 @@ describe("PG.table", () => {
 	it("rejects definitions Postgres would not take as written", () => {
 		expect(problemsOf(PG.table("t", { columns: { a: PG.nullable(PG.text) }, primaryKey: ["a"] }))).toMatch(/cannot be nullable/)
 		expect(problemsOf(PG.table("t".repeat(64), { columns: { a: PG.text } }))).toMatch(/longer than 63/)
+		// Each renders, then Postgres refuses it: "column specified more than once".
+		expect(problemsOf(PG.table("t", { columns: { a: PG.column(PG.text, { name: "b" }), b: PG.text } }))).toMatch(/b has the same SQL name as a/)
+		expect(problemsOf(PG.table("t", { columns: { a: PG.text }, primaryKey: ["a", "a"] }))).toMatch(/a is listed more than once/)
+		expect(problemsOf(PG.table("t", { columns: { a: PG.text }, indexes: [PG.index("t_a", ["a", "a"])] }))).toMatch(/a is listed more than once/)
 		expect(
 			problemsOf(
 				PG.table("t", { columns: { a: PG.text }, foreignKeys: [PG.foreignKey({ columns: ["a"], references: "u", foreignColumns: ["x", "y"] })] }),

@@ -99,7 +99,8 @@ form `strftime('%Y-%m-%d %H:%M:%f')` and `datetime(..., 'subsec')` write. It rea
 and ISO-8601; text without a zone is UTC. SQLite compares text by bytes, so a timestamp column
 orders by time only when every value in it has one form: write them through the builder or with
 `strftime('%Y-%m-%d %H:%M:%f', ...)`. `CURRENT_TIMESTAMP` writes no milliseconds
-(`2026-01-01 00:00:00`), which compares as earlier than the same instant written with them.
+(`2026-01-01 00:00:00`), which compares as earlier than the same instant written with them, so
+a `timestamp` column refuses it as a `defaultExpr`; use `defaultExpr: SQLite.timestampNow`.
 `blob` accepts the Uint8Array wire form from Node and the array-of-bytes form from D1.
 `json` always uses the supplied schema to validate decoded JSON.
 Use `text` when a stored date/time must remain a string.

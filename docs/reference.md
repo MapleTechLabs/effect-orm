@@ -545,6 +545,7 @@ interactive transactions. See [SQLite and D1](./sqlite.md) for driver wiring and
 | `boolean` | A boolean encoded as 0/1; other integers fail decoding |
 | `timestamp` | An instant stored as SQLite's `YYYY-MM-DD HH:MM:SS.SSS` UTC text; reads ISO-8601 too |
 | `sqliteTimestampText(epochMillis)` | That text for an instant, for raw SQL and seeds |
+| `timestampNow` | A `defaultExpr` for a `timestamp` column: the current time in that text form |
 | `blob` | Bytes from a Uint8Array or D1's array wire representation |
 | `json(schema)` | JSON text decoded through the supplied schema |
 | `nullable(type)`, `custom`, `brand` | Type composition |

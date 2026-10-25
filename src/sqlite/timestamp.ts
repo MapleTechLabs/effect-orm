@@ -42,3 +42,10 @@ export const SqliteTimestamp: Schema.Codec<DateTime.Utc, string> = Schema.String
 /** What a timestamp comparison or param accepts (a `DateTime.Utc`, a `Date`, timestamp text), written in SQLite's form. */
 export const SqliteTimestampLiteral = timestampLiteral(sqliteTimestampText)
 
+
+/**
+ * A `defaultExpr` for a `timestamp` column: the current time in the form the
+ * column writes. `CURRENT_TIMESTAMP` writes no milliseconds, so its values
+ * compare as earlier than the same instant written by the builder.
+ */
+export const timestampNow = "(strftime('%Y-%m-%d %H:%M:%f', 'now'))"

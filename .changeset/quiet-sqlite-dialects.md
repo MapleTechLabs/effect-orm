@@ -7,5 +7,4 @@ Add the `/sqlite` query entry with SQLite codecs, functions and positional bindi
 and explicit refusal of interactive transactions. `timestamp` stores SQLite's own
 `YYYY-MM-DD HH:MM:SS.SSS` UTC text, so it compares correctly with what `strftime` writes; `LIKE`
 escapes with `\` as on every dialect; text with U+0000 and integers past 2^53 are refused rather
-than silently changed. `table` is a query schema only: SQLite DDL and
-migration generation are not implemented yet.
+than silently changed. SQLite migration generation is not implemented yet.
