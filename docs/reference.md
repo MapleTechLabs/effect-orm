@@ -489,9 +489,12 @@ one-dimensional array literal (`{a,"b c",NULL}`), the form enum arrays arrive in
 `max(x)`, `percentileCont(f, x)`, `arrayAgg(x)`, `dateTrunc(unit, ts)` (`DateTruncUnit` is the
 unit union), `dateBin(seconds, ts)`, `now()`, `lower(x)`, `upper(x)`, `length(x)`,
 `coalesce(x, fallback)`, `nullIf(x, value)`, `jsonText(x, key)`, `greatest(a, ...)`, `least(a, ...)`,
+`jsonPath(x, ...keys)`, `jsonPathText(x, ...keys)`, `jsonContains(x, part)`, `jsonSet(x, keys, value)`
+(typed jsonb paths; the types `JsonKey`, `JsonKeyOf`, `JsonStep`, `JsonPath`, `JsonPathValue` and
+`JsonContained` spell them, and `jsonPathSchema` reads a path's schema off a document schema, as a `JsonPathSchema`),
 `caseWhen([[c, v], ...], otherwise)`, `asBoolean(c)` (a condition as a value) and
 `typedValue(type, value)` (a value bound as a column type writes it). See
-[Postgres functions](./postgres.md#functions) for the SQL each writes.
+[Postgres functions](./postgres.md#functions) and [JSON paths](./postgres.md#json-paths) for the SQL each writes.
 
 ### Dialect
 

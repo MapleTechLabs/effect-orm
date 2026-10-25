@@ -182,6 +182,84 @@ either form, and writes its value as array text, which Postgres casts to the col
 work for an enum `generate` does not manage; see [migrations](./migrations.md#postgres) for
 moving one to `enumType`.
 
+## JSON paths
+
+A `jsonb(schema)` column knows the shape of its documents, so a path into one is typed and
+decoded by the same schema. `jsonPath(column, ...keys)` reads the value at a path with `->`;
+a string key steps into an object, a number into an array. Only paths the schema has
+type-check, and the result decodes with the field's own schema (a `NumberFromString` field
+reads as a number). A key that is absent reads as `null`.
+
+```ts title="postgres-json-paths.ts"
+import { PGlite } from "@electric-sql/pglite"
+import { Effect, Schema } from "effect"
+import * as PG from "@maple-dev/effect-orm/postgres"
+
+const Settings = Schema.Struct({
+	notifications: Schema.Struct({ sms: Schema.Boolean, email: Schema.Boolean }),
+	tags: Schema.Array(Schema.String),
+})
+
+const Users = PG.table("users", {
+	columns: { id: PG.int4, settings: PG.jsonb(Settings) },
+	primaryKey: ["id"],
+})
+
+// Read and filter: `sms` is an Expr<boolean | null>.
+export const read = PG.compileUnsafe(
+	PG.from(Users)
+		.select(($) => ({ id: $.id, sms: PG.jsonPath($.settings, "notifications", "sms") }))
+		.where(($) => [PG.jsonPath($.settings, "notifications", "email").eq(true), PG.jsonContains($.settings, { tags: ["beta"] })]),
+	{},
+)
+// read.sql:        SELECT "users"."id" AS "id", ("users"."settings" -> 'notifications' -> 'sms') AS "sms" FROM "users"
+//                  WHERE ("users"."settings" -> 'notifications' -> 'email') = $1 AND ("users"."settings" @> $2::jsonb)
+// read.parameters: ["true", '{"tags":["beta"]}']
+
+// Write one path, without reading the row first.
+export const write = PG.compileUnsafe(
+	PG.update(Users)
+		.set(($) => ({ settings: PG.jsonSet($.settings, ["notifications", "sms"], false) }))
+		.where(($) => [$.id.eq(1)]),
+	{},
+)
+// write.sql: UPDATE "users" SET "settings" = jsonb_set("settings", ARRAY['notifications', 'sms'], $1::jsonb) WHERE "id" = $2
+
+const db = new PGlite()
+await db.exec(`
+	CREATE TABLE users (id int4 PRIMARY KEY, settings jsonb NOT NULL);
+	INSERT INTO users VALUES (1, '{"notifications": {"sms": true, "email": true}, "tags": ["beta"]}');
+`)
+await db.query(write.sql, [...write.parameters])
+const result = await db.query<Record<string, unknown>>(read.sql, [...read.parameters])
+export const rows = await Effect.runPromise(read.decodeRows(result.rows))
+// [{ id: 1, sms: false }]
+await db.close()
+```
+
+| Function | SQL | Result |
+| --- | --- | --- |
+| `jsonPath(x, ...keys)` | `(x -> 'k1' -> 'k2')` | the field's type, or `null` |
+| `jsonPathText(x, ...keys)` | `(x -> 'k1' ->> 'k2')` | `string \| null`: a JSON string without its quotes |
+| `jsonContains(x, part)` | `(x @> $n::jsonb)` | a condition |
+| `jsonSet(x, [keys], value)` | `jsonb_set(x, ARRAY['k1', 'k2'], $n::jsonb)` | the document's type |
+
+- A value compared with a `jsonPath`, and the value of a `jsonSet`, is encoded by the field's
+  schema and bound as JSON text: `.eq("Kyiv")` matches the JSON string `"Kyiv"`. For text
+  comparisons and `like`, use `jsonPathText`.
+- `jsonContains` takes part of the document, at any depth: objects match on the keys given,
+  arrays on the elements given, in any order. It accepts a `jsonPath` too. Its value is written
+  as given, so a field whose schema transforms (a date stored as text) is written in its stored
+  form. A GIN index on the column serves `@>`.
+- `jsonSet` creates the last key if it is absent. A missing parent leaves the document as it is,
+  and a `NULL` document stays `NULL`. Nest calls to set more than one path.
+- Keys are written into the SQL as literals, not bound, so an expression index on
+  `(settings -> 'notifications')` matches.
+- The schema walk follows structs, records, arrays and tuples, through unions, `NullOr`,
+  optional keys and `Schema.suspend`. A path through a field whose stored form is not its
+  type (`Schema.encodeKeys`, a class) is refused when the query compiles. A `jsonb()` column
+  with no schema takes any keys and reads `unknown`.
+
 ## Functions
 
 | Function | SQL | Notes |
@@ -197,6 +275,7 @@ moving one to `enumType`.
 | `lower`, `upper`, `length` | same | |
 | `coalesce(x, fallback)` | `coalesce(x, fallback)` | No longer nullable |
 | `jsonText(x, key)` | `(x ->> key)` | `null` when absent |
+| `jsonPath`, `jsonPathText`, `jsonContains`, `jsonSet` | `->`, `->>`, `@>`, `jsonb_set` | Typed by the column schema; see [JSON paths](#json-paths) |
 | `greatest(a, ...)`, `least(a, ...)` | same | NULL arguments are skipped |
 | `caseWhen([[c, v], ...], otherwise)` | `CASE WHEN c THEN v ... ELSE otherwise END` | |
 | `asBoolean(c)` | `(c)` | A condition as a value, to select or `set` |

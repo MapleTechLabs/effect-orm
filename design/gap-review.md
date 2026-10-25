@@ -30,7 +30,7 @@ builder; **P1** commonly used; **P2** niche.
 | Postgres column types: `timestamptz` as `Date`, `timestamp`, `date`, `interval`, `varchar(n)`, serial / identity | 226 timestamp columns | S |
 | ~~DISTINCT (and DISTINCT ON)~~ (built) | ~10 | S |
 | ~~`FOR UPDATE` / `FOR SHARE` / `SKIP LOCKED` / `NOWAIT`~~ (built) | 7 | S |
-| jsonb and array operators (`@>`, `->`, `?`, `&&`, `ANY`) | ~12 | M |
+| jsonb and array operators (`@>`, `->`, `?`, `&&`, `ANY`); built: typed `->` / `->>` paths, `@>`, `jsonb_set` (docs/postgres.md#json-paths); open: `?`, `&&`, `ANY` | ~12 | M |
 | ~~`isNull` / `isNotNull` / `between`; variadic `and` / `or` that skip `undefined`~~ (built) | everywhere | S |
 | Constraint error helpers (unique, foreign key, not null); keep ClickHouse's numeric error codes, which `sqlStateOf` drops today | all upserts | S |
 | Tenant-scope enforcement in `Database`, opt in, with an explicit cross-tenant entry point | safety | S |
