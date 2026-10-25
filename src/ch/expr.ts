@@ -101,7 +101,11 @@ export type ParamEntries<Name extends string, Value> = IsUnion<Name> extends tru
 type IsUnion<T, U = T> = [T] extends [never] ? false : T extends unknown ? ([U] extends [T] ? false : true) : never
 
 /** `P` with every entry made optional. */
-export type OptionalParams<P> = P extends ParamEntry<infer N, infer V> ? OptionalParamEntry<N, V> : P extends DialectEntry ? P : never
+export type OptionalParams<P> = P extends ParamEntry<infer N, infer V>
+	? OptionalParamEntry<N, V>
+	: P extends DialectEntry | SourceEntry
+		? P
+		: never
 
 /** The names some entry of `P` requires. */
 type RequiredNames<P> = P extends ParamEntry ? (P extends { readonly optional: true } ? never : P["name"]) : never
@@ -118,13 +122,41 @@ export interface DialectEntry<Set extends string = string> {
 	readonly functions: Set
 }
 
-/** The params of an expression, condition, or a union or array of them, and its dialect entries. */
+/**
+ * The row source a column ref reads from, carried beside its params: `$.Name`
+ * in `from(Events, "e")` has a `SourceEntry<"e">`. Each query removes the
+ * entries of its own FROM and JOIN sources from what it carries, so an entry
+ * left on a query names a source the query does not have. That is a column
+ * of another query's accessor, used outside the correlated subquery it belongs
+ * to; `compile` and `run` refuse it (see `SourcesSatisfied`).
+ */
+export interface SourceEntry<Name extends string = string> {
+	readonly source: Name
+}
+
+/** The `SourceEntry` of a ref to source `Name`: none for `never`, a ref that names no source. */
+export type SourceOf<Name extends string> = [Name] extends [never] ? never : SourceEntry<Name>
+
+/**
+ * `unknown` when the entries `P` read no source the query is missing;
+ * otherwise a property naming the source. An entry for `string` (a source
+ * whose name the type does not know) is not checked.
+ */
+export type SourcesSatisfied<P> = [MissingSources<P>] extends [never]
+	? unknown
+	: {
+			readonly sourceNotInQuery: `a column of \`${MissingSources<P>}\` is used, but no FROM or JOIN of the query is named \`${MissingSources<P>}\``
+		}
+
+type MissingSources<P> = P extends SourceEntry<infer Name> ? (string extends Name ? never : Name) : never
+
+/** The params of an expression, condition, or a union or array of them, with its dialect and source entries. */
 export type ParamsIn<X> = 0 extends 1 & X
 	? never
 	: X extends { readonly _params?: (entries: infer P) => void }
 		? 0 extends 1 & P
 			? never
-			: [P] extends [ParamEntry | DialectEntry]
+			: [P] extends [ParamEntry | DialectEntry | SourceEntry]
 				? P
 				: never
 		: never
@@ -295,8 +327,10 @@ export type Quotient<L, R> = [R] extends [number]
 			: number | Extract<L, null>
 	: number | null
 
-export interface ColumnRef<Name extends string, ColType extends CHType<string, any>> extends Expr<
-	InferTS<ColType>
+/** A column of a query's source. `Source` is the source's name in the query (see `SourceEntry`). */
+export interface ColumnRef<Name extends string, ColType extends CHType<string, any>, Source extends string = never> extends Expr<
+	InferTS<ColType>,
+	SourceOf<Source>
 > {
 	readonly columnName: Name
 	/**

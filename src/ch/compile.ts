@@ -15,7 +15,16 @@ import { isInsert, type AnyInsert, type CHInsert } from "./insert"
 import { isDelete, isUpdate, type CHDelete, type CHUpdate } from "./update"
 import type { Table } from "./table"
 import { createColumnAccessor, createQualifiedColumnAccessor, createJoinedColumnAccessor, sourceAlias } from "./query"
-import { aliased, columnTypeOf, isExprLike, type Condition, type DialectSatisfied, type Expr, type ParamsSatisfied } from "./expr"
+import {
+	aliased,
+	columnTypeOf,
+	isExprLike,
+	type Condition,
+	type DialectSatisfied,
+	type Expr,
+	type ParamsSatisfied,
+	type SourcesSatisfied,
+} from "./expr"
 import { raw, identPath, quoteIdent, quoteIdentPath, compile as compileSqlFragment, type SqlFragment } from "../sql/sql-fragment"
 import { splitTerminalClauses } from "../sql/terminal-clauses"
 import { activeLiteralBinder, withLiteralBinder } from "../sql/literal-binder"
@@ -606,7 +615,7 @@ function compileQueryOrWrite(
 export interface Compile<Default extends string> {
 	/** An INSERT, UPDATE or DELETE. `params` fills the `param.*` markers among its values. */
 	<Output, Params = never, const Given extends object = {}, Functions extends string = Default>(
-		insert: CHWrite<Output, Params> & ParamsSatisfied<Params, Given> & DialectSatisfied<Params, Functions>,
+		insert: CHWrite<Output, Params> & ParamsSatisfied<Params, Given> & DialectSatisfied<Params, Functions> & SourcesSatisfied<Params>,
 		params?: Given,
 		options?: InsertCompileOptions<Functions>,
 	): Effect.Effect<CompiledQuery<Output, undefined>, QueryBuilderError>
@@ -623,7 +632,7 @@ export interface Compile<Default extends string> {
 		query: CHQuery<Cols, Output, Joins, Route, Params> &
 			NeedsSelect<Output> &
 			ParamsSatisfied<Params, Given> &
-			DialectSatisfied<Params, Functions>,
+			DialectSatisfied<Params, Functions> & SourcesSatisfied<Params>,
 		/** Values for the query's `param.*` markers: required, and typed, when it has any. */
 		params?: Given,
 		options?: QueryCompileOptions<Decoded, Functions>,
@@ -634,7 +643,7 @@ export interface Compile<Default extends string> {
 export interface CompileUnsafe<Default extends string> {
 	/** An INSERT, UPDATE or DELETE. `params` fills the `param.*` markers among its values. */
 	<Output, Params = never, const Given extends object = {}, Functions extends string = Default>(
-		insert: CHWrite<Output, Params> & ParamsSatisfied<Params, Given> & DialectSatisfied<Params, Functions>,
+		insert: CHWrite<Output, Params> & ParamsSatisfied<Params, Given> & DialectSatisfied<Params, Functions> & SourcesSatisfied<Params>,
 		params?: Given,
 		options?: InsertCompileOptions<Functions>,
 	): CompiledQuery<Output, undefined>
@@ -651,7 +660,7 @@ export interface CompileUnsafe<Default extends string> {
 		query: CHQuery<Cols, Output, Joins, Route, Params> &
 			NeedsSelect<Output> &
 			ParamsSatisfied<Params, Given> &
-			DialectSatisfied<Params, Functions>,
+			DialectSatisfied<Params, Functions> & SourcesSatisfied<Params>,
 		/** Values for the query's `param.*` markers: required, and typed, when it has any. */
 		params?: Given,
 		options?: QueryCompileOptions<Decoded, Functions>,
@@ -699,7 +708,7 @@ export type CompileUnion<Default extends string> = <
 	const Given extends object = {},
 	Functions extends string = Default,
 >(
-	union: CHUnionQuery<Output, Params> & ParamsSatisfied<Params, Given> & DialectSatisfied<Params, Functions>,
+	union: CHUnionQuery<Output, Params> & ParamsSatisfied<Params, Given> & DialectSatisfied<Params, Functions> & SourcesSatisfied<Params>,
 	params?: Given,
 	options?: UnionCompileOptions<Output, Functions>,
 ) => Effect.Effect<CompiledQuery<Output, undefined>, QueryBuilderError>
@@ -711,7 +720,7 @@ export type CompileUnionUnsafe<Default extends string> = <
 	const Given extends object = {},
 	Functions extends string = Default,
 >(
-	union: CHUnionQuery<Output, Params> & ParamsSatisfied<Params, Given> & DialectSatisfied<Params, Functions>,
+	union: CHUnionQuery<Output, Params> & ParamsSatisfied<Params, Given> & DialectSatisfied<Params, Functions> & SourcesSatisfied<Params>,
 	params?: Given,
 	options?: UnionCompileOptions<Output, Functions>,
 ) => CompiledQuery<Output, undefined>

@@ -82,6 +82,7 @@ export { param, paramPlaceholder, type ParamKind, type ParamMarker } from "./ch/
 
 // Query builder
 export {
+	type BindSources,
 	type CHQuery,
 	type ColumnAccessor,
 	type JoinedColumnAccessor,
@@ -107,6 +108,9 @@ export {
 	type ParamEntry,
 	type ParamsIn,
 	type ParamsSatisfied,
+	type SourceEntry,
+	type SourceOf,
+	type SourcesSatisfied,
 } from "./ch/expr"
 export type { ClickHouseOnly, PostgresOnly } from "./ch/functions/builtin"
 

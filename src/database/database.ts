@@ -18,7 +18,7 @@ import type { AnyInsert } from "../ch/insert"
 import type { CHDelete, CHUpdate } from "../ch/update"
 import type { CHQuery, NeedsSelect } from "../ch/query"
 import type { CHUnionQuery, QueryParams } from "../ch/union"
-import type { DialectSatisfied, ParamsSatisfied } from "../ch/expr"
+import type { DialectSatisfied, ParamsSatisfied, SourcesSatisfied } from "../ch/expr"
 import {
 	DatabaseError,
 	TransactionClosed,
@@ -112,7 +112,7 @@ export interface DatabaseApi<Functions extends string = string> {
 	 * runs as it is, if it was compiled for this dialect.
 	 */
 	readonly run: <Q extends Runnable, const Given extends object = {}>(
-		query: Q & RunCheck<Q> & ParamsSatisfied<QueryParams<Q>, Given> & DialectSatisfied<QueryParams<Q>, Functions>,
+		query: Q & RunCheck<Q> & ParamsSatisfied<QueryParams<Q>, Given> & DialectSatisfied<QueryParams<Q>, Functions> & SourcesSatisfied<QueryParams<Q>>,
 		params?: Given,
 	) => Effect.Effect<ReadonlyArray<RowOf<Q>>, DatabaseError | QueryBuilderError | CompiledQueryDecodeError>
 	/** Run a statement and return its rows, decoded through `schema` when given. */
@@ -493,7 +493,7 @@ export const layerSqlClient = (options: FromSqlClientOptions): Layer.Layer<Datab
 
 /** `run` on the `Database` in context. */
 export const run = <Q extends Runnable, const Given extends object = {}>(
-	query: Q & RunCheck<Q> & ParamsSatisfied<QueryParams<Q>, Given> & DialectSatisfied<QueryParams<Q>, string>,
+	query: Q & RunCheck<Q> & ParamsSatisfied<QueryParams<Q>, Given> & DialectSatisfied<QueryParams<Q>, string> & SourcesSatisfied<QueryParams<Q>>,
 	params?: Given,
 ): Effect.Effect<ReadonlyArray<RowOf<Q>>, DatabaseError | QueryBuilderError | CompiledQueryDecodeError, Database> =>
 	Effect.flatMap(Effect.service(Database), (db) => db.run(query, params))
