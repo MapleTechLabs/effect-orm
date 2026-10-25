@@ -1,7 +1,7 @@
 // The Postgres dialect.
 
 import { DateTime, Schema } from "effect"
-import type { Dialect } from "../ch/dialect"
+import type { Dialect, TransactionSettings } from "../ch/dialect"
 import { QueryBuilderError } from "../ch/errors"
 import { PARAM_MARKER_PREFIX } from "../ch/param"
 import { PgTimestampLiteral, timestampLiteral } from "./types"
@@ -85,6 +85,16 @@ const placeholderCasts: Readonly<Record<string, string>> = {
  * rather than ClickHouse's `1`/`0`, and `param.dateTime` an ISO-8601 instant
  * rather than a zoneless string a session time zone could reinterpret.
  */
+// Postgres takes the same mode list after `SET TRANSACTION` and after `BEGIN`.
+const transactionModes = (settings: TransactionSettings): string | undefined => {
+	const modes = [
+		settings.isolationLevel === undefined ? undefined : `ISOLATION LEVEL ${settings.isolationLevel.toUpperCase()}`,
+		settings.accessMode?.toUpperCase(),
+		settings.deferrable === undefined ? undefined : settings.deferrable ? "DEFERRABLE" : "NOT DEFERRABLE",
+	].filter((mode) => mode !== undefined)
+	return modes.length === 0 ? undefined : modes.join(", ")
+}
+
 export const postgresDialect: Dialect = {
 	name: "postgres",
 	functions: "postgres",
@@ -120,12 +130,12 @@ export const postgresDialect: Dialect = {
 		accessModes: true,
 		deferrable: true,
 		setTransaction: (settings) => {
-			const modes = [
-				settings.isolationLevel === undefined ? undefined : `ISOLATION LEVEL ${settings.isolationLevel.toUpperCase()}`,
-				settings.accessMode?.toUpperCase(),
-				settings.deferrable === undefined ? undefined : settings.deferrable ? "DEFERRABLE" : "NOT DEFERRABLE",
-			].filter((mode) => mode !== undefined)
-			return modes.length === 0 ? undefined : `SET TRANSACTION ${modes.join(", ")}`
+			const modes = transactionModes(settings)
+			return modes === undefined ? undefined : `SET TRANSACTION ${modes}`
+		},
+		beginTransaction: (settings) => {
+			const modes = transactionModes(settings)
+			return modes === undefined ? undefined : `BEGIN ${modes}`
 		},
 	},
 }

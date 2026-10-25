@@ -143,7 +143,7 @@ For SQL inside a builder query rather than a whole statement, use
 | --- | --- |
 | `dialect` | `postgresDialect` or `clickhouseDialect` |
 | `command` | Wraps `execute`. Pass ClickHouse's `asCommand`: DDL has no JSON result |
-| `observe` | Called with every statement before it runs, including the `SET TRANSACTION` a transaction's settings become |
+| `observe` | Called with every statement before it runs, including the `BEGIN ...` or `SET TRANSACTION` a transaction's settings become |
 
 `run` refuses a query compiled for another dialect (`CompiledQuery.dialect`), as a defect: a
 query compiled with the `/clickhouse` entry's `compile` would run on Postgres with the wrong
@@ -205,7 +205,12 @@ and settings.
 | `deferrable` | With `serializable` and `read only`, wait for a safe snapshot |
 | `retry` | `"contention"`, or `{ times, schedule }` |
 
-Settings become one `SET TRANSACTION ...` statement, run first. A nested transaction cannot
+With effect 4.0.6 or later, settings go into the statement that starts the transaction,
+`BEGIN ISOLATION LEVEL SERIALIZABLE, READ ONLY`, through Effect's `SqlClient.BeginTransaction`.
+With effect 4.0.0 to 4.0.5, which do not have it, they become one `SET TRANSACTION ...`
+statement, run first. The result is the same; BEGIN saves one round trip. Inside the body,
+`BeginTransaction` is cleared, so a transaction the body starts on another client keeps that
+client's own BEGIN. A nested transaction cannot
 set any of them, or `retry`, and fails with `TransactionOptionsRejected`: Postgres fixes the
 isolation level at the first statement, and a retry has to start the outermost transaction
 again. `read uncommitted` is not offered because Postgres runs it as `read committed`.
@@ -221,7 +226,8 @@ again. `read uncommitted` is not offered because Postgres runs it as `read commi
 | `TransactionUnsupported` | The dialect has no transactions (ClickHouse) |
 
 Effect 4.0.0 turns a failed COMMIT or ROLLBACK into a defect and, when ROLLBACK fails, drops
-the body's own failure. `transaction` turns both back into the typed errors above. Defects
+the body's own failure. From 4.0.6, a failed COMMIT is a `SqlError` failure instead.
+`transaction` turns all of these back into the typed errors above. Defects
 from `body` stay defects.
 
 `TransactionClosed` is a defect, not an error to handle. A fiber forked inside a transaction

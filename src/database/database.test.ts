@@ -5,13 +5,16 @@
 
 import { PgliteClient } from "@effect/sql-pglite"
 import { assert, describe, expect, it, layer } from "@effect/vitest"
-import { Cause, DateTime, Deferred, Effect, Exit, Fiber, Layer, Ref, Schedule, Schema } from "effect"
+import { Cause, Context, DateTime, Deferred, Effect, Exit, Fiber, Layer, Ref, Schedule, Schema } from "effect"
 import * as SqlClient from "effect/sql/SqlClient"
+import { isSqlError } from "effect/sql/SqlError"
 import * as CH from "../ch/index"
 import * as PG from "../postgres"
 import { clickhouseDialect } from "../ch/dialect"
 import { postgresDialect } from "../pg/dialect"
 import * as Db from "../database"
+import { coreBeginTransaction } from "./begin-transaction"
+import { makeDatabase } from "./database"
 import { renderTemplate } from "./sql"
 
 const statements: Array<string> = []
@@ -43,6 +46,19 @@ const ids = (table: string) =>
 // DO blocks take no bound values, so the code is written in. Test-only.
 const raiseSqlState = (code: "40001" | "40P01") =>
 	Db.execute({ sql: `DO $$ BEGIN RAISE EXCEPTION 'forced' USING ERRCODE = '${code}'; END $$` })
+
+// Effect 4.0.6 reads `SqlClient.BeginTransaction` when a transaction starts. This
+// client does the same with a test reference on any Effect version: it records
+// the statement it would begin with, then runs the real transaction.
+const FakeBegin = Context.Reference<string | undefined>("test/BeginTransaction", { defaultValue: () => undefined })
+const recordingBegin = (sql: SqlClient.SqlClient, begins: Array<string | undefined>): SqlClient.SqlClient =>
+	Object.assign(Object.create(sql) as SqlClient.SqlClient, {
+		withTransaction: <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+			Effect.flatMap(Effect.service(FakeBegin), (begin) => {
+				begins.push(begin)
+				return sql.withTransaction(effect)
+			}),
+	})
 
 class Domain extends Error {
 	readonly _tag = "Domain"
@@ -214,7 +230,7 @@ layer(Live, { excludeTestServices: true })("Database on PGlite", (it) => {
 		}),
 	)
 
-	it.effect("applies settings as the first statement of the transaction", () =>
+	it.effect("applies settings when the transaction starts", () =>
 		Effect.gen(function* () {
 			statements.length = 0
 			const settings = yield* Db.transaction(
@@ -227,9 +243,50 @@ layer(Live, { excludeTestServices: true })("Database on PGlite", (it) => {
 				}),
 				{ isolationLevel: "serializable", accessMode: "read only", deferrable: true },
 			)
-			expect(statements[0]).toBe("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE, READ ONLY, DEFERRABLE")
+			// effect 4.0.6 and later carry the settings in BEGIN; 4.0.0 sends them as SET TRANSACTION.
+			expect(statements[0]).toBe(
+				`${coreBeginTransaction === undefined ? "SET TRANSACTION" : "BEGIN"} ISOLATION LEVEL SERIALIZABLE, READ ONLY, DEFERRABLE`,
+			)
 			expect(settings.row).toEqual({ isolation: "serializable", read_only: "on" })
 			expect(settings.info).toEqual({ depth: 0, isolationLevel: "serializable", accessMode: "read only" })
+		}),
+	)
+
+	it.effect("with Effect's BeginTransaction, settings go into the BEGIN statement and no SET TRANSACTION is sent", () =>
+		Effect.gen(function* () {
+			const begins: Array<string | undefined> = []
+			const sent: Array<string> = []
+			const db = makeDatabase(
+				recordingBegin(yield* SqlClient.SqlClient, begins),
+				{ dialect: postgresDialect, observe: (statement) => Effect.sync(() => void sent.push(statement.sql)) },
+				FakeBegin,
+			)
+			const inBody = yield* db.transaction(
+				Effect.andThen(db.execute(Db.sql`SELECT 1`), Effect.service(FakeBegin)),
+				{ isolationLevel: "serializable", accessMode: "read only", deferrable: true },
+			)
+			yield* db.transaction(db.execute(Db.sql`SELECT 2`))
+			expect(begins).toEqual(["BEGIN ISOLATION LEVEL SERIALIZABLE, READ ONLY, DEFERRABLE", undefined])
+			expect(sent).toEqual(["BEGIN ISOLATION LEVEL SERIALIZABLE, READ ONLY, DEFERRABLE", "SELECT 1", "SELECT 2"])
+			// Not seen inside the body, so a transaction it starts on another client keeps that client's BEGIN.
+			expect(inBody).toBeUndefined()
+		}),
+	)
+
+	it.effect("without Effect's BeginTransaction, settings are a SET TRANSACTION run first", () =>
+		Effect.gen(function* () {
+			const sent: Array<string> = []
+			const db = makeDatabase(
+				yield* SqlClient.SqlClient,
+				{ dialect: postgresDialect, observe: (statement) => Effect.sync(() => void sent.push(statement.sql)) },
+				undefined,
+			)
+			const row = yield* db.transaction(
+				db.query(Db.sql`SELECT current_setting('transaction_isolation') AS isolation`),
+				{ isolationLevel: "repeatable read" },
+			)
+			expect(sent[0]).toBe("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+			expect(row).toEqual([{ isolation: "repeatable read" }])
 		}),
 	)
 
@@ -254,6 +311,29 @@ layer(Live, { excludeTestServices: true })("Database on PGlite", (it) => {
 			expect(error.sqlState).toBe("23503")
 			expect(error.message).toMatch(/^COMMIT failed/)
 			expect(yield* Db.query(Db.sql`SELECT * FROM ${child}`)).toEqual([])
+		}),
+	)
+
+	it.effect("a failed COMMIT in the error channel, as effect 4.0.6 reports it, is TransactionCommitFailed too", () =>
+		Effect.gen(function* () {
+			const sql = yield* SqlClient.SqlClient
+			// effect 4.0.0 dies on a failed COMMIT; 4.0.6 fails with the SqlError.
+			const failingCommit = Object.assign(Object.create(sql) as SqlClient.SqlClient, {
+				withTransaction: <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+					sql.withTransaction(effect).pipe(
+						Effect.catchDefect((defect) => (isSqlError(defect) ? Effect.fail(defect) : Effect.die(defect))),
+					),
+			})
+			const db = makeDatabase(failingCommit, { dialect: postgresDialect }, undefined)
+			const parent = `t_${++tables}`
+			yield* db.execute(Db.sql`CREATE TABLE ${Db.sql.identifier(parent)} (id int4 PRIMARY KEY)`)
+			const child = Db.sql.identifier(`${parent}_child`)
+			yield* db.execute(
+				Db.sql`CREATE TABLE ${child} (id int4, parent int4 REFERENCES ${Db.sql.identifier(parent)}(id) DEFERRABLE INITIALLY DEFERRED)`,
+			)
+			const error = yield* Effect.flip(db.transaction(db.execute(Db.sql`INSERT INTO ${child} VALUES (1, 999)`)))
+			assert(error instanceof Db.TransactionCommitFailed)
+			expect(error.sqlState).toBe("23503")
 		}),
 	)
 
