@@ -69,6 +69,26 @@ export const postgres: FuzzDialect = {
 			: `placeholders ${[...used].sort((a, b) => a - b).join(",")} do not match ${count} parameters`
 	},
 	literals,
+	writes: {
+		insertSelect: true,
+		update: true,
+		delete: true,
+		onConflict: true,
+		returning: true,
+		defaultCells: true,
+		scratch: {
+			table: (name) =>
+				PG.table(name, {
+					external: true,
+					columns: { Id: PG.int8, OrgId: PG.text, Name: PG.text, Note: PG.nullable(PG.text), Qty: PG.column(PG.int8, { default: 5 }) },
+				}),
+			create: (name) => [`CREATE TABLE "${name}" ("Id" int8 PRIMARY KEY, "OrgId" text NOT NULL, "Name" text NOT NULL, "Note" text, "Qty" int8 NOT NULL DEFAULT 5)`],
+			drop: (name) => `DROP TABLE IF EXISTS "${name}"`,
+			exec: async (sql) => {
+				await database().exec(sql)
+			},
+		},
+	},
 	targets: [
 		{
 			name: "postgres",
