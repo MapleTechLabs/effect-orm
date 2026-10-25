@@ -16,3 +16,7 @@ SQLite.from(Items).select("missing")
 SQLite.compile(query, {})
 // @ts-expect-error an integer column cannot take a string
 SQLite.insertInto(Items).values({ id: "wrong", note: "n" })
+const External = SQLite.table("ext", { external: true, columns: { id: SQLite.integer } })
+SQLite.from(External).select("id")
+// @ts-expect-error an external table has only its declared columns
+SQLite.from(External).select("columns")

@@ -548,6 +548,7 @@ interactive transactions. See [SQLite and D1](./sqlite.md) for driver wiring and
 | `json(schema)` | JSON text decoded through the supplied schema |
 | `nullable(type)`, `custom`, `brand` | Type composition |
 | `table(name, columns, options?)`, `TableOptions` | A query schema, including `tenantColumn`, defaults and computed-column metadata; no generated DDL |
+| `table(name, ExternalTableDefinition)`, `ExternalTableDefinition` | `{ external: true, columns, tenantColumn? }`, the same query schema in the `/clickhouse` and `/postgres` form |
 | `count`, `countDistinct`, `countIf`, `sum`, `avg`, `min`, `max` | SQLite aggregates; the last four can return SQL NULL |
 | `lower`, `upper`, `length`, `coalesce` | SQLite scalar functions |
 

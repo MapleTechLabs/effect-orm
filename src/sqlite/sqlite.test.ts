@@ -146,3 +146,10 @@ it("runs scoped CTEs, joins and derived-table queries with the same row decoder"
 	}))
 	expect(rows).toEqual({ cte: [{ id: 1, note: "one" }], joined: [{ id: 1, note: "one" }] })
 })
+
+it("builds an external table from its columns, not from the definition's keys", () => {
+	const External = SQLite.table("ext", { external: true, columns: { id: SQLite.integer, org_id: SQLite.text }, tenantColumn: "org_id" })
+	expect(Object.keys(External.columns)).toEqual(["id", "org_id"])
+	expect(External.tenantColumn).toBe("org_id")
+	expect(SQLite.compileUnsafe(SQLite.from(External).select("id").where(($) => [$.org_id.eq("o")])).sql).toContain('"ext"."org_id" = ?')
+})
