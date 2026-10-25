@@ -7,7 +7,8 @@ import { join, resolve } from "node:path"
 import { Effect } from "effect"
 import { Miniflare } from "miniflare"
 import { afterEach, beforeEach, expect, it } from "vitest"
-import { generate, type GenerateOptions, type KitConfig } from "../kit"
+import { generate, readMigrations, type GenerateOptions, type KitConfig } from "../kit"
+import * as Migrate from "../migrate"
 import { STATEMENT_BREAKPOINT } from "../migrate/source"
 import { renderSqliteSchema, sqliteEntitiesOf, type SqliteSchemaTable } from "../schema"
 import { rowsAfter, shapeAfter } from "../sqlite/shape.test-support"
@@ -271,5 +272,21 @@ it("writes migrations a local D1 database accepts, rebuilds included", async () 
 		])
 	} finally {
 		await mf.dispose()
+	}
+})
+
+it("refuses to run, record or verify SQLite migrations with the effect-orm runner, which has no SQLite ledger yet", async () => {
+	await generateFrom(links(`id: SQLite.text, url: SQLite.text`))
+	const migrations = await Effect.runPromise(readMigrations(join(dir, "migrations")))
+	const driver = Effect.provideService(Migrate.MigrationDriver, {} as Migrate.MigrationDriver["Service"])
+	for (const attempt of [
+		Migrate.run({ migrations }),
+		Migrate.status(migrations),
+		Migrate.verify(migrations),
+		Migrate.baseline({ migrations, upTo: migrations[0]!.name }),
+	]) {
+		await expect(Effect.runPromise(driver(attempt as Effect.Effect<unknown, unknown, Migrate.MigrationDriver>))).rejects.toMatchObject({
+			message: expect.stringContaining("SQLite migrations are not run by effect-orm yet"),
+		})
 	}
 })
