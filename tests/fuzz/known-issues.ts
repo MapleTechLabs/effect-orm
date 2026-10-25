@@ -102,27 +102,7 @@ export interface UnionInput {
 const selected = (branch: Plan, alias: string) => (branch.shape.k === "rows" ? branch.shape.select.find(([a]) => a === alias)?.[1] : undefined)
 
 const unionIssues: ReadonlyArray<KnownIssue<UnionInput>> = [
-	{
-		id: "clickhouse-union-variant-order-by",
-		reason:
-			"On ClickHouse 26, a UNION ALL column whose branches have numeric types with no common supertype (`Id + 1` is " +
-			"UInt64, `Id - 1` Int64; Int64 and Float64) becomes a Variant, and the union's ORDER BY on it fails with " +
-			"`Data types Variant/Dynamic are not allowed in ORDER BY keys`. Fix: have compileUnion cast a numeric union " +
-			"column to one type (e.g. Float64, or the widest signed type) when its branches' expressions differ.",
-		matches: ({ target, plan }) =>
-			target.startsWith("clickhouse") &&
-			plan.orderBy.some(([alias]) => {
-				const kinds = new Set(
-					plan.branches.map((branch) => {
-						const e = selected(branch, alias)
-						return e === undefined || (e.k !== "num" && e.k !== "arith" && !(e.k === "col" && (e.col === "Id" || e.col === "Amount")))
-							? "other"
-							: `${chKind(e)}:${e.k === "col" ? e.col : e.k}`
-					}),
-				)
-				return kinds.size > 1 && !kinds.has("other")
-			}),
-	},
+
 ]
 
 export const knownUnionIssue = (input: UnionInput): string | undefined => firstMatch(unionIssues, input)
