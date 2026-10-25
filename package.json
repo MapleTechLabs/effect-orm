@@ -78,6 +78,11 @@
 			"import": "./dist/database.mjs",
 			"default": "./dist/database.mjs"
 		},
+		"./seed": {
+			"types": "./dist/seed.d.mts",
+			"import": "./dist/seed.mjs",
+			"default": "./dist/seed.mjs"
+		},
 		"./kit": {
 			"types": "./dist/kit.d.mts",
 			"import": "./dist/kit.mjs",
