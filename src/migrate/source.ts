@@ -216,3 +216,19 @@ export const dialectOf = (migrations: ReadonlyArray<LoadedMigration>): SchemaDia
 	}
 	return undefined
 }
+
+/**
+ * `generate` writes SQLite migrations, but this runner does not apply them yet:
+ * apply the folder with a tool that reads drizzle-kit folders (Alchemy's D1
+ * resource, drizzle's migrator). Refused here rather than run with the
+ * ClickHouse ledger.
+ */
+export const refuseSqlite = (migrations: ReadonlyArray<LoadedMigration>, dialect: SchemaDialect | undefined) =>
+	(dialect ?? dialectOf(migrations)) === "sqlite"
+		? Effect.fail(
+				new MigrateSourceError({
+					migration: migrations[0]?.name ?? "(none)",
+					message: "SQLite migrations are not run by effect-orm yet; apply the folder with a tool that reads drizzle-kit folders",
+				}),
+			)
+		: Effect.void

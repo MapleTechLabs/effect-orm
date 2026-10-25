@@ -15,12 +15,20 @@ import {
 	type SchemaDialect,
 	type SchemaEntity,
 	type Snapshot,
+	type SqliteSnapshot,
 } from "./entities"
 import { enumProblems, type PgEnum, type PgSchemaTable } from "./pg-define"
 import type { PgEnumEntity, PgSchemaEntity } from "./pg-entities"
+import type { SqliteSchemaTable } from "./sqlite-define"
+import type { SqliteSchemaEntity } from "./sqlite-entities"
 
 /** Anything a schema module may export that `generate` collects. */
-export type SchemaObject = SchemaTable<string, any> | MaterializedView<string> | PgSchemaTable<string, any> | PgEnum
+export type SchemaObject =
+	| SchemaTable<string, any>
+	| MaterializedView<string>
+	| PgSchemaTable<string, any>
+	| PgEnum
+	| SqliteSchemaTable<string, any>
 
 export const isSchemaObject = (value: unknown): value is SchemaObject =>
 	typeof value === "object" &&
@@ -47,7 +55,7 @@ export const entitiesOf = (objects: ReadonlyArray<SchemaObject>): Effect.Effect<
 	for (const object of objects) {
 		problems.push(...object.problems)
 		if (dialectOfObject(object) !== "clickhouse") {
-			problems.push({ object: object.name, message: "is a Postgres table; use pgEntitiesOf" })
+			problems.push({ object: object.name, message: `is a ${dialectOfObject(object) === "postgres" ? "Postgres" : "SQLite"} table; use ${dialectOfObject(object) === "postgres" ? "pgEntitiesOf" : "sqliteEntitiesOf"}` })
 			continue
 		}
 		if (object._tag === "Table") {
@@ -101,7 +109,7 @@ export const pgEntitiesOf = (objects: ReadonlyArray<SchemaObject>): Effect.Effec
 	for (const object of objects) {
 		if (dialectOfObject(object) !== "postgres") {
 			problems.push(...object.problems)
-			problems.push({ object: object.name, message: "is a ClickHouse definition; use entitiesOf" })
+			problems.push({ object: object.name, message: dialectOfObject(object) === "sqlite" ? "is a SQLite table; use sqliteEntitiesOf" : "is a ClickHouse definition; use entitiesOf" })
 			continue
 		}
 		if (object._tag === "PgEnum") {
@@ -175,6 +183,11 @@ export function makeSnapshot(
 	prevIds: ReadonlyArray<string>,
 	dialect: "postgres",
 ): Effect.Effect<PgSnapshot>
+export function makeSnapshot(
+	entities: ReadonlyArray<SqliteSchemaEntity>,
+	prevIds: ReadonlyArray<string>,
+	dialect: "sqlite",
+): Effect.Effect<SqliteSnapshot>
 export function makeSnapshot(
 	entities: ReadonlyArray<AnySchemaEntity>,
 	prevIds: ReadonlyArray<string>,
