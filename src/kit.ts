@@ -17,4 +17,5 @@ export {
 	type KitConfig,
 } from "./kit/generate"
 export { pull, type PullOptions, type PullResult } from "./kit/pull"
+export { verifySchema, type VerifySchemaResult } from "./kit/verify-schema"
 export { runCli } from "./kit/cli"
