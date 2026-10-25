@@ -17,7 +17,8 @@ and are skipped otherwise. Postgres runs in-process on PGlite.
 
 | File | Property | Oracle |
 | --- | --- | --- |
-| `queries.fuzz.test.ts` | random plans return the rows `model.ts` computes | a JS model of SQL, per target |
+| `queries.fuzz.test.ts` | random plans, and `unionAll`s of them (branch and union ORDER BY / LIMIT / OFFSET), return the rows `model.ts` computes | a JS model of SQL, per target |
+| `writes.fuzz.test.ts` | random sequences of inserts (multi-row, defaulted cells, INSERT … SELECT, ON CONFLICT), updates and deletes, with RETURNING, leave a scratch table as the model says; unsupported writes are refused | a JS model of the table's rows |
 | `literals.fuzz.test.ts` | every column type's values survive as a literal and as a param | the database's own JSON parser |
 | `compile.fuzz.test.ts` | plans compile deterministically, with no leaked JS or misaligned placeholders; hostile values are refused with a typed error | invariants |
 | `registry.fuzz.test.ts` | every `Dialect` in `src/` is registered here | — |
@@ -36,6 +37,14 @@ A `FuzzDialect` gives:
 - `strings` and `ilike`: what the generators may produce for it.
 - `literals`: its column types, each with a way to build the reference row
   *without* the builder (usually the database parsing JSON).
+- `writes`: which writes its builder compiles (`insertSelect`, `update`, `delete`,
+  `onConflict`, `returning`, `defaultCells` for a multi-row VALUES that leaves a
+  defaulted column out of some rows), and a `scratch` table: its query `Table`,
+  the DDL that creates and drops it, and `exec` to run that DDL on the first
+  target. Set a capability from what the builder does, not what the database
+  could: the suite still generates an unsupported write and requires the builder
+  to refuse it. A database whose writes are asynchronous (ClickHouse mutations)
+  must make them visible to the next read (`mutations_sync=2`).
 - `targets`: the databases it runs on. Each target states its `Semantics`, the
   points where databases legitimately disagree (NULL ordering, integer division,
   what an unmatched LEFT JOIN column holds, LIKE case rules, …). The model reads

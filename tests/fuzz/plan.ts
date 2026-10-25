@@ -339,17 +339,85 @@ const aggShape = (joined: boolean, options: GenOptions): fc.Arbitrary<AggShape> 
 				}))
 		})
 
+const orgIdArb = fc.oneof({ weight: 6, arbitrary: fc.constant("org_1") }, { weight: 2, arbitrary: fc.constant("org_2") }, { weight: 1, arbitrary: fc.constant("org_3") })
+const joinArb = fc.option(fc.constantFrom("inner" as const, "left" as const), { nil: undefined, freq: 3 })
+
+// Short: every entry is ANDed, and a long conjunction of random predicates is almost always empty.
+const whereArb = (joined: boolean, options: GenOptions): fc.Arbitrary<ReadonlyArray<Cond>> =>
+	fc.oneof(
+		fc.constant([]),
+		fc.array(fc.oneof({ weight: 1, arbitrary: fc.constant<Cond>({ k: "tenant", side: "orders" }) }, { weight: 3, arbitrary: cond(joined, 2, options) }), { minLength: 1, maxLength: 2 }),
+	)
+
+/**
+ * `unionAll(branch, …)` with the union's own ORDER BY, LIMIT and OFFSET. Each
+ * branch is a row plan selecting the same aliases, each alias of one sort in
+ * every branch, so the union is well-typed by construction; a branch may have
+ * its own join, filter, DISTINCT, ORDER BY and LIMIT.
+ */
+export interface UnionPlan {
+	readonly orgId: string
+	readonly branches: ReadonlyArray<Plan>
+	readonly orderBy: ReadonlyArray<readonly [string, "asc" | "desc"]>
+	readonly limit?: number
+	readonly offset?: number
+	readonly crossTenant: boolean
+}
+
+const branch = (orgId: string, sorts: ReadonlyArray<Sort>, options: GenOptions): fc.Arbitrary<Plan> =>
+	joinArb.chain((join) => {
+		const joined = join !== undefined
+		return fc.tuple(...sorts.map((sort) => expr(sort, joined, 2, options))).chain((exprs) => {
+			const select: Array<readonly [string, Expr]> = [["id", { k: "col", col: "Id" }], ...exprs.map((e, i) => [`e${i}`, e] as const)]
+			return fc.record({ where: whereArb(joined, options), distinct: fc.boolean(), order: ordering(select.map(([a]) => a), ["id"]) }).map(
+				({ where, distinct, order }): Plan => ({ orgId, join, where, shape: { k: "rows", select, distinct, ...order }, wrap: false, crossTenant: false }),
+			)
+		})
+	})
+
+/**
+ * The union's ordering. Rows of different branches can tie on every alias but
+ * one, so it pages only when ordered by every alias: then tied rows are equal
+ * rows, and which of them LIMIT keeps does not matter.
+ */
+const unionOrdering = (aliases: ReadonlyArray<string>) =>
+	fc.oneof(
+		fc.constant({ orderBy: [] as ReadonlyArray<readonly [string, "asc" | "desc"]>, limit: undefined, offset: undefined }),
+		fc
+			.record({
+				keys: fc.shuffledSubarray([...aliases], { minLength: aliases.length }),
+				dirs: fc.array(fc.constantFrom("asc" as const, "desc" as const), { minLength: aliases.length, maxLength: aliases.length }),
+				limit: fc.option(fc.integer({ min: 0, max: 8 }), { nil: undefined }),
+				offset: fc.option(fc.integer({ min: 0, max: 4 }), { nil: undefined }),
+			})
+			.map(({ keys, dirs, limit, offset }) => ({ orderBy: keys.map((k, i) => [k, dirs[i]!] as const), limit, offset })),
+		fc.shuffledSubarray([...aliases], { minLength: 1 }).map((keys) => ({ orderBy: keys.map((k) => [k, "asc" as const] as const), limit: undefined, offset: undefined })),
+	)
+
+export const unionPlan = (options: GenOptions): fc.Arbitrary<UnionPlan> =>
+	fc
+		.record({
+			orgId: orgIdArb,
+			sorts: fc.array(fc.constantFrom<Sort>("num", "str", "nstr", "time"), { maxLength: 3 }),
+			branches: fc.integer({ min: 2, max: 3 }),
+			crossTenant: fc.boolean(),
+		})
+		.chain(({ orgId, sorts, branches, crossTenant }) =>
+			fc
+				.record({
+					branches: fc.tuple(...Array.from({ length: branches }, () => branch(orgId, sorts, options))),
+					order: unionOrdering(["id", ...sorts.map((_, i) => `e${i}`)]),
+				})
+				.map(({ branches, order }): UnionPlan => ({ orgId, branches, crossTenant, ...order })),
+		)
+
 export const plan = (options: GenOptions): fc.Arbitrary<Plan> =>
-	fc.option(fc.constantFrom("inner" as const, "left" as const), { nil: undefined, freq: 3 }).chain((join) => {
+	joinArb.chain((join) => {
 		const joined = join !== undefined
 		return fc.record({
-			orgId: fc.oneof({ weight: 6, arbitrary: fc.constant("org_1") }, { weight: 2, arbitrary: fc.constant("org_2") }, { weight: 1, arbitrary: fc.constant("org_3") }),
+			orgId: orgIdArb,
 			join: fc.constant(join),
-			// Short: every entry is ANDed, and a long conjunction of random predicates is almost always empty.
-			where: fc.oneof(
-				fc.constant([]),
-				fc.array(fc.oneof({ weight: 1, arbitrary: fc.constant<Cond>({ k: "tenant", side: "orders" }) }, { weight: 3, arbitrary: cond(joined, 2, options) }), { minLength: 1, maxLength: 2 }),
-			),
+			where: whereArb(joined, options),
 			shape: fc.oneof({ weight: 3, arbitrary: rowsShape(joined, options) }, { weight: 2, arbitrary: aggShape(joined, options) }),
 			wrap: fc.constantFrom(false as const, "all" as const, "names" as const),
 			crossTenant: fc.boolean(),
