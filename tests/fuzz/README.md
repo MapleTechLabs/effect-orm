@@ -20,6 +20,7 @@ and are skipped otherwise. Postgres runs in-process on PGlite.
 | `queries.fuzz.test.ts` | random plans return the rows `model.ts` computes | a JS model of SQL, per target |
 | `literals.fuzz.test.ts` | every column type's values survive as a literal and as a param | the database's own JSON parser |
 | `compile.fuzz.test.ts` | plans compile deterministically, with no leaked JS or misaligned placeholders; hostile values are refused with a typed error | invariants |
+| `migrations.fuzz.test.ts` | a SQLite migration between two random schemas, run on seeded rows, gives a fresh create's PRAGMA shape and keeps the rows | a fresh create, and the seeded rows |
 | `registry.fuzz.test.ts` | every `Dialect` in `src/` is registered here | — |
 
 ## Adding a dialect

@@ -62,6 +62,31 @@ export const pinned: Record<string, ReadonlyArray<unknown>> = {
 	"postgres:text[] select": [[]],
 	"postgres:timestamptz": [DateTime.makeUnsafe(Date.UTC(100, 0, 1))],
 
+	// SQLite migrations.
+	"migrations reach": [
+		// sqlite-rebuild-no-shared-column: a rebuild keeping no column copied no rows.
+		[
+			[{ name: "t0", columns: [{ name: "c2", type: "text", nullable: false, unique: true }], primaryKey: [], indexes: [] }],
+			[{ name: "t0", columns: [{ name: "c0", type: "blob", nullable: true, unique: false }], primaryKey: [], indexes: [] }],
+			1,
+			[false],
+		],
+		// sqlite-drop-last-column: replacing every column dropped the last one before adding.
+		[
+			[{ name: "t0", columns: [{ name: "c1", type: "text", nullable: false, default: { k: "expr" }, unique: false }, { name: "c2", type: "text", nullable: false, unique: false }], primaryKey: [], indexes: [] }],
+			[{ name: "t0", columns: [{ name: "c3", type: "text", nullable: true, unique: false }], primaryKey: [], indexes: [] }],
+			0,
+			[false],
+		],
+		// A column made NOT NULL with a default over old NULLs (COALESCE in the copy).
+		[
+			[{ name: "t0", columns: [{ name: "c0", type: "text", nullable: false, unique: false }, { name: "c1", type: "text", nullable: true, unique: false }], primaryKey: [], indexes: [] }],
+			[{ name: "t0", columns: [{ name: "c0", type: "text", nullable: false, unique: false }, { name: "c1", type: "text", nullable: false, default: { k: "literal" }, unique: false }], primaryKey: [], indexes: [] }],
+			2,
+			[true],
+		],
+	],
+
 	// Hostile values.
 	"hostile values are refused, never thrown (clickhouse)": [
 		{ dialect: "clickhouse", column: "OrgId", site: "eq", value: 0n },
