@@ -71,9 +71,6 @@ interface FixtureColumn {
 	readonly clickhouse: string
 	readonly postgres: string
 }
-/** SQLite (and D1) store the fixture's timestamps as the ISO text the dialect writes. */
-const sqliteValue = (column: FixtureColumn, value: Value): Value =>
-	column.name === "Created" && typeof value === "string" ? `${value.replace(" ", "T")}Z` : value
 const fixtureColumns = {
 	orders: [
 		{ name: "OrgId", clickhouse: "String", postgres: "text" },
@@ -122,7 +119,8 @@ export const fixtureSql = (dialect: DialectName, table: keyof typeof fixtureColu
 	}
 	if (dialect === "sqlite" || dialect === "d1") {
 		// SQLite names VALUES columns column1, column2, …, and has no column list on a derived table.
-		const rows = fixtureRows[table].map((row) => `(${row.map((v, i) => sqlValue(sqliteValue(columns[i]!, v))).join(", ")})`).join(", ")
+		// The fixture's timestamps are already SQLite's text form, `YYYY-MM-DD HH:MM:SS.SSS`.
+		const rows = fixtureRows[table].map((row) => `(${row.map(sqlValue).join(", ")})`).join(", ")
 		return `SELECT ${columns.map((column, i) => `column${i + 1} AS "${column.name}"`).join(", ")} FROM (VALUES ${rows})`
 	}
 	const casts = columns.map((column, i) => `CAST("c${i}" AS ${column.postgres}) AS "${column.name}"`).join(", ")

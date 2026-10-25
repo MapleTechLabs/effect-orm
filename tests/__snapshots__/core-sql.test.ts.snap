@@ -1128,7 +1128,7 @@ exports[`core SQL (d1) > params 1`] = `
     "org_1",
     7,
     19.5,
-    "2026-01-01T00:00:00.000Z",
+    "2026-01-01 00:00:00.000",
   ],
   "sql": "WITH "orders" AS (
 <orders fixture>
@@ -2527,7 +2527,7 @@ exports[`core SQL (sqlite) > params 1`] = `
     "org_1",
     7,
     19.5,
-    "2026-01-01T00:00:00.000Z",
+    "2026-01-01 00:00:00.000",
   ],
   "sql": "WITH "orders" AS (
 <orders fixture>
