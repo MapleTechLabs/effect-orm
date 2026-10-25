@@ -370,7 +370,7 @@ const sqliteFraction = (columnType: CHType<string, any, any>, value: unknown): b
 	typeof value === "number" &&
 	Number.isFinite(value) &&
 	!Number.isInteger(value) &&
-	(activeSqlSyntax()?.dialect === "sqlite" || activeSqlSyntax()?.dialect === "d1")
+	activeSqlSyntax()?.integerComparesFraction === true
 
 const POSTGRES_INTEGERS = new Set(["int2", "int4", "int8", "smallint", "integer", "bigint"])
 

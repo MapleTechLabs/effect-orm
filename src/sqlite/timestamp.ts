@@ -10,6 +10,8 @@ import { pgTimestampToIso, timestampLiteral } from "../pg/types"
  */
 export const sqliteTimestampText = (epochMillis: number): string => {
 	const iso = new Date(epochMillis).toISOString()
+	// Past year 9999 toISOString writes `+010000-…`, which is no timestamp and sorts before every real one.
+	if (!/^\d{4}-/.test(iso)) throw new RangeError(`${iso} is outside 0000-9999, which SQLite's text timestamps cover`)
 	return `${iso.slice(0, 10)} ${iso.slice(11, 23)}`
 }
 
@@ -39,8 +41,22 @@ export const SqliteTimestamp: Schema.Codec<DateTime.Utc, string> = Schema.String
 	}),
 )
 
+const epochOf = (value: unknown): number | undefined =>
+	DateTime.isDateTime(value) ? DateTime.toEpochMillis(value) : value instanceof Date ? value.getTime() : typeof value === "string" ? Date.parse(pgTimestampToIso(value)) : undefined
+
+/** Refused before encoding: a value outside 0000-9999 has no SQLite timestamp text. */
+const literalInRange = Schema.makeFilter(
+	(value: unknown) => {
+		const millis = epochOf(value)
+		if (millis === undefined || Number.isNaN(millis)) return undefined
+		const year = new Date(millis).getUTCFullYear()
+		return year >= 0 && year <= 9999 ? undefined : `year ${year} is outside 0000-9999, which SQLite's text timestamps cover`
+	},
+	{ title: "sqliteTimestampRange" },
+)
+
 /** What a timestamp comparison or param accepts (a `DateTime.Utc`, a `Date`, timestamp text), written in SQLite's form. */
-export const SqliteTimestampLiteral = timestampLiteral(sqliteTimestampText)
+export const SqliteTimestampLiteral = timestampLiteral(sqliteTimestampText).pipe(Schema.check(literalInRange))
 
 
 /**

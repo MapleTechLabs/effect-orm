@@ -117,6 +117,25 @@ it("compares timestamps with the text SQLite's own functions write, and reads zo
 	expect(written.parameters).toContain("2026-10-01 08:00:00.500")
 })
 
+it("refuses a timestamp outside 0000-9999 instead of writing text that is no timestamp", () => {
+	const Events = SQLite.table("events", { id: SQLite.integer, at: SQLite.timestamp })
+	const refused = (effect: Effect.Effect<unknown, unknown>) => {
+		const exit = Effect.runSyncExit(effect)
+		return Exit.isFailure(exit) && /outside 0000-9999/.test(String(Cause.squash(exit.cause)))
+	}
+	const far = DateTime.makeUnsafe(new Date(8.64e15))
+	expect(refused(SQLite.compile(SQLite.insertInto(Events).values({ id: 1, at: far })))).toBe(true)
+	expect(refused(SQLite.compile(SQLite.from(Events).select("id").where(($) => [$.at.gt(DateTime.makeUnsafe("+010000-01-01T00:00:00Z"))])))).toBe(true)
+	expect(refused(SQLite.compile(SQLite.from(Events).select("id").where(($) => [$.at.gt(SQLite.param.dateTime("t"))]), { t: far }))).toBe(true)
+	expect(() => SQLite.sqliteTimestampText(8.64e15)).toThrow(/outside 0000-9999/)
+})
+
+it("compares a fraction with an integer column on a profile spread from sqliteDialect", () => {
+	const profile = { ...SQLite.sqliteDialect, name: "my-sqlite" }
+	const compiled = SQLite.compileUnsafe(SQLite.from(Items).select("id").where(($) => [$.id.gt(9.75)]), {}, { dialect: profile })
+	expect(compiled.parameters).toEqual([9.75])
+})
+
 it("refuses an integer past 2^53 instead of decoding a different number", async () => {
 	const exit = await withDatabase((db) => Effect.gen(function* () {
 		// node:sqlite refuses an unsafe integer itself; D1 hands one over (see d1.test.ts), where the codec refuses it.

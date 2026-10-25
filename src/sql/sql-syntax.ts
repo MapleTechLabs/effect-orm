@@ -24,6 +24,12 @@ export interface SqlSyntax {
 	 * double (SQLite), so a fraction must be bound rather than written as text.
 	 */
 	readonly inexactNumberText?: boolean
+	/**
+	 * True when an integer column compares with a fraction numerically (SQLite's
+	 * type affinity), so `integer > 9.75` writes the fraction instead of refusing
+	 * it through the column's whole-number codec.
+	 */
+	readonly integerComparesFraction?: boolean
 	/** One identifier (a column, alias, table or schema name), quoted as needed. */
 	readonly quoteIdent: (name: string) => string
 	/** A string as a quoted literal. */
