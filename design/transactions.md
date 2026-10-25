@@ -667,3 +667,6 @@ What landed differently from the sections above:
   sees the BEGIN statement, so a statement collector still sees the settings. When the peer
   range moves to `^4.0.6`, the seam becomes a plain `SqlClient.BeginTransaction` and the
   `SET TRANSACTION` path stays only for dialects without `beginTransaction`.
+- **COMMIT failure on effect 4.0.6.** Effect 4.0.6 reports a failed COMMIT as a `SqlError`
+  failure, not a defect. A `SqlError` failure after the body succeeded is COMMIT's, so it is
+  `TransactionCommitFailed` on both versions. ROLLBACK still dies on 4.0.6.

@@ -7,6 +7,7 @@ import { PgliteClient } from "@effect/sql-pglite"
 import { assert, describe, expect, it, layer } from "@effect/vitest"
 import { Cause, Context, DateTime, Deferred, Effect, Exit, Fiber, Layer, Ref, Schedule, Schema } from "effect"
 import * as SqlClient from "effect/sql/SqlClient"
+import { isSqlError } from "effect/sql/SqlError"
 import * as CH from "../ch/index"
 import * as PG from "../postgres"
 import { clickhouseDialect } from "../ch/dialect"
@@ -310,6 +311,29 @@ layer(Live, { excludeTestServices: true })("Database on PGlite", (it) => {
 			expect(error.sqlState).toBe("23503")
 			expect(error.message).toMatch(/^COMMIT failed/)
 			expect(yield* Db.query(Db.sql`SELECT * FROM ${child}`)).toEqual([])
+		}),
+	)
+
+	it.effect("a failed COMMIT in the error channel, as effect 4.0.6 reports it, is TransactionCommitFailed too", () =>
+		Effect.gen(function* () {
+			const sql = yield* SqlClient.SqlClient
+			// effect 4.0.0 dies on a failed COMMIT; 4.0.6 fails with the SqlError.
+			const failingCommit = Object.assign(Object.create(sql) as SqlClient.SqlClient, {
+				withTransaction: <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+					sql.withTransaction(effect).pipe(
+						Effect.catchDefect((defect) => (isSqlError(defect) ? Effect.fail(defect) : Effect.die(defect))),
+					),
+			})
+			const db = makeDatabase(failingCommit, { dialect: postgresDialect }, undefined)
+			const parent = `t_${++tables}`
+			yield* db.execute(Db.sql`CREATE TABLE ${Db.sql.identifier(parent)} (id int4 PRIMARY KEY)`)
+			const child = Db.sql.identifier(`${parent}_child`)
+			yield* db.execute(
+				Db.sql`CREATE TABLE ${child} (id int4, parent int4 REFERENCES ${Db.sql.identifier(parent)}(id) DEFERRABLE INITIALLY DEFERRED)`,
+			)
+			const error = yield* Effect.flip(db.transaction(db.execute(Db.sql`INSERT INTO ${child} VALUES (1, 999)`)))
+			assert(error instanceof Db.TransactionCommitFailed)
+			expect(error.sqlState).toBe("23503")
 		}),
 	)
 

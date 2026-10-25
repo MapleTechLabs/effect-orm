@@ -226,8 +226,8 @@ again. `read uncommitted` is not offered because Postgres runs it as `read commi
 | `TransactionUnsupported` | The dialect has no transactions (ClickHouse) |
 
 Effect 4.0.0 turns a failed COMMIT or ROLLBACK into a defect and, when ROLLBACK fails, drops
-the body's own failure.
-`transaction` turns both back into the typed errors above. Defects
+the body's own failure. From 4.0.6, a failed COMMIT is a `SqlError` failure instead.
+`transaction` turns all of these back into the typed errors above. Defects
 from `body` stay defects.
 
 `TransactionClosed` is a defect, not an error to handle. A fiber forked inside a transaction

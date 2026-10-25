@@ -10,7 +10,7 @@
 import { Cause, Context, Effect, Exit, Layer, Option, Schedule, Schema } from "effect"
 import { dual } from "effect/Function"
 import * as SqlClient from "effect/sql/SqlClient"
-import { isSqlError } from "effect/sql/SqlError"
+import { isSqlError, type SqlError } from "effect/sql/SqlError"
 import { compileCH, compileUnion, CompiledQueryDecodeError, type CompiledQuery } from "../ch/compile"
 import { noTransactions, type Dialect, type IsolationLevel, type TransactionSettings } from "../ch/dialect"
 import type { QueryBuilderError } from "../ch/errors"
@@ -459,11 +459,23 @@ export const makeDatabase = (
 	return { dialect, run, query, execute, transaction, retryContention }
 }
 
+const commitFailed = (error: SqlError, depth: number): TransactionCommitFailed => {
+	const sqlState = sqlStateOf(error)
+	return new TransactionCommitFailed({
+		message: `${depth === 0 ? "COMMIT" : "releasing the savepoint"} failed: ${firstLine(error)}`,
+		reason: reasonOf(error),
+		...(sqlState === undefined ? undefined : { sqlState }),
+		cause: error,
+	})
+}
+
 /**
  * Turn what came out of `withTransaction` back into what the caller should see.
- * Effect dies on a failed COMMIT or ROLLBACK, and a dying ROLLBACK replaces the
- * body's own exit. Body defects were carried through as `BodyDefect`, so any
- * other defect that is a `SqlError` came from transaction control.
+ * Effect dies on a failed ROLLBACK, and a dying ROLLBACK replaces the body's own
+ * exit. A failed COMMIT dies on effect 4.0.0 and fails with the `SqlError` from
+ * 4.0.6. Body defects were carried through as `BodyDefect`, so any other defect
+ * that is a `SqlError` came from transaction control, and so did a `SqlError`
+ * failure after the body succeeded.
  */
 const restoreCause = <E>(
 	cause: Cause.Cause<unknown>,
@@ -478,17 +490,7 @@ const restoreCause = <E>(
 	const defect = Cause.findDefect(cause)
 	if (defect._tag === "Success" && isSqlError(defect.success)) {
 		const error = defect.success
-		if (bodyExit !== undefined && Exit.isSuccess(bodyExit)) {
-			const sqlState = sqlStateOf(error)
-			return Effect.fail(
-				new TransactionCommitFailed({
-					message: `${depth === 0 ? "COMMIT" : "releasing the savepoint"} failed: ${firstLine(error)}`,
-					reason: reasonOf(error),
-					...(sqlState === undefined ? undefined : { sqlState }),
-					cause: error,
-				}),
-			)
-		}
+		if (bodyExit !== undefined && Exit.isSuccess(bodyExit)) return Effect.fail(commitFailed(error, depth))
 		// The body never ran: BEGIN or SAVEPOINT died, not ROLLBACK.
 		if (bodyExit === undefined) return Effect.fail(toDatabaseError(depth === 0 ? (begin ?? "BEGIN") : "SAVEPOINT")(error))
 		// An interrupted transaction whose ROLLBACK died stays interrupted.
@@ -500,6 +502,10 @@ const restoreCause = <E>(
 				cause: error,
 			}),
 		)
+	}
+	// The body succeeded, so this failure is COMMIT's (effect 4.0.6 and later).
+	if (bodyExit !== undefined && Exit.isSuccess(bodyExit) && failure._tag === "Success" && isSqlError(failure.success)) {
+		return Effect.fail(commitFailed(failure.success, depth))
 	}
 	// BEGIN or SAVEPOINT failed before the body ran.
 	if (bodyExit === undefined && failure._tag === "Success" && isSqlError(failure.success)) {
