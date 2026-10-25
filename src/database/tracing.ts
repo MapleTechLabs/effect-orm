@@ -5,7 +5,7 @@
 // Effect's own `sql.execute` span still runs inside it with the query text, but
 // it cannot carry these: it names the operation after the client method
 // (`execute`), and only a compiled query knows its table.
-import { Context, Effect } from "effect"
+import { Context, Effect, Stream } from "effect"
 import type { CompiledQuery } from "../ch/compile"
 import type { Dialect } from "../ch/dialect"
 
@@ -40,6 +40,32 @@ const OPERATIONS: Record<NonNullable<TracedStatement["kind"]>, string> = {
 	delete: "DELETE",
 }
 
+// The span name and attributes for `statement`, given the summary in context.
+const spanOf = (dialect: Dialect, statement: TracedStatement, configured: string | undefined) => {
+	const system = SYSTEM_NAMES[dialect.name] ?? dialect.name
+	const operation = statement.kind === undefined ? undefined : OPERATIONS[statement.kind]
+	const summary =
+		configured ?? (operation === undefined ? undefined : statement.collection === undefined ? operation : `${operation} ${statement.collection}`)
+	const attributes: Record<string, unknown> = { "db.system.name": system }
+	if (operation !== undefined) attributes["db.operation.name"] = operation
+	if (statement.collection !== undefined) attributes["db.collection.name"] = statement.collection
+	if (summary !== undefined) attributes["db.query.summary"] = summary
+	return { name: summary ?? system, attributes }
+}
+
+// `error.type` is the failure's class: a DatabaseError's reason, else its tag.
+const annotateErrorType = (error: unknown): Effect.Effect<void> => {
+	const reason =
+		typeof error === "object" && error !== null
+			? "reason" in error && typeof error.reason === "string"
+				? error.reason
+				: "_tag" in error && typeof error._tag === "string"
+					? error._tag
+					: undefined
+			: undefined
+	return reason === undefined ? Effect.void : Effect.annotateCurrentSpan("error.type", reason)
+}
+
 /**
  * Runs `effect`, which sends `statement`, in its client span. The span name is
  * the summary when there is one, then `{operation} {table}`, then the system.
@@ -52,31 +78,37 @@ export const traceStatement = <A, E, R>(
 	rowsOf?: (result: A) => number,
 ): Effect.Effect<A, E, R> =>
 	Effect.withFiber((fiber) => {
-		const configured = fiber.getRef(QuerySummary)
-		const system = SYSTEM_NAMES[dialect.name] ?? dialect.name
-		const operation = statement.kind === undefined ? undefined : OPERATIONS[statement.kind]
-		const summary =
-			configured ?? (operation === undefined ? undefined : statement.collection === undefined ? operation : `${operation} ${statement.collection}`)
-		const attributes: Record<string, unknown> = { "db.system.name": system }
-		if (operation !== undefined) attributes["db.operation.name"] = operation
-		if (statement.collection !== undefined) attributes["db.collection.name"] = statement.collection
-		if (summary !== undefined) attributes["db.query.summary"] = summary
+		const { name, attributes } = spanOf(dialect, statement, fiber.getRef(QuerySummary))
 		return effect.pipe(
 			Effect.tap((result) =>
 				rowsOf === undefined ? Effect.void : Effect.annotateCurrentSpan("db.response.returned_rows", rowsOf(result)),
 			),
-			// `error.type` is the failure's class: a DatabaseError's reason, else its tag.
-			Effect.tapError((error) => {
-				const reason =
-					typeof error === "object" && error !== null
-						? "reason" in error && typeof error.reason === "string"
-							? error.reason
-							: "_tag" in error && typeof error._tag === "string"
-								? error._tag
-								: undefined
-						: undefined
-				return reason === undefined ? Effect.void : Effect.annotateCurrentSpan("error.type", reason)
-			}),
-			Effect.withSpan(summary ?? system, { kind: "client", attributes }),
+			Effect.tapError(annotateErrorType),
+			Effect.withSpan(name, { kind: "client", attributes }),
 		)
 	})
+
+/**
+ * `traceStatement` for a stream of rows: one client span from the first pull
+ * to the end, with `db.response.returned_rows` the rows it emitted.
+ */
+export const traceStream = <A, E, R>(dialect: Dialect, statement: TracedStatement, stream: Stream.Stream<A, E, R>): Stream.Stream<A, E, R> =>
+	Stream.unwrap(
+		Effect.withFiber((fiber) => {
+			const { name, attributes } = spanOf(dialect, statement, fiber.getRef(QuerySummary))
+			// Counted per run: the effect `unwrap` takes runs each time the stream does.
+			let returned = 0
+			return Effect.succeed(
+				stream.pipe(
+					Stream.tap(() =>
+						Effect.sync(() => {
+							returned++
+						}),
+					),
+					Stream.onEnd(Effect.suspend(() => Effect.annotateCurrentSpan("db.response.returned_rows", returned))),
+					Stream.tapError((error: E) => annotateErrorType(error)),
+					Stream.withSpan(name, { kind: "client", attributes }),
+				),
+			)
+		}),
+	)
