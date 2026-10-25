@@ -164,19 +164,19 @@ describe("CompiledQuery.decodeRows", () => {
 		const table = CH.table("orders", { Id: CH.uint32, Amount: CH.int64, Name: CH.string })
 		const branch = (offset: number) => CH.from(table).select(($) => ({ id: $.Id, shifted: $.Id.add(offset), total: $.Amount, name: $.Name }))
 		const compiled = compileUnionUnsafe(CH.unionAll(branch(1), branch(-1)).orderBy(["shifted", "asc"]), {})
-		expect(compiled.sql).toContain("toFloat64(orders.Id + 1) AS shifted")
-		expect(compiled.sql).toContain("toFloat64(orders.Id + -1) AS shifted")
+		// Around each branch, so a branch's own DISTINCT sees the exact values.
+		expect(compiled.sql.match(/SELECT id, toFloat64\(shifted\) AS shifted, total, name FROM \(/g)).toHaveLength(2)
+		expect(compiled.sql).toContain("orders.Id + 1 AS shifted")
 		// One declared type in every branch, and non-numbers, stay as they are.
-		expect(compiled.sql).not.toContain("toFloat64(orders.Id) AS id")
-		expect(compiled.sql).not.toContain("toFloat64(orders.Amount)")
-		expect(compiled.sql).not.toContain("toFloat64(orders.Name)")
+		expect(compiled.sql).not.toContain("toFloat64(id)")
+		expect(compiled.sql).not.toContain("toFloat64(total)")
+		expect(compiled.sql).not.toContain("toFloat64(name)")
 		// Different declared types do differ.
 		const mixed = compileUnionUnsafe(
 			CH.unionAll(CH.from(table).select(($) => ({ n: $.Id })), CH.from(table).select(($) => ({ n: $.Amount }))),
 			{},
 		)
-		expect(mixed.sql).toContain("toFloat64(orders.Id) AS n")
-		expect(mixed.sql).toContain("toFloat64(orders.Amount) AS n")
+		expect(mixed.sql.match(/SELECT toFloat64\(n\) AS n FROM \(/g)).toHaveLength(2)
 	})
 
 	it.effect("decodes rows with the declared schema for handwritten SQL", () =>

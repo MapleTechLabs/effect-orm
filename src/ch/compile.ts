@@ -718,8 +718,6 @@ function compileInner<
 	params: Params,
 	options?: {
 		selectKeys?: ReadonlyArray<string>
-		/** Union columns cast with the dialect's `unionNumberCast`; see `unionNumberCasts`. */
-		castNumbers?: ReadonlySet<string>
 		skipFormat?: boolean
 		rowSchema?: CompiledQueryRowSchema<Decoded>
 		/** Leave `__PARAM_…__` placeholders in the SQL instead of resolving them.
@@ -924,8 +922,7 @@ function compileInner<
 				}
 				const fragment = expr.toFragment()
 				const [sql, found] = track(() => compileSqlFragment(fragment))
-				const numberCast = options?.castNumbers?.has(alias) === true ? currentDialect().unionNumberCast : undefined
-				return { alias, sql: numberCast !== undefined ? numberCast(castSelectedParam(expr, sql)) : castSelectedParam(expr, sql), found, column: plainColumn(fragment) }
+				return { alias, sql: castSelectedParam(expr, sql), found, column: plainColumn(fragment) }
 			})
 			const where = presentWhere.map((c) => raw(rowFilter("WHERE", c)))
 			const having = (state.havingFn ? state.havingFn($) : [])
@@ -1452,10 +1449,17 @@ function compileUnionInner<Output extends Record<string, any>, Params extends Re
 	if (state.queries.some((q) => q._state.lock !== undefined)) {
 		return fail(new QueryBuilderDefect({ message: "unionAll: a branch cannot take a row lock; lock in a query over the union instead" }),failedQuery<Output, undefined>())
 	}
-	const castNumbers = unionNumberCasts(state.queries, selectKeys)
 	const subQueries = state.queries.map((q) =>
-		compileInner(q, params, { skipFormat: true, deferParams, nested: true, selectKeys, enclosingCtes, castNumbers }),
+		compileInner(q, params, { skipFormat: true, deferParams, nested: true, selectKeys, enclosingCtes }),
 	)
+	// Cast around each branch, not inside it: a branch's DISTINCT, GROUP BY and LIMIT still see the
+	// exact values (two UInt64s past 2^53 are one Float64).
+	const castNumbers = unionNumberCasts(state.queries, selectKeys)
+	const numberCast = currentDialect().unionNumberCast
+	const branchSql = (sql: string): string =>
+		castNumbers.size === 0 || numberCast === undefined
+			? sql
+			: `SELECT ${selectKeys.map((key) => (castNumbers.has(key) ? `${numberCast(quoteIdent(key))} AS ${quoteIdent(key)}` : quoteIdent(key))).join(", ")} FROM (\n${sql}\n)${currentDialect().clauses.derivedTableAlias ? ` AS ${quoteIdent("__branch")}` : ""}`
 	const bounds = new Set(
 		subQueries.flatMap((q) => {
 			const bound = tenantBoundOf(q)
@@ -1479,7 +1483,7 @@ function compileUnionInner<Output extends Record<string, any>, Params extends Re
 				: "cross-tenant"
 
 	const parenthesize = currentDialect().clauses.parenthesizeUnionBranches
-	let sql = subQueries.map((q) => (parenthesize ? `(\n${q.sql}\n)` : q.sql)).join("\nUNION ALL\n")
+	let sql = subQueries.map((q) => branchSql(q.sql)).map((q) => (parenthesize ? `(\n${q}\n)` : q)).join("\nUNION ALL\n")
 
 	// Wrap in outer SELECT if ordering/pagination is needed
 	const hasOuter =

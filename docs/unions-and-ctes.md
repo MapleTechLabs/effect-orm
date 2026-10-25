@@ -32,8 +32,9 @@ Unions compile with **`compileUnion`**, not `compile`.
 > `Int64`, `Int64` and `Float64`): it makes the column a `Variant`, which ORDER BY refuses, or,
 > with `use_variant_as_common_type = 0`, rejects the union. So on ClickHouse a numeric column whose
 > branches may differ in type (different declared types, or different arithmetic: `Id + 1` is
-> `UInt64`, `Id - 1` is `Int64`) is selected as `toFloat64(…)` in every branch. Numbers decode to
-> JS numbers either way, so this loses nothing the decode keeps. Identical columns and identical
+> `UInt64`, `Id - 1` is `Int64`) is cast with `toFloat64(…)` around every branch
+> (`SELECT toFloat64(x) AS x, … FROM (<branch>)`), so a branch's own DISTINCT, GROUP BY and LIMIT
+> still see exact values. Numbers decode to JS numbers either way, so this loses nothing the decode keeps. Identical columns and identical
 > expressions are left as they are. Cast other types explicitly when the branches differ.
 
 _(Backed by `docs/unions-and-ctes.md > unionAll with an outer ORDER BY`.)_
