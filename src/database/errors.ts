@@ -66,18 +66,6 @@ export class TransactionClosed extends Schema.TaggedError<TransactionClosed>()("
 }) {}
 
 /**
- * `afterCommit` had nowhere to queue its work: no transaction opened by
- * `transaction` is open in this fiber, the transaction already ended, or the
- * outermost transaction was opened by a plain `sql.withTransaction`, which
- * would never run the work. It is a defect, so the work is never dropped
- * silently.
- */
-export class AfterCommitUnavailable extends Schema.TaggedError<AfterCommitUnavailable>()(
-	"@maple-dev/effect-orm/AfterCommitUnavailable",
-	{ message: Schema.String },
-) {}
-
-/**
  * A database with `requireTenantScope` was handed a compiled statement that
  * reads or writes across tenants without saying so: a forgotten tenant
  * filter, or a `rawCompiledQuery` that asserted no scope. It is a defect, as

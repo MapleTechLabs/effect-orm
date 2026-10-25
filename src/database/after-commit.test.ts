@@ -164,25 +164,27 @@ layer(Live, { excludeTestServices: true })("afterCommit on PGlite", (it) => {
 		}),
 	)
 
-	it.effect("dies with AfterCommitUnavailable rather than drop work no transaction will run", () =>
+	it.effect("runs under a plain sql.withTransaction too; dies where nothing will run it", () =>
 		Effect.gen(function* () {
 			const sql = yield* SqlClient.SqlClient
-			const work = Effect.void
+			const ran = yield* Ref.make(0)
+			const work = Ref.update(ran, (n) => n + 1)
 
-			// The outermost transaction is a plain sql.withTransaction: nothing would run the hook.
-			const foreign = yield* dies(sql.withTransaction(Db.transaction(Db.afterCommit(work))))
-			expect(foreign).toBeInstanceOf(Db.AfterCommitUnavailable)
+			// Effect's own transaction queues it: it runs once the outer COMMIT succeeds.
+			yield* sql.withTransaction(
+				Db.transaction(Db.afterCommit(work)).pipe(Effect.andThen(Effect.flatMap(Ref.get(ran), (n) => Effect.sync(() => expect(n).toBe(0))))),
+			)
+			expect(yield* Ref.get(ran)).toBe(1)
 
 			// Transaction provided by hand, with no transaction behind it.
-			const fake = yield* dies(Db.afterCommit(work).pipe(Effect.provideService(Db.Transaction, { depth: 0, isolationLevel: undefined, accessMode: undefined })))
-			expect(fake).toBeInstanceOf(Db.AfterCommitUnavailable)
+			yield* dies(Db.afterCommit(work).pipe(Effect.provideService(Db.Transaction, { depth: 0, isolationLevel: undefined, accessMode: undefined })))
 
 			// A fiber forked in the transaction that queues work after it ended.
 			const release = yield* Deferred.make<void>()
 			const straggler = yield* Db.transaction(Deferred.await(release).pipe(Effect.andThen(Db.afterCommit(work)), Effect.forkDetach))
 			yield* Deferred.succeed(release, undefined)
-			const late = yield* dies(Fiber.join(straggler))
-			expect(late).toBeInstanceOf(Db.AfterCommitUnavailable)
+			yield* dies(Fiber.join(straggler))
+			expect(yield* Ref.get(ran)).toBe(1)
 		}),
 	)
 })

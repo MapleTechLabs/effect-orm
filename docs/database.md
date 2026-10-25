@@ -216,6 +216,9 @@ Like `requireTransaction`, `afterCommit` adds `Transaction` to the requirements,
 deep in the call stack can queue work without knowing where the transaction starts. The
 requirements of the queued effect stay in `R`: they must be met where it is queued.
 
+Effect's own `SqlClient.afterCommit` does the queueing; `afterCommit` adds the `Transaction`
+requirement and the failure policy below.
+
 - **Order.** Hooks run one at a time, in the order they were queued, after COMMIT and outside
   the transaction. A statement in a hook runs on its own connection, not the transaction's.
 - **Rollback.** A rolled-back transaction runs nothing. A savepoint that rolls back drops what
@@ -228,15 +231,12 @@ requirements of the queued effect stay in `R`: they must be met where it is queu
   the `ErrorReporter`s in context (`Effect.withErrorReporting` uses the same ones) and to an
   error log, and the next hook still runs. When the caller must know that the call failed,
   handle the error inside the hook.
-- **At most once.** A crash or an interruption after COMMIT skips the hooks not yet run. When
-  the work must happen, write it to an outbox table inside the transaction instead.
-- **Tracing.** Hooks run in an `effect_orm.after_commit` span, outside the transaction's span.
+- **At most once.** A crash before the hooks run skips them. Hooks run before `transaction`
+  returns and uninterruptibly, so keep them short and fork long-running work. When the work
+  must happen, write it to an outbox table inside the transaction instead.
 
-`afterCommit` dies with `AfterCommitUnavailable` when no `transaction` would run the work: a
-`Transaction` provided by hand, a transaction that has already ended (a fiber forked inside it
-and not joined), or an outermost transaction opened by a plain `sql.withTransaction`. A savepoint
-made by a plain `sql.withTransaction` inside a `Db.transaction` does not drop hooks when it rolls
-back; open nested transactions with `Db.transaction`.
+`afterCommit` dies when nothing would run the work: a `Transaction` provided by hand, or a
+transaction that has already ended (a fiber forked inside it and not joined).
 
 ### Settings
 
@@ -269,8 +269,7 @@ from `body` stay defects.
 `TransactionClosed` is a defect, not an error to handle. A fiber forked inside a transaction
 inherits its connection. If it runs a statement after the transaction ended, that statement
 would run on a connection already back in the pool, so `run`, `query` and `execute` die with
-`TransactionClosed` instead. Join what you fork before the body returns. `AfterCommitUnavailable` is a defect for the same
-reason: work queued where nothing will run it would be lost without a sign.
+`TransactionClosed` instead. Join what you fork before the body returns.
 
 ### Contention retry
 

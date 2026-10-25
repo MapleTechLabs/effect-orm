@@ -654,25 +654,18 @@ What landed differently from the sections above:
 ## 10. `afterCommit` (issue #73)
 
 `Db.afterCommit(effect)` queues work that must wait for COMMIT: a vendor call, a job enqueue.
-Each `transaction` level keeps a queue on its private open-state service. The outermost level
-runs its queue after COMMIT; a savepoint that is kept appends its queue to its parent's, and
-one that rolls back drops it. A hook captures the context it was queued in, so its own
-requirements are met where it was queued; the transaction services
-(`sql.transactionService`, the open-state, `Transaction`) are replaced by the ones outside the
-transaction, so a statement in a hook runs on its own connection.
+Effect 4.0.6 ships `SqlClient.afterCommit`, which already runs callbacks after the outermost
+COMMIT, drops those of a rolled-back transaction or savepoint, hands a kept savepoint's callbacks
+to its parent, and dies when queued after the transaction ended. `Db.afterCommit` delegates to
+it on the client of the open `Db.transaction` and adds only:
 
-Decided:
-
+- **`Transaction` in `R`.** Effect's version runs the work at once outside a transaction; here
+  that does not compile, like `requireTransaction`.
 - **A failing hook does not fail the transaction.** The data is committed; a typed failure at
   that point would invite a retry that writes twice. The cause goes to
-  `ErrorReporter.report` (Effect's channel for observed failures) and `Effect.logError`, and
-  the next hook still runs. A caller that must know handles the error inside the hook.
-- **Nowhere to queue is a defect** (`AfterCommitUnavailable`), like `TransactionClosed`: a
-  hand-provided `Transaction`, an ended transaction, or an outermost transaction opened by a
-  plain `sql.withTransaction` would drop the work without a sign.
-- **At most once.** Hooks are not run uninterruptibly and are not persisted. Guaranteed
-  delivery is an outbox table written inside the transaction, which needs no library support.
+  `ErrorReporter.report` and `Effect.logError`, and the next hook still runs.
+- **The hook's context drops the open-state and `Transaction`** as Effect drops its own
+  transaction service, so a statement in a hook does not trip the closed-transaction guard.
 
-Not done: dialects other than Postgres (SQLite, MySQL, D1 `batch()`) have no transactions on
-main yet. Their `transaction` will run the same queue without change, because the queue lives
-in `once`, not in a dialect.
+At most once: hooks are not persisted. Guaranteed delivery is an outbox table written inside
+the transaction, which needs no library support.

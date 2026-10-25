@@ -30,7 +30,6 @@ export {
 	type TransactionOptions,
 } from "./database/database"
 export {
-	AfterCommitUnavailable,
 	DatabaseError,
 	TenantScopeViolation,
 	TransactionClosed,
