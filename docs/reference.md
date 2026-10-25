@@ -88,7 +88,9 @@ to its own dialect; `options.dialect` overrides it.
 `Dialect`, `DialectClauses` and `ParamStyle` describe a database: how identifiers and literals
 are written, how params reach the server, and which clauses exist. Pass one as
 `options.dialect`. `DialectTransactions` (with `IsolationLevel` and `TransactionSettings`) says
-which transactions the database supports; see [Database](./database.md). See [Params and compilation](./params-and-compilation.md#dialects) and
+which transactions the database supports, and how settings are written: `beginTransaction`
+(optional) for a BEGIN that carries them, `setTransaction` for a statement run after BEGIN;
+see [Database](./database.md#settings). See [Params and compilation](./params-and-compilation.md#dialects) and
 [Postgres](./postgres.md).
 
 ### Params

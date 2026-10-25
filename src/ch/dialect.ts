@@ -110,6 +110,14 @@ export interface DialectTransactions {
 	 * transaction, or `undefined` when there is nothing to apply.
 	 */
 	readonly setTransaction: (settings: TransactionSettings) => string | undefined
+	/**
+	 * The statement that starts a transaction with `settings` applied, such as
+	 * `BEGIN ISOLATION LEVEL SERIALIZABLE`, or `undefined` to keep the client's
+	 * BEGIN. Used in place of `setTransaction` when the installed effect has
+	 * `SqlClient.BeginTransaction` (4.0.6 and later); without this hook, or on an
+	 * older effect, `setTransaction` is used.
+	 */
+	readonly beginTransaction?: (settings: TransactionSettings) => string | undefined
 }
 
 /** No transactions. What a dialect without a `transactions` entry gets. */

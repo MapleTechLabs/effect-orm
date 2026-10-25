@@ -29,6 +29,7 @@ import {
 	TransactionUnsupported,
 	type TransactionError,
 } from "./errors"
+import { coreBeginTransaction, type BeginTransactionReference } from "./begin-transaction"
 import { isSqlTemplate, renderTemplate, type SqlTemplate } from "./sql"
 import { firstLine, reasonOf, sqlStateOf, toDatabaseError } from "./sql-error"
 import { traceStatement, type TracedStatement } from "./tracing"
@@ -149,9 +150,9 @@ export interface FromSqlClientOptions {
 	 */
 	readonly command?: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>
 	/**
-	 * Called with every statement before it runs, including the `SET
-	 * TRANSACTION` a transaction's settings become. For collecting statements
-	 * into one span or log line per request.
+	 * Called with every statement before it runs, including the `BEGIN ...`
+	 * (effect 4.0.6 and later) or `SET TRANSACTION` a transaction's settings
+	 * become. For collecting statements into one span or log line per request.
 	 */
 	readonly observe?: (statement: Statement) => Effect.Effect<void>
 	/**
@@ -203,7 +204,20 @@ const committed = (state: OpenState) =>
 	})
 
 /** A `Database` over an Effect `SqlClient`. */
-export const fromSqlClient = (sql: SqlClient.SqlClient, options: FromSqlClientOptions): DatabaseApi => {
+export const fromSqlClient = (sql: SqlClient.SqlClient, options: FromSqlClientOptions): DatabaseApi =>
+	makeDatabase(sql, options, coreBeginTransaction)
+
+/**
+ * `fromSqlClient` with the `SqlClient.BeginTransaction` reference given, so
+ * tests can drive both paths on any effect. `undefined` means the installed
+ * effect has none: settings are sent as `SET TRANSACTION`. Not exported from
+ * the package.
+ */
+export const makeDatabase = (
+	sql: SqlClient.SqlClient,
+	options: FromSqlClientOptions,
+	beginReference: BeginTransactionReference | undefined,
+): DatabaseApi => {
 	const { dialect } = options
 	const capabilities = dialect.transactions ?? noTransactions
 	const command = options.command ?? ((effect) => effect)
@@ -384,7 +398,16 @@ export const fromSqlClient = (sql: SqlClient.SqlClient, options: FromSqlClientOp
 				depth === 0 || Option.isNone(outer)
 					? { depth, isolationLevel: settings.isolationLevel, accessMode: settings.accessMode }
 					: { ...outer.value, depth }
-			const setTransaction = depth === 0 ? capabilities.setTransaction(settings) : undefined
+			// Settings travel in BEGIN when both effect and the dialect can do it,
+			// else as a `SET TRANSACTION` run first. Top level only: a savepoint
+			// takes no settings.
+			const beginHook = beginReference === undefined ? undefined : capabilities.beginTransaction
+			const beginStatement = depth === 0 && beginHook !== undefined ? beginHook(settings) : undefined
+			const begin =
+				beginReference !== undefined && beginStatement !== undefined
+					? { reference: beginReference, sql: beginStatement }
+					: undefined
+			const setTransaction = depth === 0 && beginHook === undefined ? capabilities.setTransaction(settings) : undefined
 			const state: OpenState = { open: true, client: sql }
 			let bodyExit: Exit.Exit<unknown, unknown> | undefined
 
@@ -392,6 +415,10 @@ export const fromSqlClient = (sql: SqlClient.SqlClient, options: FromSqlClientOp
 				if (setTransaction !== undefined) yield* execute({ sql: setTransaction })
 				return yield* body
 			}).pipe(
+				// The reference applies to every top-level transaction started while it
+				// is provided; clear it for the body, so a transaction on another client
+				// keeps that client's BEGIN.
+				(effect) => (begin === undefined ? effect : Effect.provideService(effect, begin.reference, undefined)),
 				Effect.provideService(Transaction, info),
 				Effect.provideService(TransactionOpen, state),
 				Effect.onExit((exit) =>
@@ -404,9 +431,16 @@ export const fromSqlClient = (sql: SqlClient.SqlClient, options: FromSqlClientOp
 				),
 			)
 
-			const exit = yield* Effect.exit(sql.withTransaction(inner).pipe(Effect.ensuring(committed(state))))
+			const transaction =
+				begin === undefined
+					? sql.withTransaction(inner)
+					: Effect.andThen(
+							observe({ sql: begin.sql }),
+							sql.withTransaction(inner).pipe(Effect.provideService(begin.reference, begin.sql)),
+						)
+			const exit = yield* Effect.exit(transaction.pipe(Effect.ensuring(committed(state))))
 			if (Exit.isSuccess(exit)) return exit.value
-			return yield* restoreCause<E>(exit.cause, bodyExit, depth)
+			return yield* restoreCause<E>(exit.cause, bodyExit, depth, begin?.sql)
 		}).pipe(
 			Effect.withSpan("effect_orm.transaction", {
 				// Semconv defines no transaction attributes, and `db.*` is reserved for it.
@@ -435,6 +469,7 @@ const restoreCause = <E>(
 	cause: Cause.Cause<unknown>,
 	bodyExit: Exit.Exit<unknown, unknown> | undefined,
 	depth: number,
+	begin: string | undefined,
 ): Effect.Effect<never, E | DatabaseError | TransactionCommitFailed | TransactionRollbackFailed> => {
 	const failure = Cause.findError(cause)
 	if (failure._tag === "Success" && failure.success instanceof BodyDefect) {
@@ -455,7 +490,7 @@ const restoreCause = <E>(
 			)
 		}
 		// The body never ran: BEGIN or SAVEPOINT died, not ROLLBACK.
-		if (bodyExit === undefined) return Effect.fail(toDatabaseError(depth === 0 ? "BEGIN" : "SAVEPOINT")(error))
+		if (bodyExit === undefined) return Effect.fail(toDatabaseError(depth === 0 ? (begin ?? "BEGIN") : "SAVEPOINT")(error))
 		// An interrupted transaction whose ROLLBACK died stays interrupted.
 		if (Cause.hasInterrupts(bodyExit.cause)) return Effect.failCause(bodyExit.cause as Cause.Cause<E>)
 		return Effect.fail(
@@ -468,7 +503,7 @@ const restoreCause = <E>(
 	}
 	// BEGIN or SAVEPOINT failed before the body ran.
 	if (bodyExit === undefined && failure._tag === "Success" && isSqlError(failure.success)) {
-		return Effect.fail(toDatabaseError(depth === 0 ? "BEGIN" : "SAVEPOINT")(failure.success))
+		return Effect.fail(toDatabaseError(depth === 0 ? (begin ?? "BEGIN") : "SAVEPOINT")(failure.success))
 	}
 	return Effect.failCause(cause as Cause.Cause<E>)
 }
