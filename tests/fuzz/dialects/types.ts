@@ -81,6 +81,41 @@ export interface DialectModule {
 	readonly not: typeof CH.not
 	readonly rawCond: typeof CH.rawCond
 	readonly fromQuery: typeof CH.fromQuery
+	readonly unionAll: typeof CH.unionAll
+	readonly compileUnion: (union: any, params?: Record<string, unknown>) => Effect.Effect<CH.CompiledQuery<any>, unknown>
+	readonly insertInto: typeof CH.insertInto
+	readonly update: typeof CH.update
+	readonly deleteFrom: typeof CH.deleteFrom
+}
+
+/**
+ * Which writes the dialect's builder compiles. A write it does not support is
+ * still generated, and must be refused at compile time rather than run.
+ */
+export interface WriteSupport {
+	/** `insertInto(t).select(query)`. */
+	readonly insertSelect: boolean
+	readonly update: boolean
+	readonly delete: boolean
+	/** `onConflictDoNothing` / `onConflictDoUpdate`. */
+	readonly onConflict: boolean
+	/** `.returning()` on INSERT, UPDATE and DELETE. */
+	readonly returning: boolean
+	/** A multi-row VALUES where some rows leave out a defaulted column (`DEFAULT` per cell). */
+	readonly defaultCells: boolean
+	/**
+	 * The writes suite's scratch table, on the dialect's first target: a key
+	 * `Id` (integer, unique), `OrgId` and `Name` (text), `Note` (nullable text)
+	 * and `Qty` (integer, database default 5, so an insert may leave it out).
+	 */
+	readonly scratch: {
+		readonly table: (name: string) => CH.Table<string, any, any, any>
+		/** Statements that create the table, empty. */
+		readonly create: (name: string) => ReadonlyArray<string>
+		readonly drop: (name: string) => string
+		/** Run one statement on the first target, failing if the database does. */
+		readonly exec: (sql: string) => Promise<void>
+	}
 }
 
 export interface FuzzDialect {
@@ -99,7 +134,9 @@ export interface FuzzDialect {
 	readonly checkPlaceholders?: (sql: string, parameterCount: number) => string | undefined
 	/** Column types the literal round-trip property covers. */
 	readonly literals: ReadonlyArray<LiteralType>
-	/** The databases this dialect's SQL runs on. The first is the literal suite's. */
+	/** What the writes suite may generate, and how it gets a table to write to. */
+	readonly writes: WriteSupport
+	/** The databases this dialect's SQL runs on. The first is the literal and writes suites'. */
 	readonly targets: ReadonlyArray<FuzzTarget>
 	/** Release a connection or process the targets opened. */
 	readonly close?: () => Promise<void>

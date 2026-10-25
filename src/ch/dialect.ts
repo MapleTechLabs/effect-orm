@@ -151,6 +151,15 @@ export interface Dialect extends Omit<SqlSyntax, "dialect"> {
 	 * unchecked: a custom dialect says which set it renders, if either.
 	 */
 	readonly functions?: string
+	/**
+	 * The ORDER BY keys for a numeric UNION ALL column whose branches may have
+	 * different types. ClickHouse has no common type for `UInt64` and `Int64`
+	 * (or `Int64` and `Float64`): the column is a `Variant`, which ORDER BY
+	 * refuses as a key. The values are left as they are (an INSERT ... SELECT or
+	 * an IN over the union keeps them exact); only the sort key is converted.
+	 * Absent: the dialect orders such a column as it is.
+	 */
+	readonly unionNumberOrderKeys?: (column: string) => ReadonlyArray<string>
 }
 
 /** ClickHouse, with params written into the SQL as literals. The default. */
@@ -173,6 +182,8 @@ export const clickhouseDialect: Dialect = {
 	},
 	transactions: noTransactions,
 	functions: "clickhouse",
+	// CAST, not toFloat64: ClickHouse 26.2's toFloat64 refuses a Variant. Float64 orders every number; the Int128 tiebreak keeps integers past 2^53 (one Float64) in exact order.
+	unionNumberOrderKeys: (column) => [`CAST(${column} AS Nullable(Float64))`, `accurateCastOrNull(${column}, 'Int128')`],
 }
 
 // The dialect of the enclosing compile, beside the syntax installed for the

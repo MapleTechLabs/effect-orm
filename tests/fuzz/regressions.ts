@@ -5,7 +5,7 @@
 // target at once). Inputs that hit an open entry in `known-issues.ts` are
 // skipped until the bug is fixed, then replayed for good.
 import { DateTime } from "effect"
-import type { Plan, RowsShape } from "./plan"
+import type { Plan, RowsShape, UnionPlan } from "./plan"
 
 const rows = (shape: RowsShape): Plan => ({ orgId: "org_1", join: undefined, where: [], shape, wrap: false, crossTenant: false })
 
@@ -28,13 +28,33 @@ export const pinned: Record<string, ReadonlyArray<unknown>> = {
 		}),
 		// fromquery-select-all.
 		{ ...rows({ k: "rows", select: [["id", { k: "col", col: "Id" }]], distinct: false, orderBy: [] }), wrap: "all" },
-		// clickhouse-server-and-absorption.
+		// The same server bug in a shape the old matcher missed (ClickHouse 26.2): `(a OR 0 OR a) AND (a OR 0)`.
+		{
+			...rows({ k: "rows", select: [["id", { k: "col", col: "Id" }]], distinct: false, orderBy: [] }),
+			orgId: "org_3",
+			where: [
+				{
+					k: "and",
+					style: "method",
+					cs: [
+						{ k: "or", style: "method", cs: [{ k: "null", op: "isNotNull", e: { k: "col", col: "Note" } }, { k: "const", v: false }, { k: "null", op: "isNotNull", e: { k: "col", col: "Note" } }] },
+						{ k: "or", style: "method", cs: [{ k: "null", op: "isNotNull", e: { k: "col", col: "Note" } }, { k: "in", neg: false, e: { k: "str", v: "" }, values: [] }] },
+					],
+				},
+			],
+		},
+		// A ClickHouse server bug (a one-argument and()): run again without the rewrite, rows still checked (dialects/clickhouse.ts).
 		{
 			...rows({ k: "rows", select: [["id", { k: "col", col: "Id" }]], distinct: false, orderBy: [] }),
 			where: [
 				{ k: "tenant", side: "orders" },
 				{ k: "or", style: "method", cs: [{ k: "and", style: "method", cs: [{ k: "const", v: true }, { k: "tenant", side: "orders" }] }, { k: "tenant", side: "orders" }] },
 			],
+		},
+		// `OrgId IN ('org_2')` pins the query to org_2, not to the orgId param: single-tenant, and right to read org_2.
+		{
+			...rows({ k: "rows", select: [["id", { k: "col", col: "Id" }]], distinct: false, orderBy: [] }),
+			where: [{ k: "in", neg: false, e: { k: "col", col: "OrgId" }, values: ["org_2"] }],
 		},
 		// pg-fraction-bound-to-integer.
 		{
@@ -50,6 +70,20 @@ export const pinned: Record<string, ReadonlyArray<unknown>> = {
 	"postgres:boolean select": [false],
 	"postgres:text[] select": [[]],
 	"postgres:timestamptz": [DateTime.makeUnsafe(Date.UTC(100, 0, 1))],
+
+	// Unions.
+	"unions match the model": [
+		// clickhouse-union-variant-order-by: `Id + 1` (UInt64) under `Id + -1` (Int64), ordered by that column.
+		{
+			orgId: "org_1",
+			branches: [
+				rows({ k: "rows", select: [["id", { k: "col", col: "Id" }], ["e0", { k: "arith", op: "add", l: { k: "col", col: "Id" }, r: 1 }]], distinct: false, orderBy: [] }),
+				rows({ k: "rows", select: [["id", { k: "col", col: "Id" }], ["e0", { k: "arith", op: "add", l: { k: "col", col: "Id" }, r: -1 }]], distinct: false, orderBy: [] }),
+			],
+			orderBy: [["e0", "asc"], ["id", "asc"]],
+			crossTenant: false,
+		},
+	] satisfies ReadonlyArray<UnionPlan>,
 
 	// Hostile values.
 	"hostile values are refused, never thrown (clickhouse)": [

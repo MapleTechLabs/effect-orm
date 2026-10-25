@@ -37,8 +37,17 @@ export const clickhouseText = async (
 	}
 }
 
+/**
+ * A ClickHouse server bug, not the builder's: the common-expression rewrite can
+ * leave a one-argument and() (`a AND ((b AND a) OR a)`, `(a OR 0 OR a) AND (a OR 0)`,
+ * and more shapes than a matcher keeps up with), which fails with this error.
+ * The query is run again with the rewrite off, and its rows still checked.
+ */
+const SERVER_AND_BUG = /Number of arguments for function "and" should be at least 2/
+
 const runClickHouse = async (compiled: CH.CompiledQuery<any>, settings: Record<string, string>): Promise<Outcome> => {
-	const { ok, text } = await clickhouseText(compiled.sql, settings)
+	let { ok, text } = await clickhouseText(compiled.sql, settings)
+	if (!ok && SERVER_AND_BUG.test(text)) ({ ok, text } = await clickhouseText(compiled.sql, { ...settings, optimize_extract_common_expressions: "0" }))
 	if (!ok) return { _tag: "DatabaseError", message: text.trim() }
 	const wire = text
 		.split("\n")
@@ -58,12 +67,20 @@ const semantics: Semantics = {
 	likeIgnoresCase: false,
 }
 
+/**
+ * An UPDATE is an `ALTER TABLE … UPDATE` mutation, which runs in the background
+ * unless asked to wait, and a lightweight DELETE may too. Waiting makes a write
+ * visible to the read that follows it, as the writes suite needs.
+ */
+const syncWrites = { mutations_sync: "2", lightweight_deletes_sync: "2" }
+
 const target = (name: string, joinUseNulls: boolean): FuzzTarget => ({
 	name,
 	available: clickhouseEndpoint !== undefined,
 	semantics: joinUseNulls ? { ...semantics, missingJoinColumn: "null" } : semantics,
 	run: (compiled) =>
 		runClickHouse(compiled, {
+			...syncWrites,
 			join_use_nulls: joinUseNulls ? "1" : "0",
 			output_format_json_quote_64bit_integers: joinUseNulls ? "1" : "0",
 		}),
@@ -132,5 +149,26 @@ export const clickhouse: FuzzDialect = {
 	strings,
 	ilike: true,
 	literals,
+	writes: {
+		insertSelect: true,
+		update: true,
+		delete: true,
+		onConflict: false,
+		returning: false,
+		defaultCells: true,
+		scratch: {
+			table: (name) =>
+				CH.table(name, {
+					external: true,
+					columns: { Id: CH.int64, OrgId: CH.string, Name: CH.string, Note: CH.nullable(CH.string), Qty: CH.column(CH.int64, { default: 5 }) },
+				}),
+			create: (name) => [`CREATE TABLE ${name} (Id Int64, OrgId String, Name String, Note Nullable(String), Qty Int64 DEFAULT 5) ENGINE = MergeTree ORDER BY Id`],
+			drop: (name) => `DROP TABLE IF EXISTS ${name}`,
+			exec: async (sql) => {
+				const { ok, text } = await clickhouseText(sql, syncWrites)
+				if (!ok) throw new Error(text.trim())
+			},
+		},
+	},
 	targets: [target("clickhouse", false), target("clickhouse-join-nulls", true)],
 }

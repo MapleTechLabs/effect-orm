@@ -8,7 +8,7 @@
 // 4. Assembling into SqlQuery and calling the existing compileQuery()
 
 import { compiled, compiledUnsafe, fail } from "./failure"
-import { columnSqlName, custom, dateTime, dateTime64, type CHType, type ColumnDefs } from "./types"
+import { CHFloatResult, CHNumber, columnSqlName, custom, dateTime, dateTime64, type CHType, type ColumnDefs } from "./types"
 import type { CHQuery, CHQueryState, NeedsSelect } from "./query"
 import type { CHUnionQuery } from "./union"
 import { isInsert, type AnyInsert, type CHInsert } from "./insert"
@@ -22,7 +22,7 @@ import { activeLiteralBinder, withLiteralBinder } from "../sql/literal-binder"
 import { compileQuery, type SqlQuery } from "../sql/sql-query"
 import { track, untracked, type RenderTrack } from "../sql/render-tracker"
 import { PARAM_MARKER_PREFIX, PARAM_PLACEHOLDER_PATTERN, param, paramColumnTypeOf, paramSchema, type ParamKind } from "./param"
-import { mergeResultSchemas } from "./define-fn"
+import { mergeResultSchemas, schemaOf } from "./define-fn"
 import { encodeValue } from "./literal"
 import { checkedLiteral, clickhouseDialect, currentDialect, withDialect, type Dialect } from "./dialect"
 import { Effect, Option, Schema } from "effect"
@@ -1391,6 +1391,39 @@ export function compileUnionRaw<Output extends Record<string, any>>(
 }
 
 /** The recursion behind {@link compileUnionUnsafe}; see {@link compileInner}. */
+/** A JS-number schema: every numeric ClickHouse type and arithmetic result decodes through one of these. */
+const isNumberSchema = (schema: unknown): boolean => {
+	if (schema === CHNumber || schema === CHFloatResult) return true
+	// NullOr(CHNumber): a nullable column or arithmetic over one.
+	const members = (schema as { members?: ReadonlyArray<unknown> } | undefined)?.members
+	return Array.isArray(members) && members.some((m) => m === CHNumber || m === CHFloatResult) && members.every((m) => m === CHNumber || m === CHFloatResult || m === Schema.Null)
+}
+
+/**
+ * The union columns a dialect with `unionNumberOrderKeys` orders through those
+ * keys: every branch selects a number, and their types may differ, because the
+ * branches declare different column types or compute it differently
+ * (arithmetic has no declared type: `Id + 1` is UInt64, `Id - 1` Int64).
+ */
+function mixedNumberColumns(queries: ReadonlyArray<CHQuery<any, any, any, any>>, selectKeys: ReadonlyArray<string>): ReadonlySet<string> {
+	const casts = new Set<string>()
+	if (currentDialect().unionNumberOrderKeys === undefined || queries.length < 2) return casts
+	for (const alias of selectKeys) {
+		const exprs = queries.map((q) => (selectExprsOf(q) as Record<string, unknown> | undefined)?.[alias])
+		const kinds = exprs.map((expr) => {
+			if (!isExprLike(expr)) return undefined
+			const declared = columnTypeOf(expr as Expr<any>)
+			if (declared !== undefined) return isNumberSchema(declared.schema) ? declared.sql : undefined
+			return isNumberSchema(schemaOf(expr)) ? "computed" : undefined
+		})
+		if (kinds.some((kind) => kind === undefined)) continue
+		if (new Set(kinds).size > 1) casts.add(alias)
+		// The same computation in every branch (a `sum` over one column) has one type; different ones may not.
+		else if (kinds[0] === "computed" && new Set(exprs.map((expr) => compileSqlFragment((expr as Expr<any>).toFragment()))).size > 1) casts.add(alias)
+	}
+	return casts
+}
+
 function compileUnionInner<Output extends Record<string, any>, Params extends Record<string, any>>(
 	union: CHUnionQuery<Output>,
 	params: Params,
@@ -1419,6 +1452,7 @@ function compileUnionInner<Output extends Record<string, any>, Params extends Re
 	const subQueries = state.queries.map((q) =>
 		compileInner(q, params, { skipFormat: true, deferParams, nested: true, selectKeys, enclosingCtes }),
 	)
+	const mixedNumbers = mixedNumberColumns(state.queries, selectKeys)
 	const bounds = new Set(
 		subQueries.flatMap((q) => {
 			const bound = tenantBoundOf(q)
@@ -1451,7 +1485,14 @@ function compileUnionInner<Output extends Record<string, any>, Params extends Re
 	if (hasOuter) {
 		sql = `SELECT * FROM (\n${sql}\n)${currentDialect().clauses.derivedTableAlias ? ` AS ${quoteIdent("__union")}` : ""}`
 		if (state.outerOrderBySpecs.length > 0) {
-			sql += `\nORDER BY ${orderByClause(state.outerOrderBySpecs).join(", ")}`
+			const orderKeys = currentDialect().unionNumberOrderKeys
+			const clause = orderByClause(state.outerOrderBySpecs).map((rendered, i) => {
+				const [column, direction] = state.outerOrderBySpecs[i]!
+				return orderKeys !== undefined && mixedNumbers.has(column)
+					? orderKeys(quoteIdent(column)).map((key) => `${key} ${direction.toUpperCase()}`).join(", ")
+					: rendered
+			})
+			sql += `\nORDER BY ${clause.join(", ")}`
 		}
 		if (state.outerLimitValue != null) {
 			sql += `\nLIMIT ${compileSqlFragment(rowCount("limit", state.outerLimitValue)!)}`
