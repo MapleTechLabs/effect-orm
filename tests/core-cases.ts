@@ -8,10 +8,11 @@
 import { DateTime } from "effect"
 import * as CH from "@maple-dev/effect-orm/clickhouse"
 import * as PG from "@maple-dev/effect-orm/postgres"
+import * as SQLite from "@maple-dev/effect-orm/sqlite"
 
-export type DialectName = "clickhouse" | "postgres"
+export type DialectName = "clickhouse" | "postgres" | "sqlite" | "d1"
 /** ClickHouse runs twice: `join_use_nulls=0` fills a missing join row with defaults. */
-export type Target = "clickhouse" | "clickhouse-join-nulls" | "postgres"
+export type Target = "clickhouse" | "clickhouse-join-nulls" | "postgres" | "sqlite" | "d1"
 
 type Col<A> = CH.CHType<string, A, any>
 type Orders = {
@@ -70,6 +71,9 @@ interface FixtureColumn {
 	readonly clickhouse: string
 	readonly postgres: string
 }
+/** SQLite (and D1) store the fixture's timestamps as the ISO text the dialect writes. */
+const sqliteValue = (column: FixtureColumn, value: Value): Value =>
+	column.name === "Created" && typeof value === "string" ? `${value.replace(" ", "T")}Z` : value
 const fixtureColumns = {
 	orders: [
 		{ name: "OrgId", clickhouse: "String", postgres: "text" },
@@ -115,6 +119,11 @@ export const fixtureSql = (dialect: DialectName, table: keyof typeof fixtureColu
 	if (dialect === "clickhouse") {
 		const structure = columns.map((column) => `${column.name} ${column.clickhouse}`).join(", ")
 		return `SELECT * FROM values('${structure.replaceAll("'", "\\'")}', ${tuples})`
+	}
+	if (dialect === "sqlite" || dialect === "d1") {
+		// SQLite names VALUES columns column1, column2, …, and has no column list on a derived table.
+		const rows = fixtureRows[table].map((row) => `(${row.map((v, i) => sqlValue(sqliteValue(columns[i]!, v))).join(", ")})`).join(", ")
+		return `SELECT ${columns.map((column, i) => `column${i + 1} AS "${column.name}"`).join(", ")} FROM (VALUES ${rows})`
 	}
 	const casts = columns.map((column, i) => `CAST("c${i}" AS ${column.postgres}) AS "${column.name}"`).join(", ")
 	const names = columns.map((_, i) => `"c${i}"`).join(", ")
@@ -189,9 +198,55 @@ export const postgresContext: CoreContext = {
 	compileUnion: (union, params = {}) => PG.compileUnionUnsafe(union, params),
 }
 
+const sqliteTables = {
+	orders: SQLite.table("orders", {
+		external: true,
+		tenantColumn: "OrgId",
+		columns: {
+			OrgId: SQLite.text,
+			Id: SQLite.integer,
+			Customer: SQLite.text,
+			Amount: SQLite.integer,
+			Status: SQLite.text,
+			Note: SQLite.nullable(SQLite.text),
+			Created: SQLite.timestamp,
+		},
+	}),
+	customers: SQLite.table("customers", { external: true, columns: { OrgId: SQLite.text, Name: SQLite.text, Tier: SQLite.text }, tenantColumn: "OrgId" }),
+}
+const sqliteFn: CoreContext["fn"] = {
+	count: () => SQLite.count(),
+	countIf: (condition) => SQLite.countIf(condition),
+	sum: (expr) => SQLite.sum(expr),
+	min: (expr) => SQLite.min(expr),
+	max: (expr) => SQLite.max(expr),
+	coalesce: (expr, fallback) => SQLite.coalesce(expr, fallback),
+}
+
+export const sqliteContext: CoreContext = {
+	dialect: "sqlite",
+	...sqliteTables,
+	from: withFixtures("sqlite"),
+	types: { text: SQLite.text, int: SQLite.integer },
+	fn: sqliteFn,
+	compile: (query, params = {}) => SQLite.compileUnsafe(query, params),
+	compileUnion: (union, params = {}) => SQLite.compileUnionUnsafe(union, params),
+}
+
+/** D1 runs SQLite's SQL, with its own limits (100 bindings, no interactive transactions). */
+export const d1Context: CoreContext = {
+	...sqliteContext,
+	dialect: "d1",
+	from: withFixtures("d1"),
+	compile: (query, params = {}) => SQLite.compileUnsafe(query, params, { dialect: SQLite.d1Dialect }),
+	compileUnion: (union, params = {}) => SQLite.compileUnionUnsafe(union, params, { dialect: SQLite.d1Dialect }),
+}
+
 export const contexts: Record<DialectName, CoreContext> = {
 	clickhouse: clickhouseContext,
 	postgres: postgresContext,
+	sqlite: sqliteContext,
+	d1: d1Context,
 }
 
 // Cases
@@ -247,7 +302,7 @@ export const coreCases: readonly CoreCase[] = [
 	},
 	{
 		id: "patterns-and-lists",
-		covers: [...e("like", "notLike", "ilike", "in_", "notIn"), ...c("and", "or"), "function:not"],
+		covers: [...e("like", "notLike", "in_", "notIn"), ...c("and", "or"), "function:not"],
 		build: (ctx) =>
 			ctx.compile(
 				ctx
@@ -256,7 +311,7 @@ export const coreCases: readonly CoreCase[] = [
 					.where(($) => [
 						$.OrgId.eq(CH.param.string("orgId")),
 						$.Customer.like("%e%").and($.Customer.notLike("i%")),
-						$.Status.ilike("PA%").or($.Status.in_("open")),
+						$.Status.like("pa%").or($.Status.in_("open")),
 						$.Id.notIn(3),
 						CH.not($.Id.eq(2)),
 					])
@@ -265,6 +320,38 @@ export const coreCases: readonly CoreCase[] = [
 			),
 		// acme (1, 2) and globex (3) match the patterns; 3 and 2 are excluded by notIn and not.
 		expected: [{ id: 1 }],
+	},
+	{
+		id: "ilike",
+		covers: e("ilike"),
+		build: (ctx) =>
+			ctx.compile(
+				orgOrders(ctx).select(($) => ({ id: $.Id })).where(($) => [$.Status.ilike("PA%")]).orderBy(["id", "asc"]),
+				org,
+			),
+		expected: [{ id: 1 }, { id: 2 }],
+		rejects: { sqlite: /ILIKE/, d1: /ILIKE/ },
+	},
+	{
+		id: "like-escape",
+		covers: e("like"),
+		// `\_` is a literal underscore on every dialect: SQLite needs `ESCAPE '\'` for it.
+		build: (ctx) =>
+			ctx.compile(
+				ctx.from(ctx.orders).select(($) => ({ id: $.Id })).where(($) => [$.OrgId.like("org\\_1"), $.Note.notLike("it\\_s")]).orderBy(["id", "asc"]),
+				{},
+			),
+		expected: [{ id: 1 }, { id: 4 }],
+		metadata: { tenantScope: "cross-tenant" },
+	},
+	{
+		id: "like-case",
+		covers: e("like"),
+		build: (ctx) =>
+			ctx.compile(orgOrders(ctx).select(($) => ({ id: $.Id })).where(($) => [$.Customer.like("ACME")]).orderBy(["id", "asc"]), org),
+		// SQLite's LIKE ignores ASCII case; every other dialect's matches it exactly. Documented in docs/sqlite.md.
+		expected: [],
+		expectedBy: { sqlite: [{ id: 1 }, { id: 2 }], d1: [{ id: 1 }, { id: 2 }] },
 	},
 	{
 		id: "arithmetic",
@@ -283,11 +370,13 @@ export const coreCases: readonly CoreCase[] = [
 					.where(($) => [$.OrgId.eq(CH.param.string("orgId")), $.Id.eq(4)]),
 				org,
 			),
-		// `/` is float division on ClickHouse and integer division on two Postgres integers.
+		// `/` is float division on ClickHouse and integer division on two Postgres or SQLite integers.
 		expectedBy: {
 			clickhouse: [{ added: 8, subtracted: 6, multiplied: 14, remainder: 1, divided: 3.5 }],
 			"clickhouse-join-nulls": [{ added: 8, subtracted: 6, multiplied: 14, remainder: 1, divided: 3.5 }],
 			postgres: [{ added: 8, subtracted: 6, multiplied: 14, remainder: 1, divided: 3 }],
+			sqlite: [{ added: 8, subtracted: 6, multiplied: 14, remainder: 1, divided: 3 }],
+			d1: [{ added: 8, subtracted: 6, multiplied: 14, remainder: 1, divided: 3 }],
 		},
 	},
 	{
@@ -598,7 +687,7 @@ export const coreCases: readonly CoreCase[] = [
 		id: "format",
 		covers: q("format"),
 		format: "JSON",
-		rejects: { postgres: /no FORMAT clause/ },
+		rejects: { postgres: /no FORMAT clause/, sqlite: /no FORMAT clause/, d1: /no FORMAT clause/ },
 		build: (ctx) =>
 			ctx.compile(
 				orgOrders(ctx)
@@ -613,7 +702,7 @@ export const coreCases: readonly CoreCase[] = [
 		id: "union-format",
 		covers: u("format"),
 		format: "JSON",
-		rejects: { postgres: /no FORMAT clause/ },
+		rejects: { postgres: /no FORMAT clause/, sqlite: /no FORMAT clause/, d1: /no FORMAT clause/ },
 		build: (ctx) => {
 			const one = (id: number) =>
 				orgOrders(ctx)
@@ -674,6 +763,7 @@ export const coreCases: readonly CoreCase[] = [
 					.orderBy(["customer", "asc"], ["id", "desc"]),
 				org,
 			),
+		rejects: { sqlite: /DISTINCT ON/, d1: /DISTINCT ON/ },
 		expected: [
 			{ customer: "acme", id: 2 },
 			{ customer: "globex", id: 3 },
@@ -690,7 +780,7 @@ export const coreCases: readonly CoreCase[] = [
 	{
 		id: "locking",
 		covers: q("forUpdate", "forNoKeyUpdate", "forShare", "forKeyShare"),
-		rejects: { clickhouse: /no row locks/ },
+		rejects: { clickhouse: /no row locks/, sqlite: /no row locks/, d1: /no row locks/ },
 		build: (ctx) => {
 			// Each strength compiles; the one sent is FOR UPDATE SKIP LOCKED.
 			const base = orgOrders(ctx).select(($) => ({ id: $.Id })).where(($) => [$.Id.eq(1)])
@@ -705,4 +795,6 @@ export const coreCases: readonly CoreCase[] = [
 export const coreSkips: Record<DialectName, Record<string, string>> = {
 	clickhouse: {},
 	postgres: {},
+	sqlite: {},
+	d1: {},
 }

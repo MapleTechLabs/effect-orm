@@ -36,7 +36,16 @@ export const pinned: Record<string, ReadonlyArray<unknown>> = {
 				{ k: "or", style: "method", cs: [{ k: "and", style: "method", cs: [{ k: "const", v: true }, { k: "tenant", side: "orders" }] }, { k: "tenant", side: "orders" }] },
 			],
 		},
-		// pg-fraction-bound-to-integer.
+		// sqlite-like-no-default-escape: `\_` was a literal backslash on SQLite.
+		{
+			orgId: "org_2",
+			join: "left",
+			where: [{ k: "tenant", side: "orders" }],
+			shape: { k: "agg", keys: [], aggs: [["a0", { k: "countIf", c: { k: "like", op: "like", l: { k: "jcol", col: "OrgId" }, pattern: "org\\__" } }]], having: [], orderBy: [] },
+			wrap: false,
+			crossTenant: false,
+		},
+		// pg-fraction-bound-to-integer, and sqlite-integer-refuses-fraction.
 		{
 			...rows({ k: "rows", select: [["id", { k: "col", col: "Id" }]], distinct: false, orderBy: [] }),
 			where: [{ k: "cmp", op: "gt", l: { k: "col", col: "Amount" }, r: { k: "value", v: 9.75 } }],
@@ -48,6 +57,8 @@ export const pinned: Record<string, ReadonlyArray<unknown>> = {
 	"clickhouse:Array(Nullable(Int64)) compare": [[0, 4294967296]],
 	"clickhouse:String": ["__PARAM_string_x__", "\\'", "\0"],
 	"postgres:boolean select": [false],
+	// SQLite reads these decimals as a neighbouring double, as a literal or through json_extract.
+	":real ": [1.23456789e-95, 5.464465248610941e-277, -1.415281131826549e-267, 0, 5e-324],
 	"postgres:text[] select": [[]],
 	"postgres:timestamptz": [DateTime.makeUnsafe(Date.UTC(100, 0, 1))],
 
