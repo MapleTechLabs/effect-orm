@@ -494,6 +494,48 @@ SELECT
 }
 `;
 
+exports[`core SQL (clickhouse) > text-match 1`] = `
+{
+  "parameters": [],
+  "sql": "WITH texts AS (
+SELECT * FROM values('Id UInt32, Body String', (1, '50% off'), (2, '500 off'), (3, 'a_b'), (4, 'aXb'), (5, 'C:\\\\dir'), (6, 'C:dir'))
+)
+SELECT
+          texts.Id AS id
+        FROM texts
+        WHERE (texts.Body LIKE '%50\\\\%%' OR texts.Body LIKE 'a\\\\_%' OR texts.Body LIKE '%\\\\\\\\dir')
+        ORDER BY id ASC",
+}
+`;
+
+exports[`core SQL (clickhouse) > text-match-insensitive 1`] = `
+{
+  "parameters": [],
+  "sql": "WITH texts AS (
+SELECT * FROM values('Id UInt32, Body String', (1, '50% off'), (2, '500 off'), (3, 'a_b'), (4, 'aXb'), (5, 'C:\\\\dir'), (6, 'C:dir'))
+)
+SELECT
+          texts.Id AS id
+        FROM texts
+        WHERE (texts.Body ILIKE '%AXB%' OR texts.Body ILIKE 'A\\\\_%' OR texts.Body ILIKE '%\\\\% OFF')
+        ORDER BY id ASC",
+}
+`;
+
+exports[`core SQL (clickhouse) > text-match-param 1`] = `
+{
+  "parameters": [],
+  "sql": "WITH texts AS (
+SELECT * FROM values('Id UInt32, Body String', (1, '50% off'), (2, '500 off'), (3, 'a_b'), (4, 'aXb'), (5, 'C:\\\\dir'), (6, 'C:dir'))
+)
+SELECT
+          texts.Id AS id
+        FROM texts
+        WHERE (texts.Body LIKE ('%' || replace(replace(replace('0%', '\\\\', '\\\\\\\\'), '%', '\\\\%'), '_', '\\\\_') || '%') OR texts.Body LIKE ('%' || replace(replace(replace('_b', '\\\\', '\\\\\\\\'), '%', '\\\\%'), '_', '\\\\_')) OR texts.Body LIKE (replace(replace(replace('C:\\\\', '\\\\', '\\\\\\\\'), '%', '\\\\%'), '_', '\\\\_') || '%'))
+        ORDER BY id ASC",
+}
+`;
+
 exports[`core SQL (clickhouse) > union 1`] = `
 {
   "parameters": [],
@@ -1173,6 +1215,60 @@ SELECT
         FROM "orders"
         WHERE "orders"."OrgId" = $2
           AND "orders"."Id" = $3",
+}
+`;
+
+exports[`core SQL (postgres) > text-match 1`] = `
+{
+  "parameters": [
+    "%50\\%%",
+    "a\\_%",
+    "%\\\\dir",
+  ],
+  "sql": "WITH "texts" AS (
+SELECT CAST("c0" AS int4) AS "Id", CAST("c1" AS text) AS "Body" FROM (VALUES (1, '50% off'), (2, '500 off'), (3, 'a_b'), (4, 'aXb'), (5, 'C:\\dir'), (6, 'C:dir')) AS v("c0", "c1")
+)
+SELECT
+          "texts"."Id" AS "id"
+        FROM "texts"
+        WHERE ("texts"."Body" LIKE $1 ESCAPE '\\' OR "texts"."Body" LIKE $2 ESCAPE '\\' OR "texts"."Body" LIKE $3 ESCAPE '\\')
+        ORDER BY "id" ASC",
+}
+`;
+
+exports[`core SQL (postgres) > text-match-insensitive 1`] = `
+{
+  "parameters": [
+    "%AXB%",
+    "A\\_%",
+    "%\\% OFF",
+  ],
+  "sql": "WITH "texts" AS (
+SELECT CAST("c0" AS int4) AS "Id", CAST("c1" AS text) AS "Body" FROM (VALUES (1, '50% off'), (2, '500 off'), (3, 'a_b'), (4, 'aXb'), (5, 'C:\\dir'), (6, 'C:dir')) AS v("c0", "c1")
+)
+SELECT
+          "texts"."Id" AS "id"
+        FROM "texts"
+        WHERE ("texts"."Body" ILIKE $1 ESCAPE '\\' OR "texts"."Body" ILIKE $2 ESCAPE '\\' OR "texts"."Body" ILIKE $3 ESCAPE '\\')
+        ORDER BY "id" ASC",
+}
+`;
+
+exports[`core SQL (postgres) > text-match-param 1`] = `
+{
+  "parameters": [
+    "0%",
+    "_b",
+    "C:\\",
+  ],
+  "sql": "WITH "texts" AS (
+SELECT CAST("c0" AS int4) AS "Id", CAST("c1" AS text) AS "Body" FROM (VALUES (1, '50% off'), (2, '500 off'), (3, 'a_b'), (4, 'aXb'), (5, 'C:\\dir'), (6, 'C:dir')) AS v("c0", "c1")
+)
+SELECT
+          "texts"."Id" AS "id"
+        FROM "texts"
+        WHERE ("texts"."Body" LIKE ('%' || replace(replace(replace($1, '\\', '\\\\'), '%', '\\%'), '_', '\\_') || '%') ESCAPE '\\' OR "texts"."Body" LIKE ('%' || replace(replace(replace($2, '\\', '\\\\'), '%', '\\%'), '_', '\\_')) ESCAPE '\\' OR "texts"."Body" LIKE (replace(replace(replace($3, '\\', '\\\\'), '%', '\\%'), '_', '\\_') || '%') ESCAPE '\\')
+        ORDER BY "id" ASC",
 }
 `;
 

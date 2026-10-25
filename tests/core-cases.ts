@@ -207,6 +207,34 @@ const p = (...names: string[]) => names.map((name) => `param:${name}`)
 const orgOrders = (ctx: CoreContext) =>
 	ctx.from(ctx.orders).where(($) => [$.OrgId.eq(CH.param.string("orgId"))])
 
+/**
+ * Text with LIKE wildcards and a backslash in it, for the text-match cases. Its
+ * own table and CTE, so the shared fixture and every other case stay as they are.
+ */
+const textRows: ReadonlyArray<readonly [number, string]> = [
+	[1, "50% off"],
+	[2, "500 off"],
+	[3, "a_b"],
+	[4, "aXb"],
+	[5, "C:\\dir"],
+	[6, "C:dir"],
+]
+const texts = (ctx: CoreContext) => {
+	const table =
+		ctx.dialect === "clickhouse"
+			? CH.table("texts", { external: true, columns: { Id: CH.uint32, Body: CH.string } })
+			: PG.table("texts", { external: true, columns: { Id: PG.int4, Body: PG.text } })
+	// A ClickHouse string literal escapes a backslash; a Postgres one does not.
+	const literal = (text: string) =>
+		`'${(ctx.dialect === "clickhouse" ? text.replaceAll("\\", "\\\\") : text).replaceAll("'", "''")}'`
+	const tuples = textRows.map(([id, body]) => `(${id}, ${literal(body)})`).join(", ")
+	const body =
+		ctx.dialect === "clickhouse"
+			? `SELECT * FROM values('Id UInt32, Body String', ${tuples})`
+			: `SELECT CAST("c0" AS int4) AS "Id", CAST("c1" AS text) AS "Body" FROM (VALUES ${tuples}) AS v("c0", "c1")`
+	return CH.from(table as CH.Table<"texts", { readonly Id: Col<number>; readonly Body: Col<string> }>).withCTE("texts", body)
+}
+
 export const coreCases: readonly CoreCase[] = [
 	{
 		id: "select-columns",
@@ -698,6 +726,59 @@ export const coreCases: readonly CoreCase[] = [
 			return ctx.compile(base.forUpdate({ skipLocked: true }), org)
 		},
 		expected: [{ id: 1 }],
+	},
+	{
+		id: "text-match",
+		covers: e("contains", "startsWith", "endsWith"),
+		build: (ctx) =>
+			ctx.compile(
+				texts(ctx)
+					.select(($) => ({ id: $.Id }))
+					.where(($) => [
+						CH.or(
+							// Unescaped, `50%` would also match "500 off", `a_` "aXb", and `\dir` (`\d` escapes `d`) "C:dir".
+							$.Body.contains("50%"),
+							$.Body.startsWith("a_"),
+							$.Body.endsWith("\\dir"),
+						),
+					])
+					.orderBy(["id", "asc"]),
+			),
+		expected: [{ id: 1 }, { id: 3 }, { id: 5 }],
+	},
+	{
+		id: "text-match-param",
+		covers: [],
+		build: (ctx) =>
+			ctx.compile(
+				texts(ctx)
+					.select(($) => ({ id: $.Id }))
+					.where(($) => [
+						CH.or($.Body.contains(CH.param.string("percent")), $.Body.endsWith(CH.param.string("under")), $.Body.startsWith(CH.param.string("slash"))),
+					])
+					.orderBy(["id", "asc"]),
+				// Escaped in SQL: the values reach the server as they are.
+				{ percent: "0%", under: "_b", slash: "C:\\" },
+			),
+		expected: [{ id: 1 }, { id: 3 }, { id: 5 }],
+	},
+	{
+		id: "text-match-insensitive",
+		covers: [],
+		build: (ctx) =>
+			ctx.compile(
+				texts(ctx)
+					.select(($) => ({ id: $.Id }))
+					.where(($) => [
+						CH.or(
+							$.Body.contains("AXB", { insensitive: true }),
+							$.Body.startsWith("A_", { insensitive: true }),
+							$.Body.endsWith("% OFF", { insensitive: true }),
+						),
+					])
+					.orderBy(["id", "asc"]),
+			),
+		expected: [{ id: 1 }, { id: 3 }, { id: 4 }],
 	},
 ]
 

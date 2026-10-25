@@ -25,6 +25,8 @@ export {
 	type Condition,
 	type Comparable,
 	type MapValueOf,
+	type TextMatchOptions,
+	escapeLike,
 	lit,
 	rawExpr,
 	untypedExpr,
