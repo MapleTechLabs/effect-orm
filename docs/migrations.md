@@ -1,6 +1,6 @@
 # Schema and migrations
 
-Every table is declared with its DDL: `table` from `/clickhouse` or `/postgres` carries the
+Every table is declared with its DDL: `table` from `/clickhouse`, `/postgres` or `/sqlite` carries the
 engine, keys, indexes, and defaults beside the columns the query builder reads. You can ignore
 that and manage the database elsewhere, or let three opt-in entry points turn the definitions
 into migrations:
@@ -17,6 +17,7 @@ check and folder loading are shared; table definitions, the diff, the DDL, the r
 drift detection are per database, because the two differ where it matters: ClickHouse DDL is
 not transactional and cannot change most things in place, and Postgres DDL is and can. The
 sections below describe ClickHouse first; [Postgres](#postgres) covers what differs.
+[SQLite](#sqlite) has `generate` only: another tool applies its migrations for now.
 
 ## Defining tables
 
@@ -420,3 +421,74 @@ drizzle-kit recorded, so every place they disagree (a constraint name, a default
 op to accept or fix. `verify` against the baseline also finds objects the database has and
 drizzle-kit's snapshot does not, such as a table a hand-written migration created and nothing
 dropped.
+
+## SQLite
+
+Set `dialect: "sqlite"` and export `SQLite.table` values with their DDL from the schema module:
+
+```ts title="sqlite-kit-config.ts"
+import { defineConfig } from "@maple-dev/effect-orm/kit"
+
+export default defineConfig({ dialect: "sqlite", schema: "./src/db/schema.ts", out: "./migrations" })
+```
+
+`effect-orm generate` writes `<timestamp>_<name>/migration.sql` and `snapshot.json`, the
+drizzle-kit 1.0 layout. Statements are split by `--> statement-breakpoint`, each under a comment
+naming its label. A SQLite migration is always SQL; there is no `migration.json` for it. Tools
+that apply drizzle-kit folders apply it as it is, for example Alchemy's
+`Cloudflare.D1.Database({ migrations: "./migrations" })`, which runs each folder's statements as one
+D1 batch. `snapshot.json` is for `generate` and `check`; those tools ignore it.
+
+What each change becomes:
+
+| Change | SQL |
+| --- | --- |
+| New table, dropped table | `CREATE TABLE`, `DROP TABLE` (confirm the data loss) |
+| New column | `ALTER TABLE ... ADD COLUMN`, when SQLite allows it: the column is nullable or has a literal default, and is not in the primary key or a UNIQUE constraint. Otherwise a rebuild |
+| Dropped column | `ALTER TABLE ... DROP COLUMN` (confirm the data loss), unless it is in the primary key or a UNIQUE constraint. Otherwise a rebuild |
+| A column's type, nullability or default; the primary key; a UNIQUE column | A table rebuild |
+| New or changed index | `DROP INDEX`, `CREATE [UNIQUE] INDEX` |
+| Renamed table or column | `ALTER TABLE ... RENAME`, only with a `confirm_rename` hint |
+
+A rebuild follows [SQLite's procedure](https://www.sqlite.org/lang_altertable.html#otheralter)
+the way drizzle-kit writes it: `PRAGMA foreign_keys=OFF`, `CREATE TABLE "__new_<table>"` with the
+new definition, `INSERT INTO "__new_<table>" (...) SELECT ...` for every column both tables
+have, `DROP TABLE`, `ALTER TABLE "__new_<table>" RENAME TO "<table>"`, `PRAGMA foreign_keys=ON`,
+then every index of the table again. A copy fails when the rows do not fit the new table, such
+as a column made NOT NULL over existing NULLs or a new NOT NULL column with no default. A
+column a rebuild leaves out needs the same `confirm_data_loss` hint as a dropped column.
+
+A rename is never guessed. Without a hint it reads as a drop plus an add, and the drop asks for
+confirmation. Pass the rename instead:
+
+```json
+[
+	{ "type": "confirm_rename", "kind": "table", "entity": "links", "to": "urls" },
+	{ "type": "confirm_rename", "kind": "column", "entity": "urls.url", "to": "target" }
+]
+```
+
+`entity` is the old table name, or `<table>.<old column>` with the table's new name. Table
+renames run first. Indexes keep their names and follow the rename.
+
+### Adopting a drizzle-kit SQLite folder
+
+`effect-orm generate --baseline --from-drizzle` reads drizzle-kit 1.0's last `snapshot.json`
+(version 7, `dialect: "sqlite"`): tables, columns, primary keys, indexes and UNIQUE
+constraints. Foreign keys, checks, views, generated and AUTOINCREMENT columns and partial
+indexes are listed, and nothing is written. The baseline runs nothing. A later `generate`
+compares your `SQLite.table` definitions with it; when they declare the same tables, it writes
+nothing. The tests prove this with a folder drizzle-kit 1.0.0-rc.5 generated.
+
+drizzle-kit 1.0 leaves `NOT NULL` out of a primary key column (`"id" text PRIMARY KEY`), so
+SQLite then accepts a NULL key in a `text` key column. Its snapshot marks the column
+`notNull: false`, but drizzle-kit treats a key column as not null. The baseline reads it as not
+null too, so a `SQLite.table` key column (always `NOT NULL`) matches it and no rebuild is
+written. The database keeps accepting a NULL key until that table is rebuilt for another change.
+
+The drizzle-kit 0.x layout (`meta/_journal.json` and flat `.sql` files) is not read. Run
+`drizzle-kit up` to convert it first.
+
+`/migrate` does not run SQLite folders yet: `run`, `status`, `verify` and `baseline` fail with a
+`MigrateSourceError` for one. Keep applying them with the tool you use now.
+

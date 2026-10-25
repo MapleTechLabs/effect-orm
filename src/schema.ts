@@ -23,6 +23,7 @@ export {
 	SchemaEntity,
 	Snapshot,
 	SNAPSHOT_VERSION,
+	SqliteSnapshot,
 	TableEntity,
 	canonicalJson,
 	entityKey,
@@ -96,6 +97,16 @@ export {
 	SqliteUniqueEntity,
 	canonicalSqliteType,
 } from "./schema/sqlite-entities"
+export { diffSqliteSchemas } from "./schema/sqlite-diff"
+export { fromDrizzleSqliteSnapshot, type DrizzleSqliteImport } from "./schema/sqlite-drizzle"
+export {
+	SqliteMigrationOp,
+	labelOfSqlite,
+	rebuildName,
+	renderSqliteMigrationSql,
+	renderSqliteOp,
+	type SqliteOpLabel,
+} from "./schema/sqlite-ops"
 export {
 	renderSqliteColumnDefinition,
 	renderSqliteCreateIndex,
