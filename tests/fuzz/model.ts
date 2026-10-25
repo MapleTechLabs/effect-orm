@@ -5,11 +5,12 @@
 // query that runs cleanly but answers wrong (a lost parenthesis, a negation
 // applied to the wrong side, NULL handled like a value) shows up as a row diff.
 //
-// Where the databases genuinely differ, the model says so per target rather
-// than papering over it; each such rule names the difference it encodes.
+// Where the databases genuinely differ, the model reads the target's
+// `Semantics` (dialects/types.ts) rather than its name, so a new dialect states
+// its rules instead of patching this file.
 // Inputs the model cannot judge raise `skip` with a reason.
 import { fixtureRows } from "../core-cases"
-import type { Target } from "./db"
+import type { Semantics } from "./dialects/types"
 import { skip } from "./harness"
 import type { Agg, AggShape, ArithOp, Cond, Expr, Operand, Plan, RowsShape } from "./plan"
 
@@ -54,7 +55,7 @@ interface Row {
 }
 
 interface Env {
-	readonly target: Target
+	readonly sem: Semantics
 	readonly plan: Plan
 	readonly joined: boolean
 }
@@ -130,8 +131,8 @@ const evalExpr = (env: Env, row: Row, e: Expr): V => {
 			return row.o[e.col]
 		case "jcol":
 			if (row.c !== undefined) return row.c[e.col]
-			// ClickHouse with join_use_nulls=0 fills a missing row with column defaults.
-			return env.target === "clickhouse" ? "" : null
+			// e.g. ClickHouse with join_use_nulls=0 fills a missing row with column defaults.
+			return env.sem.missingJoinColumn === "default" ? "" : null
 		case "num":
 		case "str":
 			return e.v
@@ -152,10 +153,11 @@ const evalExpr = (env: Env, row: Row, e: Expr): V => {
 				case "div":
 					if (r === 0) skip("division by zero")
 					// `/` is float division on ClickHouse, integer division of two Postgres integers.
-					return env.target === "postgres" ? Math.trunc(l / r) : l / r
+					return env.sem.integerDivision === "truncate" ? Math.trunc(l / r) : l / r
 				case "mod":
 					if (r === 0) skip("division by zero")
-					if (env.target !== "postgres") {
+					if (env.sem.modulo === "integer" && [chKind(e.l), chKind(e.r)].includes("float")) skip("% casting a float operand to an integer")
+					if (env.sem.modulo === "clickhouse") {
 						const kinds = new Set([chKind(e.l), chKind(e.r)])
 						if (kinds.has("unsigned") && kinds.has("signed")) skip("ClickHouse % across signed and unsigned")
 						// Not IEEE fmod: `3 % (27 / 99)` is 0 on ClickHouse, 2.2e-16 by fmod.
@@ -168,7 +170,7 @@ const evalExpr = (env: Env, row: Row, e: Expr): V => {
 	}
 }
 
-/** Strings compare by UTF-8 bytes on both targets (ClickHouse always, Postgres under the C collation). */
+/** Strings compare by UTF-8 bytes on every target (ClickHouse always, Postgres under the C collation). */
 const encoder = new TextEncoder()
 const compareStrings = (a: string, b: string): number => {
 	const x = encoder.encode(a)
@@ -219,7 +221,7 @@ const evalCond = (env: Env, row: Row, c: Cond): Bool => {
 		case "const":
 			return c.v
 		case "tenant": {
-			const org = c.side === "orders" ? row.o.OrgId : row.c?.OrgId ?? (env.target === "clickhouse" ? "" : null)
+			const org = c.side === "orders" ? row.o.OrgId : row.c?.OrgId ?? (env.sem.missingJoinColumn === "default" ? "" : null)
 			return org === null ? null : org === env.plan.orgId
 		}
 		case "not":
@@ -257,7 +259,7 @@ const evalCond = (env: Env, row: Row, c: Cond): Bool => {
 			if (l === null) return null
 			// Case folding beyond ASCII and `_` over multi-byte text differ between the two; not modelled.
 			if (/[^\x00-\x7f]/.test(l)) skip("LIKE over non-ASCII text")
-			const matched = likeRegex(c.pattern, c.op === "ilike").test(l)
+			const matched = likeRegex(c.pattern, c.op === "ilike" || env.sem.likeIgnoresCase).test(l)
 			return c.op === "notLike" ? !matched : matched
 		}
 		case "between": {
@@ -290,9 +292,7 @@ const sourceRows = (env: Env): ReadonlyArray<Row> =>
 
 type OutRow = Record<string, V>
 
-const nullsFirst = (target: Target, dir: "asc" | "desc") =>
-	// Postgres: NULLS LAST ascending, NULLS FIRST descending. ClickHouse: NULLS LAST either way.
-	target === "postgres" && dir === "desc"
+const nullsFirst = (sem: Semantics, dir: "asc" | "desc") => sem.nulls[dir] === "first"
 
 const sortRows = (env: Env, rows: Array<OutRow>, orderBy: ReadonlyArray<readonly [string, "asc" | "desc"]>) =>
 	rows.sort((a, b) => {
@@ -301,7 +301,7 @@ const sortRows = (env: Env, rows: Array<OutRow>, orderBy: ReadonlyArray<readonly
 			const y = b[alias] ?? null
 			if (x === null && y === null) continue
 			if (x === null || y === null) {
-				const first = nullsFirst(env.target, dir)
+				const first = nullsFirst(env.sem, dir)
 				return (x === null) === first ? -1 : 1
 			}
 			const d = compare(x, y)
@@ -325,9 +325,7 @@ const evalAgg = (env: Env, rows: ReadonlyArray<Row>, agg: Agg, global: boolean):
 			return rows.filter((row) => evalCond(env, row, agg.c) === true).length
 		default: {
 			const values = rows.map((row) => evalExpr(env, row, agg.e)).filter((v): v is number => v !== null)
-			// Postgres answers an aggregate over no rows with NULL. ClickHouse answers with a default that its
-			// optimizer moves around (`min(-1 + x)` is rewritten `-1 + min(x)`, so it is -1, not 0): not modelled.
-			if (values.length === 0) return global && env.target !== "postgres" ? skip("ClickHouse aggregate over no rows") : null
+			if (values.length === 0) return global && env.sem.emptyAggregate === "unmodelled" ? skip("aggregate over no rows") : null
 			if (agg.k === "sum") return values.reduce((a, b) => a + b, 0)
 			return agg.k === "min" ? Math.min(...values) : Math.max(...values)
 		}
@@ -350,8 +348,8 @@ const ariths = (value: unknown): Array<Expr> => {
 	return [...own, ...Object.values(value).flatMap(ariths)]
 }
 
-export const evaluate = (plan: Plan, target: Target): ModelResult => {
-	const env: Env = { target, plan, joined: plan.join !== undefined }
+export const evaluate = (plan: Plan, sem: Semantics): ModelResult => {
+	const env: Env = { sem, plan, joined: plan.join !== undefined }
 	// A database may evaluate any expression on any row — or fold a constant one at plan time — before
 	// filtering decides it was not needed. So a division by zero anywhere is a division by zero.
 	const all = ariths(plan)
