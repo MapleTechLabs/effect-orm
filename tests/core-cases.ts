@@ -422,6 +422,29 @@ export const coreCases: readonly CoreCase[] = [
 		},
 	},
 	{
+		// A where before the select narrows the joined column, so the row
+		// schema refuses NULL for it. Without join_use_nulls the missing row
+		// has the column default, which is not NULL and passes the filter.
+		id: "left-join-not-null",
+		covers: q("leftJoin", "where"),
+		build: (ctx) =>
+			ctx.compile(
+				orgOrders(ctx)
+					.leftJoin(ctx.customers, "c", (o, c) => o.Customer.eq(c.Name).and(o.OrgId.eq(c.OrgId)))
+					.where(($) => [$.Id.gte(3), $.c.Tier.isNotNull()])
+					.select(($) => ({ id: $.Id, tier: $.c.Tier }))
+					.orderBy(["id", "asc"]),
+				org,
+			),
+		expected: [{ id: 3, tier: "silver" }],
+		expectedBy: {
+			clickhouse: [
+				{ id: 3, tier: "silver" },
+				{ id: 4, tier: "" },
+			],
+		},
+	},
+	{
 		id: "cross-join",
 		covers: q("crossJoin"),
 		build: (ctx) =>
