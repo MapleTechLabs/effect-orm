@@ -91,3 +91,14 @@ assert.equal(typeof runCli, "function")
 
 assert.equal(typeof Db.fromSqlClient, "function")
 assert.equal(Db.isContention(new Db.DatabaseError({ message: "x", sql: "", reason: "SerializationError", cause: undefined })), true)
+
+// SQLite works from the tarball without installing any SQLite driver.
+const SQLite = await import("@maple-dev/effect-orm/sqlite")
+const sqliteRows = SQLite.table("consumer_rows", { id: SQLite.integer, note: SQLite.text })
+const sqliteQuery = SQLite.from(sqliteRows).select().where(($) => [$.id.eq(SQLite.param.int("id"))])
+const sqliteCompiled = await Effect.runPromise(SQLite.compile(sqliteQuery, { id: 1 }))
+assert.deepEqual(sqliteCompiled.parameters, [1])
+assert.equal(sqliteCompiled.dialect, "sqlite")
+const sqliteDecoded: ReadonlyArray<{ readonly id: number; readonly note: string }> = await Effect.runPromise(sqliteCompiled.decodeRows([{ id: 1, note: "sqlite" }]))
+assert.deepEqual(sqliteDecoded, [{ id: 1, note: "sqlite" }])
+assert.equal(SQLite.compileUnsafe(sqliteQuery, { id: 1 }, { dialect: SQLite.d1Dialect }).dialect, "d1")

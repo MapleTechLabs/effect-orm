@@ -51,12 +51,21 @@ export const pinned: Record<string, ReadonlyArray<unknown>> = {
 				{ k: "or", style: "method", cs: [{ k: "and", style: "method", cs: [{ k: "const", v: true }, { k: "tenant", side: "orders" }] }, { k: "tenant", side: "orders" }] },
 			],
 		},
+		// sqlite-like-no-default-escape: `\_` was a literal backslash on SQLite.
+		{
+			orgId: "org_2",
+			join: "left",
+			where: [{ k: "tenant", side: "orders" }],
+			shape: { k: "agg", keys: [], aggs: [["a0", { k: "countIf", c: { k: "like", op: "like", l: { k: "jcol", col: "OrgId" }, pattern: "org\\__" } }]], having: [], orderBy: [] },
+			wrap: false,
+			crossTenant: false,
+		},
 		// `OrgId IN ('org_2')` pins the query to org_2, not to the orgId param: single-tenant, and right to read org_2.
 		{
 			...rows({ k: "rows", select: [["id", { k: "col", col: "Id" }]], distinct: false, orderBy: [] }),
 			where: [{ k: "in", neg: false, e: { k: "col", col: "OrgId" }, values: ["org_2"] }],
 		},
-		// pg-fraction-bound-to-integer.
+		// pg-fraction-bound-to-integer, and sqlite-integer-refuses-fraction.
 		{
 			...rows({ k: "rows", select: [["id", { k: "col", col: "Id" }]], distinct: false, orderBy: [] }),
 			where: [{ k: "cmp", op: "gt", l: { k: "col", col: "Amount" }, r: { k: "value", v: 9.75 } }],
@@ -68,6 +77,8 @@ export const pinned: Record<string, ReadonlyArray<unknown>> = {
 	"clickhouse:Array(Nullable(Int64)) compare": [[0, 4294967296]],
 	"clickhouse:String": ["__PARAM_string_x__", "\\'", "\0"],
 	"postgres:boolean select": [false],
+	// SQLite reads these decimals as a neighbouring double, as a literal or through json_extract.
+	":real ": [1.23456789e-95, 5.464465248610941e-277, -1.415281131826549e-267, 0, 5e-324],
 	"postgres:text[] select": [[]],
 	"postgres:timestamptz": [DateTime.makeUnsafe(Date.UTC(100, 0, 1))],
 
@@ -94,6 +105,8 @@ export const pinned: Record<string, ReadonlyArray<unknown>> = {
 		{ dialect: "clickhouse", column: "OrgId", site: "add", value: undefined },
 		{ dialect: "clickhouse", column: "OrgId", site: "add", value: new Date(Number.NaN) },
 	],
+	// A Date before year 0 reached a timestamp encoder that threw instead of failing.
+	"hostile values are refused, never thrown (sqlite)": [{ dialect: "sqlite", column: "Created", site: "gt", value: new Date("-000001-12-31T23:59:59.999Z") }],
 	"hostile values are refused, never thrown (postgres)": [
 		{ dialect: "postgres", column: "OrgId", site: "param.dateTime", value: "" },
 		{ dialect: "postgres", column: "Created", site: "param.of", value: "2026-13-45 99:99:99" },

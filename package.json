@@ -1,7 +1,7 @@
 {
 	"name": "@maple-dev/effect-orm",
 	"version": "0.7.2",
-	"description": "Type-safe ClickHouse and Postgres queries, result decoding, and reproducible benchmarks for Effect and TypeScript",
+	"description": "Type-safe ClickHouse, Postgres and SQLite queries, result decoding, and reproducible benchmarks for Effect and TypeScript",
 	"keywords": [
 		"clickhouse",
 		"effect",
@@ -9,7 +9,9 @@
 		"postgres",
 		"query-builder",
 		"sql",
-		"typescript"
+		"typescript",
+		"sqlite",
+		"cloudflare-d1"
 	],
 	"homepage": "https://effect-clickhouse.maple.dev",
 	"bugs": {
@@ -97,6 +99,11 @@
 			"types": "./dist/benchmark/cli.d.mts",
 			"import": "./dist/benchmark/cli.mjs",
 			"default": "./dist/benchmark/cli.mjs"
+		},
+		"./sqlite": {
+			"types": "./dist/sqlite.d.mts",
+			"import": "./dist/sqlite.mjs",
+			"default": "./dist/sqlite.mjs"
 		}
 	},
 	"publishConfig": {
@@ -121,13 +128,16 @@
 		"@effect/language-service": "^0.87.3",
 		"@effect/platform-bun": "4.0.0",
 		"@effect/sql-clickhouse": "4.0.0",
+		"@effect/sql-d1": "4.0.0",
 		"@effect/sql-pglite": "4.0.0",
+		"@effect/sql-sqlite-node": "4.0.0",
 		"@effect/vitest": "4.0.0",
 		"@electric-sql/pglite": "0.5.8",
 		"@types/node": "^22.10.2",
 		"effect": "4.0.0",
 		"expect-type": "^1.3.0",
 		"fast-check": "^4.9.0",
+		"miniflare": "4.20260730.0",
 		"tsdown": "^0.22.14",
 		"typescript": "^7.0.2",
 		"vitest": "^4.1.9"

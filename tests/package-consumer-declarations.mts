@@ -47,3 +47,8 @@ export const Recent = CH.table("recent", { external: true, columns: { name: CH.s
 export const withRecent = CH.from(Recent).withCTE("recent", eventsByApp).select(($) => ({ name: $.name }))
 export const fromSub = CH.fromQuery(eventsByApp, "sub").select(($) => ({ name: $.name }))
 export const both = CH.unionAll(eventsByApp, CH.from(Events).select(($) => ({ name: $.name })))
+
+import * as SQLite from "@maple-dev/effect-orm/sqlite"
+export const SqliteItems = SQLite.table("sqlite_items", { id: SQLite.integer, label: SQLite.text })
+export const sqliteById = SQLite.from(SqliteItems).select().where(($) => [$.id.eq(SQLite.param.int("id"))])
+export const sqliteCompile = () => SQLite.compile(sqliteById, { id: 1 })

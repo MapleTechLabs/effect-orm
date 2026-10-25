@@ -21,10 +21,11 @@ import { QueryBuilderDefect } from "../errors"
 import { type Condition, type Expr, makeCond, makeExpr, makeUntypedExpr, type ParamsIn, toFragment } from "../expr"
 import type { FnResult } from "../define-fn"
 
-export type FunctionSet = "clickhouse" | "postgres"
+export type FunctionSet = "clickhouse" | "postgres" | "sqlite"
 export type BuiltinKind = "scalar" | "aggregate" | "window"
 
 const setLabel: Record<FunctionSet, string> = {
+	sqlite: "a SQLite function (from @maple-dev/effect-orm/sqlite)",
 	clickhouse: "a ClickHouse function (from @maple-dev/effect-orm/clickhouse)",
 	postgres: "a Postgres function (from @maple-dev/effect-orm/postgres)",
 }

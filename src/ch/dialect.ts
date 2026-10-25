@@ -45,6 +45,12 @@ export type ParamStyle =
 			 * at the server or by being split into several statements.
 			 */
 			readonly maxParameters?: number
+			/**
+			 * False where the driver ends text at U+0000 (SQLite's), so a bound
+			 * string containing one would arrive cut short. Such a value fails to
+			 * compile instead.
+			 */
+			readonly nulInText?: boolean
 	  }
 
 /** Clauses that exist in some dialects and not others. */
@@ -60,12 +66,24 @@ export interface DialectClauses {
 	/** Whether each `UNION ALL` branch is wrapped in parentheses. Postgres needs
 	 *  it for a branch with its own WITH, ORDER BY or LIMIT. */
 	readonly parenthesizeUnionBranches: boolean
+	/** SQLite preserves branch-local ORDER BY/LIMIT by selecting from each branch. */
+	readonly wrapUnionBranches?: boolean
+	/** SQLite requires LIMIT -1 before OFFSET when the caller omitted a limit. */
+	readonly offsetRequiresLimit?: boolean
 	/** `RETURNING` after an INSERT. Absent means no: an insert with
 	 *  `.returning()` fails to compile for the dialect. */
 	readonly returning?: boolean
 	/** `ON CONFLICT ... DO NOTHING / DO UPDATE` after an INSERT. Absent means
 	 *  no: an insert with `onConflict*` fails to compile for the dialect. */
 	readonly onConflict?: boolean
+	/** Whether ON CONFLICT can name a constraint rather than columns. */
+	readonly onConflictConstraint?: boolean
+	/** SQLite disambiguates INSERT SELECT ... ON CONFLICT with a WHERE. */
+	readonly insertSelectNeedsWhere?: boolean
+	/** Whether a VALUES tuple can contain DEFAULT for a missing cell. */
+	readonly defaultInValues?: boolean
+	/** Whether SELECT DISTINCT ON is supported. Undefined preserves existing dialects. */
+	readonly distinctOn?: boolean
 	/** `SETTINGS` on an INSERT, UPDATE or DELETE (ClickHouse). Absent means
 	 *  no: a write with `.settings()` fails to compile for the dialect. */
 	readonly writeSettings?: boolean
@@ -217,6 +235,10 @@ export const checkedLiteral = (dialect: Dialect, value: unknown, context: string
 
 const checkedSyntax = (dialect: Dialect): SqlSyntax => ({
 	dialect: dialect.name,
+	ilike: dialect.ilike,
+	likeEscape: dialect.likeEscape,
+	inexactNumberText: dialect.inexactNumberText,
+	integerComparesFraction: dialect.integerComparesFraction,
 	quoteIdent: dialect.quoteIdent,
 	quoteString: (value) => checked(dialect, dialect.quoteString(value), "a string literal"),
 	literal: (value, context) => checkedLiteral(dialect, value, context),

@@ -1,9 +1,10 @@
 // The dialect registry. Every fuzz suite iterates it; add a dialect here.
 import { clickhouse } from "./clickhouse"
 import { postgres } from "./postgres"
+import { d1, sqlite } from "./sqlite"
 import type { FuzzDialect, FuzzTarget } from "./types"
 
-export const dialects: ReadonlyArray<FuzzDialect> = [clickhouse, postgres]
+export const dialects: ReadonlyArray<FuzzDialect> = [clickhouse, postgres, sqlite, d1]
 
 /** Every target, with the dialect whose SQL it runs. */
 export const targets: ReadonlyArray<{ readonly dialect: FuzzDialect; readonly target: FuzzTarget }> = dialects.flatMap((dialect) =>

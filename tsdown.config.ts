@@ -7,6 +7,7 @@ export default defineConfig({
 		expr: "./src/expr.ts",
 		sql: "./src/sql/index.ts",
 		postgres: "./src/postgres.ts",
+		sqlite: "./src/sqlite.ts",
 		schema: "./src/schema.ts",
 		tinybird: "./src/tinybird.ts",
 		migrate: "./src/migrate.ts",

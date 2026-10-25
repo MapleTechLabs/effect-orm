@@ -936,7 +936,9 @@ function compileInner<
 			const sqlQuery: SqlQuery = {
 				distinct: state.distinct !== undefined,
 				distinctOn: Array.isArray(state.distinct)
-					? (state.distinct.length === 0
+					? (currentDialect().clauses.distinctOn === false
+						? fail<ReadonlyArray<string>>(new QueryBuilderDefect({ message: `${currentDialect().name} has no DISTINCT ON clause` }), [])
+						: state.distinct.length === 0
 							? fail<ReadonlyArray<string>>(new QueryBuilderDefect({ message: "CHQuery: distinctOn() needs at least one key" }), [])
 							: state.distinct
 						).map((key: string) => {
@@ -967,7 +969,9 @@ function compileInner<
 				orderBy: state.orderByFn === undefined
 					? orderByClause(state.orderBySpecs).map(raw)
 					: orderByExprs(state.orderByFn($)).map(raw),
-				limit: rowCount("limit", state.limitValue),
+				limit: state.limitValue == null && state.offsetValue != null && currentDialect().clauses.offsetRequiresLimit === true
+					? raw("-1")
+					: rowCount("limit", state.limitValue),
 				offset: rowCount("offset", state.offsetValue),
 				format: options?.skipFormat ? undefined : formatClause(state.formatValue),
 			}
@@ -1476,7 +1480,9 @@ function compileUnionInner<Output extends Record<string, any>, Params extends Re
 				: "cross-tenant"
 
 	const parenthesize = currentDialect().clauses.parenthesizeUnionBranches
-	let sql = subQueries.map((q) => (parenthesize ? `(\n${q.sql}\n)` : q.sql)).join("\nUNION ALL\n")
+	let sql = subQueries.map((q) => currentDialect().clauses.wrapUnionBranches === true
+		? `SELECT * FROM (\n${q.sql}\n) AS ${quoteIdent("__union_branch")}`
+		: parenthesize ? `(\n${q.sql}\n)` : q.sql).join("\nUNION ALL\n")
 
 	// Wrap in outer SELECT if ordering/pagination is needed
 	const hasOuter =
@@ -1496,6 +1502,8 @@ function compileUnionInner<Output extends Record<string, any>, Params extends Re
 		}
 		if (state.outerLimitValue != null) {
 			sql += `\nLIMIT ${compileSqlFragment(rowCount("limit", state.outerLimitValue)!)}`
+		} else if (state.outerOffsetValue != null && currentDialect().clauses.offsetRequiresLimit === true) {
+			sql += "\nLIMIT -1"
 		}
 		if (state.outerOffsetValue != null) {
 			sql += `\nOFFSET ${compileSqlFragment(rowCount("offset", state.outerOffsetValue)!)}`
@@ -1582,6 +1590,12 @@ function renderParams(
 		const value = literal !== undefined ? literal.wire : encodeParam(dialect, kind as ParamKind, name, params[name])
 		if (style._tag === "inline") return checkedLiteral(dialect, value, paramContext(kind, name))
 
+		if (style.nulInText === false && typeof value === "string" && value.includes("\0")) {
+			return fail(new QueryBuilderError({
+				code: "InvalidLiteral",
+				message: `compile: ${paramContext(kind, name)} contains U+0000, which ${dialect.name} drivers end text at; the value would arrive cut short`,
+			}), "NULL")
+		}
 		const key = `${kind}\0${name}`
 		const existing = style.reuse ? bound.get(key) : undefined
 		if (existing !== undefined) return existing
@@ -1725,6 +1739,9 @@ const onConflictClause = (
 	let target = ""
 	if (conflict.target !== undefined) {
 		if ("constraint" in conflict.target) {
+			if (dialect.clauses.onConflictConstraint === false) {
+				return fail(new QueryBuilderDefect({ message: `${where}: ${dialect.name} has no ON CONSTRAINT conflict target; name its columns instead` }), "")
+			}
 			if (conflict.targetWhere !== undefined) {
 				return fail(new QueryBuilderDefect({ message: `${where}: targetWhere needs a column target, not a constraint` }), "")
 			}
@@ -1819,7 +1836,9 @@ const valueCells = (table: Table<string, ColumnDefs>, params: Record<string, unk
 	const values: Record<string, unknown> = { ...params }
 	let next = 0
 	const cell = (column: string, value: unknown, context: string): string => {
-		if (value === undefined) return "DEFAULT"
+		if (value === undefined) return currentDialect().clauses.defaultInValues === false
+			? fail(new QueryBuilderDefect({ message: `${where}: ${currentDialect().name} has no per-cell DEFAULT in VALUES; group rows by their present columns` }), "NULL")
+			: "DEFAULT"
 		if (isExprLike(value)) return compileSqlFragment(value.toFragment())
 		const wire = encodeValue(table.columns[column]!.literalSchema, value, `${where}: ${context}, column ${column}`)
 		let name = `${VALUE_PARAM}${next++}`
@@ -1995,7 +2014,9 @@ function compileInsert(insert: CHInsert<any, any, any, any>, params: Record<stri
 			} else {
 				const selected = insertSelectSource(insert, selectQuery!, values)
 				columns = selected.columns
-				source = selected.sql
+				source = insert._state.conflict !== undefined && dialect.clauses.insertSelectNeedsWhere === true
+					? `SELECT * FROM (\n${selected.sql}\n) AS ${quoteIdent("__insert_source")} WHERE 1`
+					: selected.sql
 				readScope = selected.inner.tenantScope
 				const bound = tenantBoundOf(selected.inner)
 				readBound = bound
