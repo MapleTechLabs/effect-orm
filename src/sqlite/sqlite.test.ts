@@ -85,9 +85,9 @@ it("round-trips JSON, blobs and zoned timestamps, and runs SQLite scalar functio
 	expect(seen.scalar).toEqual([{ lower: "hello", upper: "HELLO", length: 5, fallback: 9 }])
 })
 
-it("binds repeated positional params independently and quotes reserved-marker/NUL literals safely", async () => {
+it("binds repeated positional params independently and quotes reserved-marker literals safely", async () => {
 	const result = await withDatabase((db) => Effect.gen(function* () {
-		const note = "' OR 1=1 -- __PARAM_note__\0😀"
+		const note = "' OR 1=1 -- __PARAM_note__😀"
 		yield* db.run(SQLite.insertInto(Items).values({ id: 1, note, enabled: false, score: null }))
 		const query = SQLite.from(Items).select("id").where(($) => [$.note.eq(SQLite.param.string("note")), $.note.eq(SQLite.param.string("note"))])
 		const compiled = yield* SQLite.compile(query, { note })
@@ -95,9 +95,27 @@ it("binds repeated positional params independently and quotes reserved-marker/NU
 		const literal = yield* db.query({ sql: `SELECT ${SQLite.sqliteDialect.quoteString(note)} AS note` })
 		return { parameters: compiled.parameters, rows, literal }
 	}))
-	expect(result.parameters).toEqual(["' OR 1=1 -- __PARAM_note__\0😀", "' OR 1=1 -- __PARAM_note__\0😀"])
+	expect(result.parameters).toEqual(["' OR 1=1 -- __PARAM_note__😀", "' OR 1=1 -- __PARAM_note__😀"])
 	expect(result.rows).toEqual([{ id: 1 }])
-	expect(result.literal).toEqual([{ note: "' OR 1=1 -- __PARAM_note__\0😀" }])
+	expect(result.literal).toEqual([{ note: "' OR 1=1 -- __PARAM_note__😀" }])
+})
+
+it("refuses U+0000 in text, which SQLite drivers would cut short", () => {
+	// node:sqlite returns `SELECT 'a' || char(0) || 'b'` as "a": the value would be silently truncated.
+	const refused = (exit: Exit.Exit<unknown, unknown>) => Exit.isFailure(exit) && /U\+0000/.test(String(Cause.squash(exit.cause)))
+	const where = SQLite.from(Items).select("id").where(($) => [$.note.eq(SQLite.param.string("note"))])
+	expect(refused(Effect.runSyncExit(SQLite.compile(where, { note: "a\0b" })))).toBe(true)
+	expect(refused(Effect.runSyncExit(SQLite.compile(SQLite.insertInto(Items).values({ id: 1, note: "a\0b", enabled: true, score: null }))))).toBe(true)
+	expect(refused(Effect.runSyncExit(SQLite.compile(SQLite.from(Items).select(() => ({ v: SQLite.lit("a\0b") })))))).toBe(true)
+})
+
+it("binds a fraction instead of writing decimal text SQLite would read as another double", async () => {
+	const value = 1.23456789e-95
+	const rows = await withDatabase((db) => db.run(SQLite.from(Items).select(() => ({ v: SQLite.lit(value) })).limit(1).crossTenant()))
+	const compiled = SQLite.compileUnsafe(SQLite.from(Items).select(() => ({ v: SQLite.lit(value) })))
+	expect(compiled.sql).not.toContain("e-95")
+	expect(compiled.parameters).toEqual([value])
+	expect(rows).toEqual([])
 })
 
 it("rejects a stored value that does not match the derived row schema", async () => {

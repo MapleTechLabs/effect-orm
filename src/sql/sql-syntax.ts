@@ -13,6 +13,17 @@ export interface SqlSyntax {
 	readonly dialect: string
 	/** False when the dialect has no ILIKE operator. */
 	readonly ilike?: boolean
+	/**
+	 * True when LIKE has no default escape character, so `\` in a pattern is
+	 * literal unless the statement says `ESCAPE '\'` (SQLite). Patterns use `\`
+	 * to escape `%`, `_` and `\` on every dialect.
+	 */
+	readonly likeEscape?: boolean
+	/**
+	 * True when the database parses some decimal literals to a neighbouring
+	 * double (SQLite), so a fraction must be bound rather than written as text.
+	 */
+	readonly inexactNumberText?: boolean
 	/** One identifier (a column, alias, table or schema name), quoted as needed. */
 	readonly quoteIdent: (name: string) => string
 	/** A string as a quoted literal. */

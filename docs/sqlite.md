@@ -103,13 +103,20 @@ an administrative read/write. Raw SQL passed to `query` or `execute` has no tena
 bypasses this guard. It is not a replacement for an application's authorization checks.
 
 The dialect handles OFFSET without LIMIT, branch-local ordering/limits in UNION ALL, and
-INSERT SELECT with ON CONFLICT. It refuses these unsupported forms at compile time:
+INSERT SELECT with ON CONFLICT. `LIKE` patterns escape `%`, `_` and `\` with `\` as on every
+dialect: the builder writes `ESCAPE '\'`, which SQLite needs. A fraction is bound rather than
+written as decimal text, because SQLite reads some decimals as a neighbouring double, and a
+fraction compared with an `integer` column (`Amount > 9.75`) compiles as on Postgres. It refuses these unsupported forms at compile time:
 
-- `DISTINCT ON`, row locks and `ILIKE`. Use `LIKE` with SQLite's own case rules.
+- `DISTINCT ON`, row locks and `ILIKE`. Use `LIKE`, which on SQLite ignores ASCII case
+  (`'acme' LIKE 'ACME'` is true, unlike Postgres and ClickHouse).
+- Text containing U+0000. SQLite stores it, but its drivers end text there, so the value would
+  read back cut short; the builder refuses it in literals and bound params.
 - `ON CONSTRAINT` conflict targets. Name the indexed columns instead.
 - Per-cell `DEFAULT` in a VALUES tuple. Omit a defaulted column from every row in the statement,
   or group rows by their present columns. All-default rows are not supported by the builder.
 - ClickHouse FORMAT/SETTINGS and built-in functions from another dialect.
 
 The tests run real SQLite through `@effect/sql-sqlite-node` and local workerd/D1 through
-Miniflare. They require no deployed database or Cloudflare credentials.
+Miniflare. They require no deployed database or Cloudflare credentials. Both run the shared core
+builder suite (`tests/core.sqlite.test.ts`) and every fuzz property (`tests/fuzz`).

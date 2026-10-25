@@ -8,11 +8,17 @@ import { PgTimestampLiteral, timestampLiteral } from "../pg/types"
 const hex = (value: Uint8Array): string =>
 	Array.from(value, (byte) => byte.toString(16).padStart(2, "0")).join("")
 
-/** Hex text keeps NUL and the compiler's reserved param marker out of SQL text. */
+/**
+ * Hex text keeps the compiler's reserved param marker out of SQL text. U+0000
+ * is refused: SQLite stores it, but its drivers end text there, so the value
+ * would read back cut short.
+ */
 const quoteString = (value: string): string =>
-	value.includes(PARAM_MARKER_PREFIX) || value.includes("\0")
-		? `CAST(X'${hex(new TextEncoder().encode(value))}' AS TEXT)`
-		: `'${value.replace(/'/g, "''")}'`
+	value.includes("\0")
+		? fail(new QueryBuilderError({ code: "InvalidLiteral", message: "a string literal contains U+0000, which SQLite drivers end text at; the value would read back cut short" }), "''")
+		: value.includes(PARAM_MARKER_PREFIX)
+			? `CAST(X'${hex(new TextEncoder().encode(value))}' AS TEXT)`
+			: `'${value.replace(/'/g, "''")}'`
 
 const literal = (value: unknown, context: string): string => {
 	if (value === null) return "NULL"
@@ -28,11 +34,13 @@ export const sqliteDialect: Dialect = {
 	name: "sqlite",
 	functions: "sqlite",
 	ilike: false,
+	likeEscape: true,
+	inexactNumberText: true,
 	quoteIdent: (name) => `"${name.replace(/"/g, '""')}"`,
 	quoteString,
 	literal,
 	dateTimeLiteral: (value) => quoteString(DateTime.formatIso(value)),
-	params: { _tag: "bind", placeholder: () => "?", reuse: false, maxParameters: 32766 },
+	params: { _tag: "bind", placeholder: () => "?", reuse: false, maxParameters: 32766, nulInText: false },
 	clauses: {
 		format: false,
 		derivedTableAlias: true,

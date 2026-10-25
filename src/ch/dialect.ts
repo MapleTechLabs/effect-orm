@@ -45,6 +45,12 @@ export type ParamStyle =
 			 * at the server or by being split into several statements.
 			 */
 			readonly maxParameters?: number
+			/**
+			 * False where the driver ends text at U+0000 (SQLite's), so a bound
+			 * string containing one would arrive cut short. Such a value fails to
+			 * compile instead.
+			 */
+			readonly nulInText?: boolean
 	  }
 
 /** Clauses that exist in some dialects and not others. */
@@ -219,6 +225,8 @@ export const checkedLiteral = (dialect: Dialect, value: unknown, context: string
 const checkedSyntax = (dialect: Dialect): SqlSyntax => ({
 	dialect: dialect.name,
 	ilike: dialect.ilike,
+	likeEscape: dialect.likeEscape,
+	inexactNumberText: dialect.inexactNumberText,
 	quoteIdent: dialect.quoteIdent,
 	quoteString: (value) => checked(dialect, dialect.quoteString(value), "a string literal"),
 	literal: (value, context) => checkedLiteral(dialect, value, context),

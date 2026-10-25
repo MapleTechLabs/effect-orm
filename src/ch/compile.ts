@@ -1549,6 +1549,12 @@ function renderParams(
 		const value = literal !== undefined ? literal.wire : encodeParam(dialect, kind as ParamKind, name, params[name])
 		if (style._tag === "inline") return checkedLiteral(dialect, value, paramContext(kind, name))
 
+		if (style.nulInText === false && typeof value === "string" && value.includes("\0")) {
+			return fail(new QueryBuilderError({
+				code: "InvalidLiteral",
+				message: `compile: ${paramContext(kind, name)} contains U+0000, which ${dialect.name} drivers end text at; the value would arrive cut short`,
+			}), "NULL")
+		}
 		const key = `${kind}\0${name}`
 		const existing = style.reuse ? bound.get(key) : undefined
 		if (existing !== undefined) return existing

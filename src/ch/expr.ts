@@ -12,7 +12,7 @@ import { raw, str, ident, compile, as_ as sqlAs, known } from "../sql/sql-fragme
 import { activeSqlSyntax } from "../sql/sql-syntax"
 import { activeLiteralBinder } from "../sql/literal-binder"
 import { chDateTimeLiteral, CHFloatResult, CHNumber, string as chString, type CHType, type InferEncoded, type InferTS } from "./types"
-import { encodeColumnLiteral, isSubnormal, numberText, sqlLiteral } from "./literal"
+import { encodeColumnLiteral, encodeLiteral, isSubnormal, numberText, sqlLiteral } from "./literal"
 import { QueryBuilderDefect, QueryBuilderError } from "./errors"
 import { fail } from "./failure"
 import { markTenantColumn, markTenantPredicate, tenantColumnOf, tenantPredicatesOf } from "./tenant"
@@ -341,7 +341,9 @@ const describeUntyped = (value: unknown): string =>
  * column at all.
  */
 const comparisonLiteral = (columnType: CHType<string, any, any>, value: unknown, column: string): string => {
-	const literal = encodeColumnLiteral(columnType, value, column)
+	const literal = sqliteFraction(columnType, value)
+		? encodeLiteral(Schema.Finite, value, `column ${column}`)
+		: encodeColumnLiteral(columnType, value, column)
 	// Outside a compile, ClickHouse is the default dialect.
 	const dialect = activeSqlSyntax()?.dialect ?? "clickhouse"
 	const bound = activeLiteralBinder() !== undefined
@@ -357,11 +359,32 @@ const comparisonLiteral = (columnType: CHType<string, any, any>, value: unknown,
 	return literal
 }
 
+/**
+ * A fraction compared with a SQLite `integer` column: `Amount > 9.75` is a
+ * meaningful comparison, but the column's codec only encodes whole numbers.
+ * SQLite compares an INTEGER with a REAL numerically, so the value is written
+ * as the number it is. Inserting a fraction is still refused by the codec.
+ */
+const sqliteFraction = (columnType: CHType<string, any, any>, value: unknown): boolean =>
+	columnType.sql === "integer" &&
+	typeof value === "number" &&
+	Number.isFinite(value) &&
+	!Number.isInteger(value) &&
+	(activeSqlSyntax()?.dialect === "sqlite" || activeSqlSyntax()?.dialect === "d1")
+
 const POSTGRES_INTEGERS = new Set(["int2", "int4", "int8", "smallint", "integer", "bigint"])
 
 /** A number as SQL that reads back exactly. A subnormal goes through the dialect: ClickHouse cannot parse one as written. */
-const numberFragment = (value: number): SqlFragment =>
-	isSubnormal(value) ? known(() => (activeSqlSyntax()?.literal ?? sqlLiteral)(value, "a number literal")) : raw(numberText(value))
+const numberFragment = (value: number): SqlFragment => {
+	if (Number.isInteger(value)) return raw(numberText(value))
+	return known(() => {
+		// SQLite reads some decimals back as a neighbouring double (`1.23456789e-95`), so a
+		// fraction is bound there, which the driver sends as the exact double.
+		const bind = activeSqlSyntax()?.inexactNumberText === true ? activeLiteralBinder() : undefined
+		if (bind !== undefined) return bind(value)
+		return isSubnormal(value) ? (activeSqlSyntax()?.literal ?? sqlLiteral)(value, "a number literal") : numberText(value)
+	})
+}
 
 const untypedLiteral = (value: boolean): string =>
 	activeSqlSyntax()?.literal(value, "an untyped boolean") ?? (value ? "1" : "0")
@@ -386,6 +409,9 @@ const likePattern = (pattern: string | Expr<string, any>): string => {
 		"NULL",
 	)
 }
+
+/** `ESCAPE '\'` where LIKE has no default escape, so `\%` means a literal `%` on every dialect. */
+const likeEscape = (): string => (activeSqlSyntax()?.likeEscape === true ? " ESCAPE '\\'" : "")
 
 const dateTimeLiteral = (value: DateTime.Utc): string =>
 	activeSqlSyntax()?.dateTimeLiteral(value) ?? compile(str(chDateTimeLiteral(value)))
@@ -531,8 +557,8 @@ export function makeExpr<T>(
 		notBetween: (low, high) =>
 			makeCond(known(() => `${compile(fragment)} NOT BETWEEN ${compile(operand(low))} AND ${compile(operand(high))}`)),
 
-		like: (pattern) => makeCond(known(() => `${compile(fragment)} LIKE ${likePattern(pattern)}`)),
-		notLike: (pattern) => makeCond(known(() => `${compile(fragment)} NOT LIKE ${likePattern(pattern)}`)),
+		like: (pattern) => makeCond(known(() => `${compile(fragment)} LIKE ${likePattern(pattern)}${likeEscape()}`)),
+		notLike: (pattern) => makeCond(known(() => `${compile(fragment)} NOT LIKE ${likePattern(pattern)}${likeEscape()}`)),
 		ilike: (pattern) => makeCond(known(() => activeSqlSyntax()?.ilike === false
 			? fail(new QueryBuilderDefect({ message: `ILIKE is not supported by the ${activeSqlSyntax()?.dialect} dialect; use LIKE with SQLite's own case rules` }), "FALSE")
 			: `${compile(fragment)} ILIKE ${likePattern(pattern)}`)),
