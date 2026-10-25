@@ -38,6 +38,21 @@ export {
 	TransactionUnsupported,
 	type TransactionError,
 } from "./database/errors"
+export {
+	defineRelations,
+	findMany,
+	type FindManyOptions,
+	type FindManyRow,
+	type KeyColumn,
+	type Relation,
+	type RelationalSchema,
+	type RelationalTable,
+	type RelationBuilder,
+	type RelationOptions,
+	type RelationsConfig,
+	type RelationTables,
+	type WithOf,
+} from "./database/relations"
 export { QuerySummary, withQuerySummary } from "./database/tracing"
 export { sql, type SqlIdentifier, type SqlRawText, type SqlTemplate } from "./database/sql"
 export type { DialectTransactions, IsolationLevel, TransactionSettings } from "./ch/dialect"
