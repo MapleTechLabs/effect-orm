@@ -19,6 +19,7 @@ import { Miniflare } from "miniflare"
 import { afterAll, afterEach, describe, expect, it } from "vitest"
 import * as SQLite from "@maple-dev/effect-orm/sqlite"
 import { diffSqliteSchemas, fromDrizzleSqliteSnapshot, renderSqliteOp, renderSqliteSchema, sqliteEntitiesOf, type SqliteSchemaEntity } from "@maple-dev/effect-orm/schema"
+import { retryTransport } from "../sqlite-support"
 import { FuzzFailure, property, skip, withContext } from "./harness"
 
 // Schema plans
@@ -239,12 +240,12 @@ const d1Engines = async (): Promise<readonly [Engine, Engine]> => {
 	})())
 	const engine = (db: D1Like): Engine => ({
 		exec: async (statements) => {
-			for (const sql of statements) await db.prepare(sql).all()
+			for (const sql of statements) await retryTransport(() => db.prepare(sql).all())
 		},
 		migrate: async (statements) => {
-			if (statements.length > 0) await db.batch(statements.map((sql) => db.prepare(sql)))
+			if (statements.length > 0) await retryTransport(() => db.batch(statements.map((sql) => db.prepare(sql))))
 		},
-		all: async (sql) => (await db.prepare(sql).all()).results,
+		all: async (sql) => retryTransport(async () => (await db.prepare(sql).all()).results),
 	})
 	for (const db of dbs) {
 		const tables = (await db.prepare(`SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%'`).all()).results
