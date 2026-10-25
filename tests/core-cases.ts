@@ -398,6 +398,27 @@ export const coreCases: readonly CoreCase[] = [
 		],
 	},
 	{
+		// The data-last `Query` functions are the fluent methods, so this is
+		// `inner-join` written with `pipe`, and it returns the same rows.
+		id: "pipe-data-last",
+		covers: q("pipe"),
+		build: (ctx) =>
+			ctx.compile(
+				ctx.from(ctx.orders).pipe(
+					CH.Query.where(($) => [$.OrgId.eq(CH.param.string("orgId"))]),
+					CH.Query.innerJoin(ctx.customers, "c", (o, c) => o.Customer.eq(c.Name).and(o.OrgId.eq(c.OrgId))),
+					CH.Query.select(($) => ({ id: $.Id, tier: $.c.Tier })),
+					CH.Query.orderBy(["id", "asc"]),
+					CH.Query.limit(2),
+				),
+				org,
+			),
+		expected: [
+			{ id: 1, tier: "gold" },
+			{ id: 2, tier: "gold" },
+		],
+	},
+	{
 		id: "left-join",
 		covers: q("leftJoin"),
 		build: (ctx) =>
