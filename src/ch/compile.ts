@@ -28,7 +28,7 @@ import { checkedLiteral, clickhouseDialect, currentDialect, withDialect, type Di
 import { Effect, Option, Schema } from "effect"
 import { QueryBuilderDefect, QueryBuilderError } from "./errors"
 import { withSubqueryCompiler } from "./subquery-context"
-import { tenantBoundOf, tenantColumnOf, tenantPredicatesOf, withTenantBound, type TenantPredicate } from "./tenant"
+import { correlatedBound, correlatedTenantOf, tenantBoundOf, tenantColumnOf, tenantPredicatesOf, withTenantBound, type TenantPredicate } from "./tenant"
 
 // `QueryBuilderError` moved to ./errors so `expr.ts` can raise it too; still
 // exported from here, which is where every caller imports it from.
@@ -741,6 +741,12 @@ function compileInner<
 		 * There is no reason to pass it by hand.
 		 */
 		enclosingCtes?: ReadonlyArray<ResolvedCte>
+		/**
+		 * Set for a correlated subquery that `markCorrelatedTenant` marked: its
+		 * main table's tenant column is bound to this enclosing column, and the
+		 * enclosing compile resolves that binding (see `tenant.ts`).
+		 */
+		correlatedTenant?: string
 	},
 ): CompiledQuery<Decoded, Route> {
 	// A nested query's columns are its own: nothing it renders reaches an
@@ -843,6 +849,9 @@ function compileInner<
 			fromFragment = raw(`(\n${body}\n) AS ${quoteIdent(state.fromQueryAlias ?? "")}`)
 		} else {
 			fromSource = sourceForTable(state.tableName, mainColumn)
+			if (options?.correlatedTenant !== undefined && fromSource.column !== undefined) {
+				fromSource = { ...fromSource, bound: correlatedBound(options.correlatedTenant) }
+			}
 			fromFragment = mainAlias !== state.tableName
 				? raw(`${quoteIdentPath(state.tableName)} AS ${quoteIdentPath(mainAlias)}`)
 				: identPath(state.tableName)
@@ -856,13 +865,22 @@ function compileInner<
 				sources.push({ scope: "cross-tenant" })
 				return subquery
 			}
+			const correlatedTenant = correlatedTenantOf(subquery)
 			const compiled = compileInner(subquery, params, {
 				skipFormat: true,
 				deferParams,
 				nested: true,
 				enclosingCtes: visibleCtes,
+				correlatedTenant,
 			})
-			sources.push(sourceOf(compiled))
+			// A correlated subquery bound only through the enclosing tenant column
+			// reads the tenant that column is bound to: it is that column's source.
+			sources.push(
+				correlatedTenant !== undefined && compiled.tenantScope === "single-tenant" &&
+					tenantBoundOf(compiled) === correlatedBound(correlatedTenant)
+					? { column: correlatedTenant, scope: "cross-tenant" }
+					: sourceOf(compiled),
+			)
 			return compiled.sql
 		}, () => {
 			const joins = state.typedJoins.map((j) => {
