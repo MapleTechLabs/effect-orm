@@ -5,13 +5,13 @@
 connections: a `Database` is a small object over your client.
 
 ```sh
-npm install @effect/sql-pg@4.0.0   # or @effect/sql-pglite, @effect/sql-clickhouse
+npm install @effect/sql-pg@4.0.6   # or @effect/sql-pglite, @effect/sql-clickhouse
 ```
 
 Transactions are Effect's own `SqlClient.withTransaction`, with four additions:
 
 - **Settings**: isolation level, access mode, deferrable.
-- **Typed COMMIT and ROLLBACK failures**: Effect 4.0.0 turns them into defects.
+- **Typed COMMIT and ROLLBACK failures**: Effect fails with a bare `SqlError` or dies.
 - **A guard** against statements that outlive their transaction.
 - **Contention retry** for SQLSTATE 40001 and 40P01.
 
@@ -220,8 +220,8 @@ again. `read uncommitted` is not offered because Postgres runs it as `read commi
 | `TransactionOptionsRejected` | A setting the dialect does not support, or settings on a nested transaction |
 | `TransactionUnsupported` | The dialect has no transactions (ClickHouse) |
 
-Effect 4.0.0 turns a failed COMMIT or ROLLBACK into a defect and, when ROLLBACK fails, drops
-the body's own failure. `transaction` turns both back into the typed errors above. Defects
+Effect fails with a bare `SqlError` on a failed COMMIT, dies on a failed ROLLBACK and, when
+ROLLBACK fails, drops the body's own failure. `transaction` turns these into the typed errors above. Defects
 from `body` stay defects.
 
 `TransactionClosed` is a defect, not an error to handle. A fiber forked inside a transaction

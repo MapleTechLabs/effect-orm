@@ -36,12 +36,12 @@ Built on [Effect](https://effect.website) (peer dependency).
 Install the package with its Effect 4 peer:
 
 ```bash
-bun add @maple-dev/effect-orm "effect@^4.0.0"
+bun add @maple-dev/effect-orm "effect@^4.0.6"
 ```
 
 See [Getting started](./docs/getting-started.md) for source builds and examples.
 
-`effect` is a peer dependency. The recommended range `^4.0.0` allows
+`effect` is a peer dependency. The recommended range `^4.0.6` allows
 newer Effect 4 releases without opting into Effect 5. Effect 3 and the Effect 4
 prereleases are incompatible.
 
