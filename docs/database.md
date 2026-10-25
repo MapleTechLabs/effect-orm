@@ -89,6 +89,7 @@ Calling `withdraw(1, 30)` outside `transfer` does not compile: `requireTransacti
 | `execute(statement)` | Run a statement and discard its rows |
 | `transaction(options?)` | Run an effect in a transaction; data-first or pipeable |
 | `requireTransaction` | Mark an effect as correct only inside a transaction |
+| `afterCommit(effect)` | Queue an effect to run after the outermost transaction commits, never after a rollback |
 | `retryContention(options?)` | Re-run on serialization failure or deadlock |
 | `Transaction` | The open transaction (`depth`, `isolationLevel`, `accessMode`) |
 | `isContention(error)` | Whether an error is a serialization failure or deadlock |
@@ -196,6 +197,47 @@ Effect's own `Effect.tx` treats `Effect.Transaction`. A helper that works either
 most reads, needs no marker. Inside a transaction, `yield* Db.Transaction` gives its `depth`
 and settings.
 
+### After commit
+
+A vendor call (an SMS, an HTTP request, a job enqueue) must not run inside a transaction: it
+holds the connection while it waits, and it cannot be rolled back. `afterCommit` queues the
+call and runs it only after COMMIT succeeds:
+
+```ts
+const bookTour = Effect.fn("bookTour")(function* (tour: NewTour) {
+	yield* Db.execute(Db.sql`INSERT INTO tours VALUES (${tour.id}, ${tour.phone})`)
+	yield* Db.afterCommit(sms.send(tour.phone, "Your tour is booked"))
+}, Db.requireTransaction)
+
+Db.transaction(bookTour(tour))  // the SMS goes out after COMMIT, or not at all
+```
+
+Like `requireTransaction`, `afterCommit` adds `Transaction` to the requirements, so a helper
+deep in the call stack can queue work without knowing where the transaction starts. The
+requirements of the queued effect stay in `R`: they must be met where it is queued.
+
+- **Order.** Hooks run one at a time, in the order they were queued, after COMMIT and outside
+  the transaction. A statement in a hook runs on its own connection, not the transaction's.
+- **Rollback.** A rolled-back transaction runs nothing. A savepoint that rolls back drops what
+  it queued; a savepoint that is kept hands its hooks to the outer transaction. With `retry`,
+  only the attempt that commits runs its hooks.
+- **Context.** A hook runs with the services of the place it was queued, minus the
+  transaction.
+- **Failures.** A hook that fails or dies does not fail the transaction, because the data is
+  already committed and a caller that retries would write it twice. The hook's cause goes to
+  the `ErrorReporter`s in context (`Effect.withErrorReporting` uses the same ones) and to an
+  error log, and the next hook still runs. When the caller must know that the call failed,
+  handle the error inside the hook.
+- **At most once.** A crash or an interruption after COMMIT skips the hooks not yet run. When
+  the work must happen, write it to an outbox table inside the transaction instead.
+- **Tracing.** Hooks run in an `effect_orm.after_commit` span, outside the transaction's span.
+
+`afterCommit` dies with `AfterCommitUnavailable` when no `transaction` would run the work: a
+`Transaction` provided by hand, a transaction that has already ended (a fiber forked inside it
+and not joined), or an outermost transaction opened by a plain `sql.withTransaction`. A savepoint
+made by a plain `sql.withTransaction` inside a `Db.transaction` does not drop hooks when it rolls
+back; open nested transactions with `Db.transaction`.
+
 ### Settings
 
 | Option | Postgres |
@@ -227,7 +269,8 @@ from `body` stay defects.
 `TransactionClosed` is a defect, not an error to handle. A fiber forked inside a transaction
 inherits its connection. If it runs a statement after the transaction ended, that statement
 would run on a connection already back in the pool, so `run`, `query` and `execute` die with
-`TransactionClosed` instead. Join what you fork before the body returns.
+`TransactionClosed` instead. Join what you fork before the body returns. `AfterCommitUnavailable` is a defect for the same
+reason: work queued where nothing will run it would be lost without a sign.
 
 ### Contention retry
 
