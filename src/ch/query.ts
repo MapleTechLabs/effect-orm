@@ -29,6 +29,7 @@ import type { Table } from "./table"
 import type { Expr, Condition, ColumnRef, ParamsIn, Widen } from "./expr"
 import { makeColumnRef } from "./expr"
 import type { TenantScope } from "./compile"
+import { type Pipeable, pipeArguments } from "effect/Pipeable"
 
 // Type utilities
 
@@ -63,7 +64,7 @@ export type JoinedColumnAccessor<
 	readonly [A in keyof Joins & string]: ColumnAccessor<Joins[A]>
 }
 
-type SelectRecord = Record<string, Expr<any>>
+export type SelectRecord = Record<string, Expr<any>>
 
 /**
  * Read each selected expression's output type off its `_phantom` property
@@ -231,7 +232,7 @@ export interface CHQuery<
 	Route extends string | undefined = string | undefined,
 	/** The `param.*` placeholders the query uses, as `ParamEntry`s. */
 	Params = never,
-> {
+> extends Pipeable {
 	/** @internal — runtime query state */
 	readonly _state: CHQueryState
 	/** phantom */
@@ -573,6 +574,10 @@ function makeQuery<
 >(state: CHQueryState): CHQuery<Cols, Output, Joins, Route, any> {
 	return {
 		_state: state,
+
+		pipe() {
+			return pipeArguments(this, arguments)
+		},
 
 		select(...args: any[]): any {
 			if (args.length === 0) {
