@@ -7,7 +7,7 @@
 // statements outliving their transaction, and contention retry. See
 // `design/transactions.md`.
 
-import { Cause, Context, Effect, Exit, Layer, Option, Schedule, Schema } from "effect"
+import { Cause, Context, Effect, ErrorReporter, Exit, Layer, Option, Schedule, Schema } from "effect"
 import { dual } from "effect/Function"
 import * as SqlClient from "effect/sql/SqlClient"
 import { isSqlError } from "effect/sql/SqlError"
@@ -527,6 +527,43 @@ export const execute = (statement: StatementInput): Effect.Effect<void, Database
  */
 export const requireTransaction = <A, E, R>(self: Effect.Effect<A, E, R>): Effect.Effect<A, E, R | Transaction> =>
 	Effect.andThen(Effect.service(Transaction), self)
+
+/**
+ * Queue `effect` to run after the outermost transaction commits, and never if
+ * it rolls back: an SMS, an HTTP call, a job enqueue. Effect's own
+ * `SqlClient.afterCommit` does the queueing (savepoints, ordering, rollback);
+ * this adds `Transaction` to the requirements, like `requireTransaction`, so
+ * work queued outside a transaction does not compile instead of running at once.
+ *
+ * A hook that fails does not fail the committed transaction: its cause goes to
+ * the `ErrorReporter`s in context and to an error log. Hooks run at most once;
+ * work that must happen belongs in an outbox table written in the transaction.
+ *
+ * ```ts
+ * yield* Db.afterCommit(sms.send(phone, text))
+ * ```
+ */
+export const afterCommit = <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<void, never, R | Transaction> =>
+	Effect.gen(function* () {
+		yield* Transaction
+		const state = yield* Effect.serviceOption(TransactionOpen)
+		if (Option.isNone(state)) {
+			return yield* Effect.die(new Error("Db.afterCommit: no transaction opened by Db.transaction is open"))
+		}
+		yield* state.value.client.afterCommit(
+			effect.pipe(
+				Effect.catchCause((cause) =>
+					ErrorReporter.report(cause).pipe(
+						Effect.andThen(Effect.logError("afterCommit hook failed after the transaction committed", cause)),
+					),
+				),
+				Effect.asVoid,
+				// Effect drops its own transaction from the hook's context; drop ours too,
+				// so a statement in the hook does not trip the closed-transaction guard.
+				Effect.updateContext((context: Context.Context<R>) => Context.omit(TransactionOpen, Transaction)(context) as Context.Context<R>),
+			),
+		)
+	})
 
 /**
  * `transaction` on the `Database` in context. Data-first or pipeable, so it

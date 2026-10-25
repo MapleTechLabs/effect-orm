@@ -650,3 +650,22 @@ What landed differently from the sections above:
 - **Not yet done from phase 2:** the over-the-wire `@effect/sql-pg` suite (two connections,
   real serialization failures), and filing the upstream Effect issue for orDie'd COMMIT and
   ROLLBACK. The PGlite suite simulates contention with `RAISE ... USING ERRCODE`.
+
+## 10. `afterCommit` (issue #73)
+
+`Db.afterCommit(effect)` queues work that must wait for COMMIT: a vendor call, a job enqueue.
+Effect 4.0.6 ships `SqlClient.afterCommit`, which already runs callbacks after the outermost
+COMMIT, drops those of a rolled-back transaction or savepoint, hands a kept savepoint's callbacks
+to its parent, and dies when queued after the transaction ended. `Db.afterCommit` delegates to
+it on the client of the open `Db.transaction` and adds only:
+
+- **`Transaction` in `R`.** Effect's version runs the work at once outside a transaction; here
+  that does not compile, like `requireTransaction`.
+- **A failing hook does not fail the transaction.** The data is committed; a typed failure at
+  that point would invite a retry that writes twice. The cause goes to
+  `ErrorReporter.report` and `Effect.logError`, and the next hook still runs.
+- **The hook's context drops the open-state and `Transaction`** as Effect drops its own
+  transaction service, so a statement in a hook does not trip the closed-transaction guard.
+
+At most once: hooks are not persisted. Guaranteed delivery is an outbox table written inside
+the transaction, which needs no library support.

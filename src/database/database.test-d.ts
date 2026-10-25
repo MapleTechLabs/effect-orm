@@ -1,6 +1,6 @@
-// Type-level tests: rows from `run`, `requireTransaction`, and what `transaction` removes.
+// Type-level tests: rows from `run`, `requireTransaction`, `afterCommit`, and what `transaction` removes.
 
-import { Effect, Schema } from "effect"
+import { Context, Effect, Schema } from "effect"
 import { expectTypeOf } from "expect-type"
 import * as CH from "../ch/index"
 import * as PG from "../postgres"
@@ -57,6 +57,16 @@ expectTypeOf(Db.transaction(Effect.fail(new Domain()))).toEqualTypeOf<
 // @ts-expect-error Transaction is still required
 const unwrapped: Effect.Effect<number, Db.DatabaseError, Db.Database> = revoke("f")
 void unwrapped
+
+// `afterCommit` needs a transaction, swallows the hook's errors into its report,
+// and keeps the hook's own requirements: they must be met where it is queued.
+class Sms extends Context.Service<Sms, { readonly send: (text: string) => Effect.Effect<void, Domain> }>()("Sms") {}
+const sendLater = Db.afterCommit(Effect.flatMap(Effect.service(Sms), (sms) => sms.send("hi")))
+expectTypeOf(sendLater).toEqualTypeOf<Effect.Effect<void, never, Sms | Db.Transaction>>()
+expectTypeOf(Db.transaction(sendLater)).toEqualTypeOf<Effect.Effect<void, Db.DatabaseError | Db.TransactionError, Sms | Db.Database>>()
+// @ts-expect-error Transaction is still required
+const notQueued: Effect.Effect<void, never, Sms> = sendLater
+void notQueued
 
 // Settings are typed: an unknown isolation level does not compile.
 // @ts-expect-error not an isolation level
