@@ -11,7 +11,7 @@ import { compiled, compiledUnsafe, fail } from "./failure"
 import { columnSqlName, custom, dateTime, dateTime64, type CHType, type ColumnDefs } from "./types"
 import type { CHQuery, CHQueryState, NeedsSelect } from "./query"
 import type { CHUnionQuery } from "./union"
-import { isInsert, type AnyInsert, type CHInsert } from "./insert"
+import { isExcludedSet, isInsert, type AnyInsert, type CHInsert, type ConflictTarget, type ExcludedSet } from "./insert"
 import { isDelete, isUpdate, type CHDelete, type CHUpdate } from "./update"
 import type { Table } from "./table"
 import { createColumnAccessor, createQualifiedColumnAccessor, createJoinedColumnAccessor, sourceAlias } from "./query"
@@ -1670,6 +1670,8 @@ const onConflictClause = (
 	insert: CHInsert<any, any, any, any>,
 	cell: (column: string, value: unknown, context: string) => string,
 	wrote: (column: string, value: unknown, sql: string) => void,
+	/** The columns the INSERT writes, which `excludedAll` sets. */
+	columns: ReadonlyArray<string>,
 ): string => {
 	const { table, conflict } = insert._state
 	if (conflict === undefined) return ""
@@ -1706,13 +1708,68 @@ const onConflictClause = (
 	if (conflict.action === "nothing") return `\nON CONFLICT${target} DO NOTHING`
 
 	const existing = createQualifiedColumnAccessor(table.name, undefined, table.columns)
-	const excluded = createQualifiedColumnAccessor("excluded", undefined, table.columns)
-	const set = typeof conflict.set === "function" ? conflict.set(existing, excluded) : conflict.set
-	const assignments = setAssignments(table, set as Record<string, unknown>, cell, wrote, where, "onConflictDoUpdate")
+	const excluded = proposedRowAccessor(table)
+	const set =
+		typeof conflict.set === "function"
+			? conflict.set(existing, excluded)
+			: isExcludedSet(conflict.set)
+				? excludedSetRecord(table, conflict.set, excluded, columns, conflict.target, where)
+				: conflict.set
+	// `col = excluded.col` writes the value the rows already gave the column, so
+	// it adds nothing to the tenant evidence the rows hold.
+	const fromProposedRow = (column: string, value: unknown, sql: string) => {
+		if (value !== excluded[column]) wrote(column, value, sql)
+	}
+	const assignments = setAssignments(table, set as Record<string, unknown>, cell, fromProposedRow, where, "onConflictDoUpdate")
 	const condition = conflict.where?.(existing, excluded)
 	return `\nON CONFLICT${target} DO UPDATE SET ${assignments.join(", ")}${
 		condition === undefined ? "" : ` WHERE ${compileSqlFragment(condition.toFragment())}`
 	}`
+}
+
+/**
+ * The row proposed for insertion, as `onConflictDoUpdate`'s SET and WHERE
+ * read it. Postgres (and SQLite) write `excluded."col"`. A dialect that reads
+ * it otherwise, such as MySQL's `VALUES(col)`, changes only this accessor:
+ * the callback form and `excluded` / `excludedAll` all go through it.
+ */
+const proposedRowAccessor = (table: Table<string, ColumnDefs>) =>
+	createQualifiedColumnAccessor("excluded", undefined, table.columns)
+
+/**
+ * The SET record of `excluded(columns)` / `excludedAll(except)`. A column
+ * name that is not a column maps to `null`, so `setAssignments` reports it.
+ */
+const excludedSetRecord = (
+	table: Table<string, ColumnDefs>,
+	set: ExcludedSet,
+	excluded: Record<string, unknown>,
+	written: ReadonlyArray<string>,
+	target: ConflictTarget<any> | undefined,
+	where: string,
+): Record<string, unknown> => {
+	// Checked here, not in setAssignments: a mistyped exception would otherwise widen the SET.
+	const unknown = set._tag === "ExcludedAll" ? set.except.find((column) => !Object.hasOwn(table.columns, column)) : undefined
+	if (unknown !== undefined) {
+		return fail(new QueryBuilderError({
+			code: "InvalidArguments",
+			message: `${where}: excludedAll excepts ${JSON.stringify(unknown)}, which is not a column of the table`,
+		}), {})
+	}
+	const columns = set._tag === "ExcludedColumns" ? set.columns : allButSkipped(written, set.except, target)
+	return Object.fromEntries(
+		columns.map((column) => [column, Object.hasOwn(table.columns, column) ? excluded[column] : null]),
+	)
+}
+
+/** `excludedAll`'s columns. The target's are equal in both rows, so setting them changes nothing. */
+const allButSkipped = (
+	written: ReadonlyArray<string>,
+	except: ReadonlyArray<string>,
+	target: ConflictTarget<any> | undefined,
+): ReadonlyArray<string> => {
+	const skip = new Set<string>([...except, ...(target !== undefined && !("constraint" in target) ? target : [])])
+	return written.filter((column) => !skip.has(column))
 }
 
 /** The RETURNING clause and its row schema, or none without `returning`. */
@@ -1974,7 +2031,7 @@ function compileInsert(insert: CHInsert<any, any, any, any>, params: Record<stri
 			}
 			const conflictSql = onConflictClause(insert, cell, (column, value, sql) => {
 				if (column === tenant) pin(value, sql)
-			})
+			}, columns)
 			return [columns, source, conflictSql, readScope] as const
 		},
 	)

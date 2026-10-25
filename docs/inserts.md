@@ -199,6 +199,44 @@ RETURNING "key" AS "key", "count" AS "count"
 - Calling either again replaces the clause. ClickHouse has no `ON CONFLICT` (deduplicate with a
   `ReplacingMergeTree` instead), so compiling one for it is a `QueryBuilderDefect`.
 
+### Set from the proposed row
+
+A sync upsert usually copies the new row over the old one. `excluded(columns)` and
+`excludedAll(except?)` build that `set`, so you do not list each column twice:
+
+```ts
+// Copy count only.
+PG.insertInto(Counters).values({ key: "a", count: 1 }).onConflictDoUpdate({ target: ["key"], set: PG.excluded(["count"]) })
+
+// Copy every column the rows write, but not locked.
+PG.insertInto(Counters)
+	.values({ key: "a", count: 1, locked: false })
+	.onConflictDoUpdate({ target: ["key"], set: PG.excludedAll(["locked"]) })
+```
+
+```sql
+INSERT INTO "counters" ("key", "count")
+VALUES ($1, $2)
+ON CONFLICT ("key") DO UPDATE SET "count" = "excluded"."count"
+
+INSERT INTO "counters" ("key", "count", "locked")
+VALUES ($1, $2, $3)
+ON CONFLICT ("key") DO UPDATE SET "count" = "excluded"."count"
+```
+
+- The names are checked against the table, as in a `set` record: a name that is not a column,
+  or a computed column, does not type-check.
+- `excludedAll` takes the columns the insert writes (the rows' keys, or the SELECT's aliases),
+  not every column of the table. A column the rows leave out keeps its old value; on a column
+  you do not write, `EXCLUDED` holds the default, and copying it would overwrite real data. It
+  also skips the target's columns, which are equal in both rows.
+- `col = excluded.col` on the tenant column keeps the rows' tenant scope: it writes the value
+  the rows already gave it.
+- To mix copied columns with other values (`updatedAt: now()`), use the callback form:
+  `set: ($, excluded) => ({ name: excluded.name, updatedAt: PG.now() })`.
+- The dialect writes the SQL that reads the proposed row, so the same `set` value works on any
+  dialect with an upsert.
+
 ## Settings
 
 On ClickHouse, `settings` adds a `SETTINGS` clause to the insert, before `VALUES` or the
@@ -242,6 +280,7 @@ A batch that mixes tenants on purpose, such as an ingest flush, declares it with
 | Compiling without `values`                        | `QueryBuilderDefect`                     |
 | `returning` for a dialect without RETURNING       | `QueryBuilderDefect`                     |
 | `onConflictDoUpdate` setting no or unknown columns | `QueryBuilderError` `InvalidArguments`  |
+| `excluded` / `excludedAll` naming an unknown column | `QueryBuilderError` `InvalidArguments` |
 | `onConflict*` without ON CONFLICT, a bad target   | `QueryBuilderDefect`                     |
 | `settings` without insert settings, a bad name    | `QueryBuilderDefect`                     |
 
