@@ -8,7 +8,7 @@ into migrations:
 | Entry                              | Runs where         | What it does                                                                  |
 | ---------------------------------- | ------------------ | ----------------------------------------------------------------------------- |
 | `@maple-dev/effect-orm/schema`     | anywhere, pure     | reads `table` / `materializedView` values: DDL rendering, snapshots, the diff |
-| `@maple-dev/effect-orm/kit`        | Node or Bun        | `generate` and `check` over a migrations folder; the `effect-orm` command     |
+| `@maple-dev/effect-orm/kit`        | Node or Bun        | `generate` and `check` over a migrations folder, `verifySchema`; the `effect-orm` command |
 | `@maple-dev/effect-orm/migrate`    | anywhere Effect runs | applies migrations through a driver you provide, `status`, `verify`        |
 
 Both ClickHouse and Postgres. The model follows drizzle-kit (a committed snapshot per migration,
@@ -253,6 +253,49 @@ database that is behind is reported as behind (`status`), not as drifted. The se
 both sides (`formatQuery`, `defaultValueOfTypeName`). It checks tables, engine family, keys,
 columns, skipping indexes, and view targets and bodies; it does not check TTL, codecs, settings,
 or comments yet. `effect-orm verify` exits 3 when it finds drift.
+
+### Checking the definitions against a database
+
+`verify` needs the migrations folder and the ledger. To check the table definitions against a
+database that another tool migrates, or in CI after a deploy, compare it with the definitions
+directly:
+
+```sh
+effect-orm verify --schema          # exit 0: no drift; exit 3: drift, one line per difference
+effect-orm verify --schema --json   # {"drift":[{"entity":"users.email","problem":"not_null",...}]}
+```
+
+```text
+Drift against the schema modules:
+  users.email: type (expected text, actual character varying(10))
+  users.name: missing
+  users.users_email_unq: missing
+```
+
+It reads the config's `schema` modules and `driver`, and nothing in `out`. The comparison is the
+one `verify` makes, with the same checks and the same limits, against a snapshot of the
+definitions as they stand instead of the last applied one. So a database that is behind reports
+the missing parts as drift; use plain `verify` where the ledger exists. The ledger tables are
+never reported. In code, `verifySchema(config, cwd)` from `/kit` does the same, and
+`Migrate.verifySnapshot(snapshot)` compares the database with any snapshot:
+
+```ts title="migrations-verify-schema.ts"
+import { Effect } from "effect"
+import * as PG from "@maple-dev/effect-orm/postgres"
+import * as Migrate from "@maple-dev/effect-orm/migrate"
+import * as S from "@maple-dev/effect-orm/schema"
+
+const Users = PG.table("users", {
+	columns: { id: PG.text, email: PG.text },
+	primaryKey: ["id"],
+})
+
+export const drift = Effect.gen(function* () {
+	const entities = yield* S.pgEntitiesOf([Users])
+	const snapshot = yield* S.makeSnapshot(entities, [S.ORIGIN_ID], "postgres")
+	return yield* Migrate.verifySnapshot(snapshot)
+})
+```
 
 ### Running one step at a time
 
