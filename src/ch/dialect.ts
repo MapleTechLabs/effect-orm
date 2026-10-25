@@ -131,7 +131,7 @@ export const noTransactions: DialectTransactions = {
  * finished text, so a value that spelled one would be rewritten too. A literal
  * that does is refused at compile time rather than trusted.
  */
-export interface Dialect extends Omit<SqlSyntax, "dialect"> {
+export interface Dialect<Functions extends string = string> extends Omit<SqlSyntax, "dialect"> {
 	/** Shown in errors. */
 	readonly name: string
 	readonly params: ParamStyle
@@ -150,12 +150,17 @@ export interface Dialect extends Omit<SqlSyntax, "dialect"> {
 	 * `/clickhouse` entry's functions) or `postgres` (`@maple-dev/effect-orm/postgres`).
 	 * A built-in function from another set fails to compile. Absent means
 	 * unchecked: a custom dialect says which set it renders, if either.
+	 *
+	 * The type parameter is the same name at the type level: a query that uses
+	 * a function of another set is a type error where it is compiled or run
+	 * for a `Dialect<"postgres">` (see `DialectSatisfied`). A plain `Dialect`
+	 * is not checked by the type.
 	 */
-	readonly functions?: string
+	readonly functions?: Functions
 }
 
 /** ClickHouse, with params written into the SQL as literals. The default. */
-export const clickhouseDialect: Dialect = {
+export const clickhouseDialect: Dialect<"clickhouse"> = {
 	name: "clickhouse",
 	quoteIdent: (name) => name,
 	quoteString: quoteClickHouseString,

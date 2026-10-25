@@ -4,7 +4,7 @@ import { compile } from "../../sql/sql-fragment"
 import type { Expr, ParamsIn } from "../expr"
 import { schemaOf } from "../define-fn"
 import { QueryBuilderError } from "../errors"
-import { builtins } from "./builtin"
+import { builtins, type ClickHouseOnly } from "./builtin"
 
 const { lazy } = builtins("clickhouse", "scalar")
 const window = builtins("clickhouse", "window")
@@ -100,7 +100,7 @@ function renderWindowSpec(spec: WindowSpec): string {
 	return parts.join(" ")
 }
 
-export function over<T, Q1 = never, Q2 = never>(expr: Expr<T, Q1>, spec: CompiledWindowSpec<Q2>): Expr<T, Q1 | Q2> {
+export function over<T, Q1 = never, Q2 = never>(expr: Expr<T, Q1>, spec: CompiledWindowSpec<Q2>): Expr<T, Q1 | Q2 | ClickHouseOnly> {
 	// A window changes which rows feed the value, never how the value decodes.
 	return makeExpr(window.lazy(() => `${compile(expr.toFragment())} OVER (${spec.sql})`), schemaOf<T>(expr))
 }
@@ -109,7 +109,7 @@ export function lagInFrame<T, Q1 = never, Q2 = never, Q3 = never>(
 	expr: Expr<T, Q1>,
 	offset: number | Expr<number, Q2>,
 	defaultValue: T | Expr<T, Q3>,
-): Expr<T, Q1 | Q2 | Q3> {
+): Expr<T, Q1 | Q2 | Q3 | ClickHouseOnly> {
 	return makeExpr(
 		lazy(() =>
 			`lagInFrame(${compile(expr.toFragment())}, ${compile(toFragment(offset))}, ${compile(toFragment(defaultValue))})`,

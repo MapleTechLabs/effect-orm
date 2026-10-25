@@ -14,7 +14,7 @@ import { schemaOf, withoutNull } from "../ch/define-fn"
 import { compile, known, str } from "../sql/sql-fragment"
 import { encodeLiteral } from "../ch/literal"
 import type { CHType } from "../ch/types"
-import { builtins } from "../ch/functions/builtin"
+import { builtins, type PostgresOnly } from "../ch/functions/builtin"
 import * as T from "./types"
 
 const sql = (expr: Expr<unknown> | Condition): string => compile(expr.toFragment())
@@ -28,30 +28,30 @@ const int8 = T.int8.schema as Schema.Codec<number, unknown>
 // Aggregates
 
 /** `count(*)`. */
-export const count = (): Expr<number> => makeExpr(aggregate.lazy(() => "count(*)", "count"), int8)
+export const count = (): Expr<number, PostgresOnly> => makeExpr(aggregate.lazy(() => "count(*)", "count"), int8)
 
 /** `count(DISTINCT expr)`. */
-export const countDistinct = <Q = never>(expr: Expr<unknown, Q>): Expr<number, Q> =>
+export const countDistinct = <Q = never>(expr: Expr<unknown, Q>): Expr<number, Q | PostgresOnly> =>
 	makeExpr(aggregate.lazy(() => `count(DISTINCT ${sql(expr)})`), int8)
 
 /** `count(*) FILTER (WHERE condition)`: ClickHouse's `countIf`. */
-export const countIf = <Q = never>(condition: Condition<Q>): Expr<number, Q> =>
+export const countIf = <Q = never>(condition: Condition<Q>): Expr<number, Q | PostgresOnly> =>
 	makeExpr(aggregate.lazy(() => `count(*) FILTER (WHERE ${sql(condition)})`), int8)
 
 /** `sum(expr)`. NULL over no rows, and a string for int8/numeric inputs on the
  *  wire, which the result codec reads as a number. */
-export const sum = <Q = never>(expr: Expr<number | null, Q>): Expr<number | null, Q> =>
+export const sum = <Q = never>(expr: Expr<number | null, Q>): Expr<number | null, Q | PostgresOnly> =>
 	makeExpr(aggregate.lazy(() => `sum(${sql(expr)})`), nullableNumber)
 
 /** `sum(expr) FILTER (WHERE condition)`: ClickHouse's `sumIf`. */
 export const sumIf = <Q1 = never, Q2 = never>(
 	expr: Expr<number | null, Q1>,
 	condition: Condition<Q2>,
-): Expr<number | null, Q1 | Q2> =>
+): Expr<number | null, Q1 | Q2 | PostgresOnly> =>
 	makeExpr(aggregate.lazy(() => `sum(${sql(expr)}) FILTER (WHERE ${sql(condition)})`), nullableNumber)
 
 /** `avg(expr)`. NULL over no rows. */
-export const avg = <Q = never>(expr: Expr<number | null, Q>): Expr<number | null, Q> =>
+export const avg = <Q = never>(expr: Expr<number | null, Q>): Expr<number | null, Q | PostgresOnly> =>
 	makeExpr(aggregate.lazy(() => `avg(${sql(expr)})`), nullableNumber)
 
 const nullableOf = <A>(expr: Expr<A>): Schema.Codec<A | null, unknown> | undefined => {
@@ -60,14 +60,14 @@ const nullableOf = <A>(expr: Expr<A>): Schema.Codec<A | null, unknown> | undefin
 }
 
 /** `min(expr)`, decoding as `expr` does. NULL over no rows. */
-export const min = <A, Q = never>(expr: Expr<A, Q>): Expr<A | null, Q> => makeExpr(aggregate.lazy(() => `min(${sql(expr)})`), nullableOf(expr))
+export const min = <A, Q = never>(expr: Expr<A, Q>): Expr<A | null, Q | PostgresOnly> => makeExpr(aggregate.lazy(() => `min(${sql(expr)})`), nullableOf(expr))
 
 /** `max(expr)`, decoding as `expr` does. NULL over no rows. */
-export const max = <A, Q = never>(expr: Expr<A, Q>): Expr<A | null, Q> => makeExpr(aggregate.lazy(() => `max(${sql(expr)})`), nullableOf(expr))
+export const max = <A, Q = never>(expr: Expr<A, Q>): Expr<A | null, Q | PostgresOnly> => makeExpr(aggregate.lazy(() => `max(${sql(expr)})`), nullableOf(expr))
 
 /** `percentile_cont(fraction) WITHIN GROUP (ORDER BY expr)`: an interpolated
  *  quantile, ClickHouse's `quantileExact` family. */
-export const percentileCont = <Q = never>(fraction: number, expr: Expr<number | null, Q>): Expr<number | null, Q> => {
+export const percentileCont = <Q = never>(fraction: number, expr: Expr<number | null, Q>): Expr<number | null, Q | PostgresOnly> => {
 	return makeExpr(
 		aggregate.lazy(() =>
 			fraction >= 0 && fraction <= 1
@@ -79,7 +79,7 @@ export const percentileCont = <Q = never>(fraction: number, expr: Expr<number | 
 }
 
 /** `array_agg(expr)`. NULL over no rows. */
-export const arrayAgg = <A, Q = never>(expr: Expr<A, Q>): Expr<ReadonlyArray<A> | null, Q> => {
+export const arrayAgg = <A, Q = never>(expr: Expr<A, Q>): Expr<ReadonlyArray<A> | null, Q | PostgresOnly> => {
 	const element = schemaOf<A>(expr)
 	return makeExpr(
 		aggregate.lazy(() => `array_agg(${sql(expr)})`),
@@ -95,12 +95,12 @@ export type DateTruncUnit = "second" | "minute" | "hour" | "day" | "week" | "mon
 
 /** `date_trunc(unit, ts, 'UTC')`: buckets in UTC whatever the session time
  *  zone, as ClickHouse's `toStartOf*` functions do. Postgres 12+. */
-export const dateTrunc = <Q = never>(unit: DateTruncUnit, ts: Expr<DateTime.Utc, Q>): Expr<DateTime.Utc, Q> =>
+export const dateTrunc = <Q = never>(unit: DateTruncUnit, ts: Expr<DateTime.Utc, Q>): Expr<DateTime.Utc, Q | PostgresOnly> =>
 	makeExpr(scalar.lazy(() => `date_trunc(${compile(str(unit))}, ${sql(ts)}, 'UTC')`), timestamptz)
 
 /** `date_bin(seconds, ts, epoch)`: fixed-width buckets aligned to the Unix
  *  epoch, ClickHouse's `toStartOfInterval`. Postgres 14+. */
-export const dateBin = <Q = never>(seconds: number, ts: Expr<DateTime.Utc, Q>): Expr<DateTime.Utc, Q> => {
+export const dateBin = <Q = never>(seconds: number, ts: Expr<DateTime.Utc, Q>): Expr<DateTime.Utc, Q | PostgresOnly> => {
 	return makeExpr(
 		scalar.lazy(() =>
 			Number.isSafeInteger(seconds) && seconds > 0
@@ -112,15 +112,15 @@ export const dateBin = <Q = never>(seconds: number, ts: Expr<DateTime.Utc, Q>): 
 }
 
 /** `now()`: the transaction's start time. */
-export const now = (): Expr<DateTime.Utc> => makeExpr(scalar.lazy(() => "now()", "now"), timestamptz)
+export const now = (): Expr<DateTime.Utc, PostgresOnly> => makeExpr(scalar.lazy(() => "now()", "now"), timestamptz)
 
 // Strings and values
 
 const text = T.text.schema as Schema.Codec<string, unknown>
 
-export const lower = <Q = never>(expr: Expr<string, Q>): Expr<string, Q> => makeExpr(scalar.lazy(() => `lower(${sql(expr)})`), text)
-export const upper = <Q = never>(expr: Expr<string, Q>): Expr<string, Q> => makeExpr(scalar.lazy(() => `upper(${sql(expr)})`), text)
-export const length = <Q = never>(expr: Expr<string, Q>): Expr<number, Q> =>
+export const lower = <Q = never>(expr: Expr<string, Q>): Expr<string, Q | PostgresOnly> => makeExpr(scalar.lazy(() => `lower(${sql(expr)})`), text)
+export const upper = <Q = never>(expr: Expr<string, Q>): Expr<string, Q | PostgresOnly> => makeExpr(scalar.lazy(() => `upper(${sql(expr)})`), text)
+export const length = <Q = never>(expr: Expr<string, Q>): Expr<number, Q | PostgresOnly> =>
 	makeExpr(scalar.lazy(() => `length(${sql(expr)})`), T.int4.schema as Schema.Codec<number, unknown>)
 
 /** `coalesce(expr, fallback)`, no longer nullable. */
@@ -131,15 +131,15 @@ export const coalesce = <A, Q1 = never, Q2 = never>(expr: Expr<A | null, Q1>, fa
 	)
 
 /** `expr ->> key`: a jsonb field as text, NULL when it is absent. */
-export const jsonText = <Q = never>(expr: Expr<unknown, Q>, key: string): Expr<string | null, Q> =>
+export const jsonText = <Q = never>(expr: Expr<unknown, Q>, key: string): Expr<string | null, Q | PostgresOnly> =>
 	makeExpr(scalar.lazy(() => `(${sql(expr)} ->> ${compile(str(key))})`), Schema.NullOr(Schema.String) as Schema.Codec<string | null, unknown>)
 
 /** `greatest(a, b, ...)`, decoding as `first` does. Postgres skips NULL arguments. */
-export const greatest = <A, Q = never>(first: Expr<A, Q>, ...rest: ReadonlyArray<Expr<A, Q>>): Expr<A, Q> =>
+export const greatest = <A, Q = never>(first: Expr<A, Q>, ...rest: ReadonlyArray<Expr<A, Q>>): Expr<A, Q | PostgresOnly> =>
 	makeExpr(scalar.lazy(() => `greatest(${[first, ...rest].map(sql).join(", ")})`), schemaOf<A>(first))
 
 /** `least(a, b, ...)`, decoding as `first` does. Postgres skips NULL arguments. */
-export const least = <A, Q = never>(first: Expr<A, Q>, ...rest: ReadonlyArray<Expr<A, Q>>): Expr<A, Q> =>
+export const least = <A, Q = never>(first: Expr<A, Q>, ...rest: ReadonlyArray<Expr<A, Q>>): Expr<A, Q | PostgresOnly> =>
 	makeExpr(scalar.lazy(() => `least(${[first, ...rest].map(sql).join(", ")})`), schemaOf<A>(first))
 
 /**
@@ -149,7 +149,7 @@ export const least = <A, Q = never>(first: Expr<A, Q>, ...rest: ReadonlyArray<Ex
 export const caseWhen = <A, Q = never>(
 	branches: ReadonlyArray<readonly [Condition<Q>, Expr<A, Q>]>,
 	otherwise: Expr<A, Q>,
-): Expr<A, Q> =>
+): Expr<A, Q | PostgresOnly> =>
 	makeExpr(
 		scalar.lazy(
 			() => `CASE ${branches.map(([when, then]) => `WHEN ${sql(when)} THEN ${sql(then)}`).join(" ")} ELSE ${sql(otherwise)} END`,
@@ -158,7 +158,7 @@ export const caseWhen = <A, Q = never>(
 	)
 
 /** A condition as a boolean value, to select it or `set` a column from it. */
-export const asBoolean = <Q = never>(condition: Condition<Q>): Expr<boolean, Q> =>
+export const asBoolean = <Q = never>(condition: Condition<Q>): Expr<boolean, Q | PostgresOnly> =>
 	makeExpr(scalar.lazy(() => `(${sql(condition)})`), Schema.Boolean as Schema.Codec<boolean, unknown>)
 
 /**

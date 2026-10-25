@@ -4,6 +4,7 @@ import type { DateTime } from "effect"
 import { expectTypeOf } from "expect-type"
 import * as CH from "./index"
 import type { Expr, Condition } from "./expr"
+import type { ClickHouseOnly } from "./functions/builtin"
 import type { ParamMarker } from "./param"
 import type { CHString, CHFloat64, CHMap } from "./types"
 import { makeColumnRef } from "./expr"
@@ -30,11 +31,11 @@ expectTypeOf(CH.min(CH.lit(1))).toMatchTypeOf<Expr<number>>()
 // when every contributing value is NULL, so the result must not narrow to the
 // non-null type.
 declare const nullableNum: Expr<number | null>
-expectTypeOf(CH.min(nullableNum)).toEqualTypeOf<Expr<number | null>>()
-expectTypeOf(CH.max(nullableNum)).toEqualTypeOf<Expr<number | null>>()
+expectTypeOf(CH.min(nullableNum)).toEqualTypeOf<Expr<number | null, ClickHouseOnly>>()
+expectTypeOf(CH.max(nullableNum)).toEqualTypeOf<Expr<number | null, ClickHouseOnly>>()
 
 // ifNull with a non-nullable fallback strips the null the aggregate kept
-expectTypeOf(CH.ifNull(nullableNum, CH.lit(0))).toEqualTypeOf<Expr<number>>()
+expectTypeOf(CH.ifNull(nullableNum, CH.lit(0))).toEqualTypeOf<Expr<number, ClickHouseOnly>>()
 
 // any_ preserves generic
 expectTypeOf(CH.any(CH.lit("x"))).toMatchTypeOf<Expr<string>>()
@@ -211,8 +212,8 @@ expectTypeOf(numExpr.div(0)).toEqualTypeOf<Expr<number | null>>()
 expectTypeOf(numExpr.mod(0)).toEqualTypeOf<Expr<number | null>>()
 expectTypeOf(nullableNum.add(1).mul(2)).toEqualTypeOf<Expr<number | null>>()
 expectTypeOf(CH.coalesce(nullableNum, CH.lit(0))).toEqualTypeOf<Expr<number>>()
-expectTypeOf(CH.ifNotFinite(nullableNum, 0)).toEqualTypeOf<Expr<number | null>>()
-expectTypeOf(CH.ifNull(CH.ifNotFinite(nullableNum, 0), CH.lit(0))).toEqualTypeOf<Expr<number>>()
+expectTypeOf(CH.ifNotFinite(nullableNum, 0)).toEqualTypeOf<Expr<number | null, ClickHouseOnly>>()
+expectTypeOf(CH.ifNull(CH.ifNotFinite(nullableNum, 0), CH.lit(0))).toEqualTypeOf<Expr<number, ClickHouseOnly>>()
 // @ts-expect-error nullIf can return null
 const nonNullableString: Expr<string> = CH.nullIf(CH.lit(""), "")
 // @ts-expect-error non-finite divisions serialize as null

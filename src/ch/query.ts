@@ -279,9 +279,9 @@ export interface CHQuery<
 
 	orderBy(...specs: Array<OrderBySpec<Output>>): CHQuery<Cols, Output, Joins, Route, Params>
 	/** Sort by expressions of the source's columns, selected or not: `orderBy(($) => [[$.CreatedAt, "desc"]])`. */
-	orderBy<Q = never>(
-		fn: ($: JoinedColumnAccessor<Cols, Joins>) => ReadonlyArray<readonly [Expr<any, Q>, "asc" | "desc"]>,
-	): CHQuery<Cols, Output, Joins, Route, Params | Q>
+	orderBy<const O extends ReadonlyArray<readonly [Expr<any>, "asc" | "desc"]>>(
+		fn: ($: JoinedColumnAccessor<Cols, Joins>) => O,
+	): CHQuery<Cols, Output, Joins, Route, Params | ParamsIn<O[number][0]>>
 
 	/** At most `n` rows: a non-negative integer. */
 	limit<N extends number>(n: RowCount<N>): CHQuery<Cols, Output, Joins, Route, Params>
