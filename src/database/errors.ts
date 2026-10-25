@@ -76,6 +76,21 @@ export class TenantScopeViolation extends Schema.TaggedError<TenantScopeViolatio
 	{ message: Schema.String, sql: Schema.String },
 ) {}
 
+/**
+ * A query returned a number of rows its cardinality helper does not allow:
+ * `runOne` wants exactly one, `runOption` at most one, `runNonEmpty` at least
+ * one. `rows` is how many came back. It is an error, not a defect, because the
+ * count depends on the data. The query ran as written, with no `LIMIT` added.
+ */
+export class ResultCardinalityError extends Schema.TaggedError<ResultCardinalityError>()(
+	"@maple-dev/effect-orm/ResultCardinalityError",
+	{
+		message: Schema.String,
+		expected: Schema.Literals(["one", "atMostOne", "nonEmpty"]),
+		rows: Schema.Number,
+	},
+) {}
+
 export type TransactionError =
 	| TransactionUnsupported
 	| TransactionOptionsRejected
