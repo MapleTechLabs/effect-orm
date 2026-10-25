@@ -10,7 +10,7 @@ const instant = DateTime.makeUnsafe("2026-01-02T00:00:00.789Z")
 describe("composed result codecs", () => {
 	it("keeps nullable inserted array elements", () => {
 		const value = CH.arrayPushFront(CH.arrayOf(CH.lit(1)), CH.nullIf(CH.lit(2), 2))
-		expectTypeOf(value).toEqualTypeOf<CH.Expr<ReadonlyArray<number | null>>>()
+		expectTypeOf(value).toEqualTypeOf<CH.Expr<ReadonlyArray<number | null>, CH.ClickHouseOnly>>()
 		expect(decode(value, [null, 1])).toEqual([null, 1])
 		const known = CH.arrayPushFront(CH.arrayOf(CH.lit(1)), CH.lit(2))
 		expect(Result.isFailure(Schema.decodeUnknownResult(known.schema!)([null]))).toBe(true)
@@ -42,8 +42,8 @@ describe("composed result codecs", () => {
 
 	it("propagates SQL NULL through string conversions", () => {
 		const value = CH.nullIf(CH.lit(1), 1)
-		expectTypeOf(CH.toString(value)).toEqualTypeOf<CH.Expr<string | null>>()
-		expectTypeOf(CH.hex(value)).toEqualTypeOf<CH.Expr<string | null>>()
+		expectTypeOf(CH.toString(value)).toEqualTypeOf<CH.Expr<string | null, CH.ClickHouseOnly>>()
+		expectTypeOf(CH.hex(value)).toEqualTypeOf<CH.Expr<string | null, CH.ClickHouseOnly>>()
 		expect(decode(CH.toString(value), null)).toBeNull()
 		expect(decode(CH.hex(value), null)).toBeNull()
 		expect(decode(CH.toString(CH.lit(1)), "1")).toBe("1")

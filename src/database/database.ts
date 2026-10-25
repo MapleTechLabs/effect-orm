@@ -18,7 +18,7 @@ import type { AnyInsert } from "../ch/insert"
 import type { CHDelete, CHUpdate } from "../ch/update"
 import type { CHQuery, NeedsSelect } from "../ch/query"
 import type { CHUnionQuery, QueryParams } from "../ch/union"
-import type { ParamsSatisfied } from "../ch/expr"
+import type { DialectSatisfied, ParamsSatisfied, SourcesSatisfied } from "../ch/expr"
 import {
 	DatabaseError,
 	TransactionClosed,
@@ -97,8 +97,14 @@ export interface TransactionInfo {
  */
 export class Transaction extends Context.Service<Transaction, TransactionInfo>()("@maple-dev/effect-orm/Transaction") {}
 
-export interface DatabaseApi {
-	readonly dialect: Dialect
+/**
+ * A database. `Functions` is its dialect's function set (`"postgres"` for a
+ * `Database` built with `postgresDialect`): `run` refuses, in the type, a query
+ * that uses another set's functions. `string`, the `Database` in context, does
+ * not check the set, only that a query does not mix two.
+ */
+export interface DatabaseApi<Functions extends string = string> {
+	readonly dialect: Dialect<Functions>
 	/**
 	 * Compile a query for this database's dialect, run it, and decode its rows.
 	 * A write returns its RETURNING rows, or none without `returning`.
@@ -106,7 +112,11 @@ export interface DatabaseApi {
 	 * runs as it is, if it was compiled for this dialect.
 	 */
 	readonly run: <Q extends Runnable, const Given extends object = {}>(
-		query: Q & RunCheck<Q> & ParamsSatisfied<QueryParams<Q>, Given>,
+		query: Q &
+			RunCheck<Q> &
+			ParamsSatisfied<QueryParams<Q>, Given> &
+			DialectSatisfied<QueryParams<Q>, Functions> &
+			SourcesSatisfied<QueryParams<Q>>,
 		params?: Given,
 	) => Effect.Effect<ReadonlyArray<RowOf<Q>>, DatabaseError | QueryBuilderError | CompiledQueryDecodeError>
 	/** Run a statement and return its rows, decoded through `schema` when given. */
@@ -139,9 +149,9 @@ export interface DatabaseApi {
 
 export class Database extends Context.Service<Database, DatabaseApi>()("@maple-dev/effect-orm/Database") {}
 
-export interface FromSqlClientOptions {
+export interface FromSqlClientOptions<Functions extends string = string> {
 	/** The dialect the database speaks: `postgresDialect` or `clickhouseDialect`. */
-	readonly dialect: Dialect
+	readonly dialect: Dialect<Functions>
 	/**
 	 * Wraps statements run by `execute`. Pass the ClickHouse client's
 	 * `asCommand`, whose query path asks for a JSON result a DDL statement does
@@ -202,8 +212,11 @@ const committed = (state: OpenState) =>
 		state.open = false
 	})
 
-/** A `Database` over an Effect `SqlClient`. */
-export const fromSqlClient = (sql: SqlClient.SqlClient, options: FromSqlClientOptions): DatabaseApi => {
+/** A `Database` over an Effect `SqlClient`, typed with its dialect's function set. */
+export const fromSqlClient = <Functions extends string = string>(
+	sql: SqlClient.SqlClient,
+	options: FromSqlClientOptions<Functions>,
+): DatabaseApi<Functions> => {
 	const { dialect } = options
 	const capabilities = dialect.transactions ?? noTransactions
 	const command = options.command ?? ((effect) => effect)
@@ -478,13 +491,17 @@ export const layerSqlClient = (options: FromSqlClientOptions): Layer.Layer<Datab
 	Layer.effect(
 		Database,
 		Effect.gen(function* () {
-			return fromSqlClient(yield* SqlClient.SqlClient, options)
+			return fromSqlClient<string>(yield* SqlClient.SqlClient, options)
 		}),
 	)
 
 /** `run` on the `Database` in context. */
 export const run = <Q extends Runnable, const Given extends object = {}>(
-	query: Q & RunCheck<Q> & ParamsSatisfied<QueryParams<Q>, Given>,
+	query: Q &
+		RunCheck<Q> &
+		ParamsSatisfied<QueryParams<Q>, Given> &
+		DialectSatisfied<QueryParams<Q>, string> &
+		SourcesSatisfied<QueryParams<Q>>,
 	params?: Given,
 ): Effect.Effect<ReadonlyArray<RowOf<Q>>, DatabaseError | QueryBuilderError | CompiledQueryDecodeError, Database> =>
 	Effect.flatMap(Effect.service(Database), (db) => db.run(query, params))

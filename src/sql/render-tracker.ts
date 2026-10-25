@@ -12,8 +12,12 @@
 // never mistaken for a scalar one wrapping a bare column. The checks built on
 // this can miss an error inside opaque SQL, never invent one.
 //
-// Rendering is synchronous, and every entry point saves and restores, so a
-// nested compile (a subquery) and a callback that throws leave no state behind.
+// The track is kept in the rendering fiber's context (see `fiber-local.ts`),
+// and every entry point saves and restores, so a nested compile (a subquery)
+// and a callback that throws leave no state behind.
+
+import { Context } from "effect"
+import { fiberLocal } from "./fiber-local"
 
 /** What one tracked render found. */
 export interface RenderTrack {
@@ -31,39 +35,30 @@ interface State {
 	hiddenDepth: number
 }
 
-let current: State | undefined
+const current = fiberLocal(
+	Context.Reference<State | undefined>("@maple-dev/effect-orm/internal/RenderTrack", { defaultValue: () => undefined }),
+)
 
 /** Render `body` with a fresh track, returning both. */
 export function track<A>(body: () => A): [A, RenderTrack] {
-	const previous = current
 	const state: State = { track: { aggregate: false, columns: new Set() }, aggregateDepth: 0, hiddenDepth: 0 }
-	current = state
-	try {
-		return [body(), state.track]
-	} finally {
-		current = previous
-	}
+	return [current.with(state, body), state.track]
 }
 
 /** Render `body` with no track: a nested query's columns are its own. */
 export function untracked<A>(body: () => A): A {
-	const previous = current
-	current = undefined
-	try {
-		return body()
-	} finally {
-		current = previous
-	}
+	return current.with(undefined, body)
 }
 
 /** A column identifier rendered. */
 export function noteColumn(name: string): void {
-	if (current !== undefined && current.aggregateDepth === 0 && current.hiddenDepth === 0) current.track.columns.add(name)
+	const state = current.get()
+	if (state !== undefined && state.aggregateDepth === 0 && state.hiddenDepth === 0) state.track.columns.add(name)
 }
 
 /** Render an aggregate call: it marks the clause, and its arguments are not bare columns. */
 export function inAggregate(render: () => string): string {
-	const state = current
+	const state = current.get()
 	if (state === undefined) return render()
 	if (state.hiddenDepth === 0) state.track.aggregate = true
 	state.aggregateDepth++
@@ -76,7 +71,7 @@ export function inAggregate(render: () => string): string {
 
 /** Render a window (`… OVER (…)`) or SQL the builder did not write: nothing inside is counted. */
 export function hidden(render: () => string): string {
-	const state = current
+	const state = current.get()
 	if (state === undefined) return render()
 	state.hiddenDepth++
 	try {

@@ -18,11 +18,18 @@ import { compile, known, type SqlFragment } from "../../sql/sql-fragment"
 import { hidden, inAggregate } from "../../sql/render-tracker"
 import { activeDialect } from "../dialect"
 import { QueryBuilderDefect } from "../errors"
-import { type Condition, type Expr, makeCond, makeExpr, makeUntypedExpr, type ParamsIn, toFragment } from "../expr"
+import { type Condition, type DialectEntry, type Expr, makeCond, makeExpr, makeUntypedExpr, type ParamsIn, toFragment } from "../expr"
 import type { FnResult } from "../define-fn"
 
 export type FunctionSet = "clickhouse" | "postgres"
 export type BuiltinKind = "scalar" | "aggregate" | "window"
+
+/** The entry a built-in function of `Set` adds to its result: none for `portable`. */
+export type SetEntry<Set extends FunctionSet | "portable"> = Set extends FunctionSet ? DialectEntry<Set> : never
+/** What a ClickHouse function adds to its result's params: see `DialectEntry`. */
+export type ClickHouseOnly = DialectEntry<"clickhouse">
+/** What a Postgres function adds to its result's params: see `DialectEntry`. */
+export type PostgresOnly = DialectEntry<"postgres">
 
 const setLabel: Record<FunctionSet, string> = {
 	clickhouse: "a ClickHouse function (from @maple-dev/effect-orm/clickhouse)",
@@ -41,7 +48,7 @@ const assertSet = (set: FunctionSet | "portable", name: string | undefined): voi
 }
 
 /** Built-in functions of one set and kind. `portable` renders for every dialect. */
-export function builtins(set: FunctionSet | "portable", kind: BuiltinKind) {
+export function builtins<const Set extends FunctionSet | "portable">(set: Set, kind: BuiltinKind) {
 	const wrap =
 		kind === "aggregate" ? inAggregate : kind === "window" ? hidden : (render: () => string): string => render()
 
@@ -74,7 +81,7 @@ export function builtins(set: FunctionSet | "portable", kind: BuiltinKind) {
 	function defineFn<Args extends unknown[], R>(
 		name: string,
 		result: FnResult<Args, R>,
-	): <A extends Args>(...args: A) => Expr<R, ParamsIn<A[number]>> {
+	): <A extends Args>(...args: A) => Expr<R, ParamsIn<A[number]> | SetEntry<Set>> {
 		return <A extends Args>(...args: A) =>
 			compileTypedFnCall<R>(
 				name,
@@ -83,7 +90,9 @@ export function builtins(set: FunctionSet | "portable", kind: BuiltinKind) {
 			)
 	}
 
-	function defineCondFn<Args extends unknown[]>(name: string): <A extends Args>(...args: A) => Condition<ParamsIn<A[number]>> {
+	function defineCondFn<Args extends unknown[]>(
+		name: string,
+	): <A extends Args>(...args: A) => Condition<ParamsIn<A[number]> | SetEntry<Set>> {
 		return <A extends Args>(...args: A) => compileFnCallCond(name, ...args)
 	}
 

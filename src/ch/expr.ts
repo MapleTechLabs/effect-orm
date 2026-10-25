@@ -101,21 +101,94 @@ export type ParamEntries<Name extends string, Value> = IsUnion<Name> extends tru
 type IsUnion<T, U = T> = [T] extends [never] ? false : T extends unknown ? ([U] extends [T] ? false : true) : never
 
 /** `P` with every entry made optional. */
-export type OptionalParams<P> = P extends ParamEntry<infer N, infer V> ? OptionalParamEntry<N, V> : never
+export type OptionalParams<P> = P extends ParamEntry<infer N, infer V>
+	? OptionalParamEntry<N, V>
+	: P extends DialectEntry | SourceEntry
+		? P
+		: never
 
 /** The names some entry of `P` requires. */
 type RequiredNames<P> = P extends ParamEntry ? (P extends { readonly optional: true } ? never : P["name"]) : never
 
-/** The params of an expression, condition, or a union or array of them. */
+/**
+ * The function set an expression's SQL is written in, carried beside its
+ * params: a ClickHouse-only function such as `countIf` gives its result a
+ * `DialectEntry<"clickhouse">`, and every expression and query built on it
+ * carries the entry on. `compile` and `DatabaseApi.run` check the entries
+ * against the dialect they write for (see `DialectSatisfied`). A portable
+ * function or operator adds none.
+ */
+export interface DialectEntry<Set extends string = string> {
+	readonly functions: Set
+}
+
+/**
+ * The row source a column ref reads from, carried beside its params: `$.Name`
+ * in `from(Events, "e")` has a `SourceEntry<"e">`. Each query removes the
+ * entries of its own FROM and JOIN sources from what it carries, so an entry
+ * left on a query names a source the query does not have. That is a column
+ * of another query's accessor, used outside the correlated subquery it belongs
+ * to; `compile` and `run` refuse it (see `SourcesSatisfied`).
+ */
+export interface SourceEntry<Name extends string = string> {
+	readonly source: Name
+}
+
+/** The `SourceEntry` of a ref to source `Name`: none for `never`, a ref that names no source. */
+export type SourceOf<Name extends string> = [Name] extends [never] ? never : SourceEntry<Name>
+
+/**
+ * `unknown` when the entries `P` read no source the query is missing;
+ * otherwise a property naming the source. An entry for `string` (a source
+ * whose name the type does not know) is not checked.
+ */
+export type SourcesSatisfied<P> = [MissingSources<P>] extends [never]
+	? unknown
+	: {
+			readonly sourceNotInQuery: `a column of \`${MissingSources<P>}\` is used, but no FROM or JOIN of the query is named \`${MissingSources<P>}\``
+		}
+
+type MissingSources<P> = P extends SourceEntry<infer Name> ? (string extends Name ? never : Name) : never
+
+/** The params of an expression, condition, or a union or array of them, with its dialect and source entries. */
 export type ParamsIn<X> = 0 extends 1 & X
 	? never
 	: X extends { readonly _params?: (entries: infer P) => void }
 		? 0 extends 1 & P
 			? never
-			: [P] extends [ParamEntry]
+			: [P] extends [ParamEntry | DialectEntry | SourceEntry]
 				? P
 				: never
 		: never
+
+/** The function sets the entries `P` need: `never` when they need none. */
+export type DialectsIn<P> = P extends DialectEntry<infer Set> ? Set : never
+
+type FunctionSetLabel<Set extends string> = Set extends "clickhouse" ? "ClickHouse" : Set extends "postgres" ? "Postgres" : Set
+
+/**
+ * `unknown` when the entries `P` can compile for a dialect whose function set
+ * is `Target`; otherwise a property saying why. A `Target` of `string` is a
+ * dialect that does not name its set, and is not checked. Functions of two sets
+ * in one query are refused for every target: no dialect renders both.
+ */
+export type DialectSatisfied<P, Target extends string> =
+	IsUnion<DialectsIn<P>> extends true
+		? {
+				readonly mixedDialects: `this query uses both ${JoinLabels<DialectsIn<P>>} functions; no dialect can compile it`
+			}
+		: string extends Target
+			? unknown
+			: [DialectsIn<P>] extends [Target]
+				? unknown
+				: {
+						readonly wrongDialect: `this query uses ${FunctionSetLabel<DialectsIn<P>>} functions; it cannot compile for the ${Target} dialect`
+					}
+
+/** `"ClickHouse and Postgres"` for a two-set union, in a fixed order. */
+type JoinLabels<Sets extends string> = [Sets] extends ["clickhouse" | "postgres"]
+	? "ClickHouse and Postgres"
+	: FunctionSetLabel<Sets>
 
 /** The value a param needs: every entry's type for that name, intersected
  *  per entry (a `boolean` entry stays `boolean`, not `true & false`). */
@@ -132,7 +205,9 @@ type UnionToIntersection<U> = (U extends unknown ? (u: U) => void : never) exten
  * The params object a set of entries asks for: one key per name. A name used
  * with two value types needs a value of both.
  */
-export type ParamsRecord<P> = [P] extends [never]
+export type ParamsRecord<P> = ParamsRecordOf<Extract<P, ParamEntry>>
+
+type ParamsRecordOf<P> = [P] extends [never]
 	? {}
 	: [P] extends [ParamEntry]
 		? Simplify<
@@ -149,7 +224,7 @@ type Simplify<T> = { [K in keyof T]: T[K] } & {}
  * otherwise a property spelling out the params object that is needed. Extra
  * keys are allowed, so one params object can serve several queries.
  */
-export type ParamsSatisfied<P, Given> = [P] extends [never]
+export type ParamsSatisfied<P, Given> = [Extract<P, ParamEntry>] extends [never]
 	? unknown
 	: Given extends ParamsRecord<P>
 		? unknown
@@ -252,8 +327,10 @@ export type Quotient<L, R> = [R] extends [number]
 			: number | Extract<L, null>
 	: number | null
 
-export interface ColumnRef<Name extends string, ColType extends CHType<string, any>> extends Expr<
-	InferTS<ColType>
+/** A column of a query's source. `Source` is the source's name in the query (see `SourceEntry`). */
+export interface ColumnRef<Name extends string, ColType extends CHType<string, any>, Source extends string = never> extends Expr<
+	InferTS<ColType>,
+	SourceOf<Source>
 > {
 	readonly columnName: Name
 	/**

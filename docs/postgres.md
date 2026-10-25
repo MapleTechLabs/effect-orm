@@ -209,10 +209,11 @@ document shape, or to name the bad row in its own error); every other read stays
 The shared operators (`eq`, `in_`, `like`, `ilike`, `and`, `or`, `not`, arithmetic, `lit`) work
 unchanged. `/postgres` exports only functions Postgres has, plus `nullIf`, which renders the
 same on both. The ClickHouse catalog on `/clickhouse` (`quantile`, `toStartOfInterval`, its
-`count()`, …) writes ClickHouse SQL, so a query that uses one and is compiled for Postgres is a
-`QueryBuilderDefect` naming the function; the Postgres functions above fail the same way on
-ClickHouse. A custom `Dialect` opts in with `functions: "clickhouse"` or `"postgres"`; without
-it, nothing is checked.
+`count()`, …) writes ClickHouse SQL, so a query that uses one is a type error where it is
+compiled or run for Postgres, and the Postgres functions above are one on ClickHouse (see
+[Checked in the type](./params-and-compilation.md#checked-in-the-type)). Past the types, the
+compile still fails with a `QueryBuilderDefect` naming the function. A custom `Dialect` opts in
+with `functions: "clickhouse"` or `"postgres"`; without it, nothing is checked.
 
 ## Known differences
 

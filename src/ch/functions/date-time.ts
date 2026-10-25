@@ -4,7 +4,7 @@ import { schemaOf } from "../define-fn"
 import { str, compile } from "../../sql/sql-fragment"
 import type { Expr } from "../expr"
 import * as T from "../types"
-import { builtins } from "./builtin"
+import { builtins, type ClickHouseOnly } from "./builtin"
 
 const { lazy } = builtins("clickhouse", "scalar")
 
@@ -27,7 +27,7 @@ const sameDateTime = <T extends DateTimeValue>(col: Expr<T>) =>
 export function toStartOfInterval<T extends DateTimeValue = DateTime.Utc, Q1 = never, Q2 = never>(
 	col: DateTimeExpr<T, Q1>,
 	seconds: number | Expr<number, Q2>,
-): DateTimeExpr<T, Q1 | Q2> {
+): DateTimeExpr<T, Q1 | Q2 | ClickHouseOnly> {
 	const secStr = () =>
 		typeof seconds === "number"
 			? String(Math.round(seconds))
@@ -47,7 +47,7 @@ export function toStartOfInterval<T extends DateTimeValue = DateTime.Utc, Q1 = n
  */
 export function toStartOfHour<T extends DateTimeValue = DateTime.Utc, Q = never>(
 	col: DateTimeExpr<T, Q>,
-): DateTimeExpr<T, Q> {
+): DateTimeExpr<T, Q | ClickHouseOnly> {
 	return makeExpr(lazy(() => `toStartOfHour(${compile(col.toFragment())})`), sameDateTime(col))
 }
 
@@ -58,7 +58,7 @@ export function toStartOfHour<T extends DateTimeValue = DateTime.Utc, Q = never>
  */
 export function toStartOfMinute<T extends DateTimeValue = DateTime.Utc, Q = never>(
 	col: DateTimeExpr<T, Q>,
-): DateTimeExpr<T, Q> {
+): DateTimeExpr<T, Q | ClickHouseOnly> {
 	return makeExpr(lazy(() => `toStartOfMinute(${compile(col.toFragment())})`), sameDateTime(col))
 }
 
@@ -67,7 +67,7 @@ export function toStartOfMinute<T extends DateTimeValue = DateTime.Utc, Q = neve
  * anomaly detector's seasonal-naive baseline to select "matched hours" (same
  * hour-of-day ±1) across the trailing week without storing baselines anywhere.
  */
-export function toHour<Q = never>(col: DateTimeExpr<DateTimeValue, Q>): Expr<number, Q> {
+export function toHour<Q = never>(col: DateTimeExpr<DateTimeValue, Q>): Expr<number, Q | ClickHouseOnly> {
 	return makeExpr(lazy(() => `toHour(${compile(col.toFragment())})`), T.uint8.schema)
 }
 
@@ -77,7 +77,7 @@ export function toHour<Q = never>(col: DateTimeExpr<DateTimeValue, Q>): Expr<num
  * "have we already sealed this hour" check) without forcing the consumer to
  * parse RFC3339.
  */
-export function toUnixTimestamp<Q = never>(col: DateTimeExpr<DateTimeValue, Q>): Expr<number, Q> {
+export function toUnixTimestamp<Q = never>(col: DateTimeExpr<DateTimeValue, Q>): Expr<number, Q | ClickHouseOnly> {
 	return makeExpr(lazy(() => `toUnixTimestamp(${compile(col.toFragment())})`), T.uint32.schema)
 }
 
@@ -85,14 +85,14 @@ export function toUnixTimestamp<Q = never>(col: DateTimeExpr<DateTimeValue, Q>):
  * `toUnixTimestamp64Nano(expr)` — convert DateTime64 to a nanosecond epoch.
  * Used for counter-rate delta windows where sub-second scrape spacing matters.
  */
-export function toUnixTimestamp64Nano<Q = never>(col: DateTimeExpr<DateTimeValue, Q>): Expr<number, Q> {
+export function toUnixTimestamp64Nano<Q = never>(col: DateTimeExpr<DateTimeValue, Q>): Expr<number, Q | ClickHouseOnly> {
 	return makeExpr(lazy(() => `toUnixTimestamp64Nano(${compile(col.toFragment())})`), T.uint64.schema)
 }
 
 export function intervalSub<T extends DateTimeValue = DateTime.Utc, Q1 = never, Q2 = never>(
 	col: DateTimeExpr<T, Q1>,
 	seconds: number | Expr<number, Q2>,
-): DateTimeExpr<T, Q1 | Q2> {
+): DateTimeExpr<T, Q1 | Q2 | ClickHouseOnly> {
 	const secStr = () =>
 		typeof seconds === "number"
 			? String(Math.round(seconds))
@@ -104,7 +104,7 @@ export function intervalSub<T extends DateTimeValue = DateTime.Utc, Q1 = never, 
 export function intervalAdd<T extends DateTimeValue = DateTime.Utc, Q1 = never, Q2 = never>(
 	col: DateTimeExpr<T, Q1>,
 	seconds: number | Expr<number, Q2>,
-): DateTimeExpr<T, Q1 | Q2> {
+): DateTimeExpr<T, Q1 | Q2 | ClickHouseOnly> {
 	const secStr = () =>
 		typeof seconds === "number"
 			? String(Math.round(seconds))
@@ -113,7 +113,7 @@ export function intervalAdd<T extends DateTimeValue = DateTime.Utc, Q1 = never, 
 }
 
 /** `formatDateTime(expr, 'format')` — format a DateTime/DateTime64 as a string. */
-export function formatDateTime<Q = never>(col: DateTimeExpr<DateTimeValue, Q>, format: string): Expr<string, Q> {
+export function formatDateTime<Q = never>(col: DateTimeExpr<DateTimeValue, Q>, format: string): Expr<string, Q | ClickHouseOnly> {
 	return makeExpr(
 		lazy(() => `formatDateTime(${compile(col.toFragment())}, ${compile(str(format))})`),
 		T.string.schema,
@@ -126,9 +126,9 @@ export function formatDateTime<Q = never>(col: DateTimeExpr<DateTimeValue, Q>, f
  * require a Date/DateTime/DateTime64 argument and won't implicitly parse a
  * string literal.
  */
-export function toDateTime<T extends DateTimeValue, Q = never>(col: Expr<T, Q>): DateTimeExpr<T, Q>
-export function toDateTime<Q = never>(col: Expr<number, Q>): DateTimeExpr<DateTime.Utc, Q>
-export function toDateTime(col: Expr<any>): Expr<any> {
+export function toDateTime<T extends DateTimeValue, Q = never>(col: Expr<T, Q>): DateTimeExpr<T, Q | ClickHouseOnly>
+export function toDateTime<Q = never>(col: Expr<number, Q>): DateTimeExpr<DateTime.Utc, Q | ClickHouseOnly>
+export function toDateTime(col: Expr<any>): Expr<any, ClickHouseOnly> {
 	// String inputs retain the string flavour; numeric epoch inputs decode to UTC.
 	const input = schemaOf(col)
 	const stringInput = input !== undefined && isStringType(SchemaAST.toType(input.ast))

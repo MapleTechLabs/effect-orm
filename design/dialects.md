@@ -46,7 +46,10 @@ What we deliberately do not copy:
    every `Str` fragment, column literal, and inline param. `compile` installs the dialect for
    the length of the compile (`withDialect`, the same save/restore pattern as
    `withSubqueryCompiler`), because literals are written inside the query callbacks, which
-   have no dialect argument. The `__PARAM_` safety is now enforced rather than assumed: a
+   have no dialect argument. The installed values live in the compiling fiber's context
+   (`src/sql/fiber-local.ts`), not in module state, so two compiles in two fibers cannot see
+   each other's dialect. The dialect is `CurrentDialect`, a `Context.Reference` a caller can
+   also provide. The `__PARAM_` safety is now enforced rather than assumed: a
    literal that contains the marker fails with `InvalidLiteral`, so a dialect with weaker
    escaping cannot turn a value into a placeholder.
 3. **Identifier quoting (done).** Column refs are `Ident` fragments carrying their qualifier
@@ -82,7 +85,11 @@ What we deliberately do not copy:
 - The package is still named for ClickHouse and the root entry still exports the ClickHouse
   function catalog. Renaming, or a `core` entry without ClickHouse functions, is a packaging
   decision for a later release.
-- The ClickHouse function catalog writes ClickHouse SQL whatever the dialect. Functions could
-  refuse to compile under another dialect instead of producing SQL that fails at the server.
+- The ClickHouse function catalog writes ClickHouse SQL whatever the dialect. A built-in
+  function now refuses to compile under another dialect, and is a type error there too: its
+  result carries a `DialectEntry` beside its params, which `compile` and
+  `DatabaseApi<Functions>.run` check against the target. The `Database` in context has no
+  dialect in its type, so it checks only that a query does not mix two. A `CompiledQuery` does
+  not carry its dialect in the type yet.
 - MySQL or SQLite would need `?` placeholders (`reuse: false` already exists) and their own
   types and functions; nothing in the core should need to change.

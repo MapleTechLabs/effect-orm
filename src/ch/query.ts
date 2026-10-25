@@ -26,7 +26,7 @@
 
 import type { ColumnDefs, CHType, InferTS, OutputToColumnDefs, NullableColumnDefs } from "./types"
 import type { Table } from "./table"
-import type { Expr, Condition, ColumnRef, ParamsIn, Widen } from "./expr"
+import type { Expr, Condition, ColumnRef, ParamsIn, SourceEntry, Widen } from "./expr"
 import { makeColumnRef } from "./expr"
 import type { TenantScope } from "./compile"
 
@@ -51,17 +51,33 @@ const selectEvery =
 	($: any): Record<string, any> =>
 		Object.fromEntries(columns.map((column) => [column, $[column]]))
 
-export type ColumnAccessor<Cols extends ColumnDefs> = {
-	readonly [K in keyof Cols & string]: ColumnRef<K, Cols[K]>
+/** The columns of one source. `Source` is its name in the query, which each ref carries (see `SourceEntry`). */
+export type ColumnAccessor<Cols extends ColumnDefs, Source extends string = never> = {
+	readonly [K in keyof Cols & string]: ColumnRef<K, Cols[K], Source>
 }
 
 /** Combined accessor: main table columns + nested alias accessors for joins. */
 export type JoinedColumnAccessor<
 	Cols extends ColumnDefs,
 	Joins extends Record<string, ColumnDefs>,
-> = ColumnAccessor<Cols> & {
-	readonly [A in keyof Joins & string]: ColumnAccessor<Joins[A]>
+	Source extends string = never,
+> = ColumnAccessor<Cols, Source> & {
+	readonly [A in keyof Joins & string]: ColumnAccessor<Joins[A], A>
 }
+
+/**
+ * `P` without the source entries of `Sources`: what a query carries on from a
+ * callback over its own sources. What is left names a source it does not have.
+ */
+export type BindSources<P, Sources extends string> = Exclude<P, SourceEntry<Sources>>
+
+/** The sources a query provides: its FROM source and its join aliases. */
+type OwnSources<Source extends string, Joins> = Source | (keyof Joins & string)
+
+/** A query's entries after a join under `Alias`: the join provides `Alias`, also to refs used before it. */
+type JoinParams<Params, OnParams, Source extends string, Joins, Alias extends string> =
+	| BindSources<Params, Alias>
+	| BindSources<OnParams, OwnSources<Source, Joins> | Alias>
 
 type SelectRecord = Record<string, Expr<any>>
 
@@ -99,10 +115,13 @@ export interface LockClause extends LockOptions {
 }
 
 /** Callback for ON conditions — receives main and joined column accessors. */
-export type JoinOnCallback<MainCols extends ColumnDefs, JoinedCols extends ColumnDefs, P = never> = (
-	main: ColumnAccessor<MainCols>,
-	joined: ColumnAccessor<JoinedCols>,
-) => Condition<P>
+export type JoinOnCallback<
+	MainCols extends ColumnDefs,
+	JoinedCols extends ColumnDefs,
+	P = never,
+	MainSource extends string = never,
+	JoinedSource extends string = never,
+> = (main: ColumnAccessor<MainCols, MainSource>, joined: ColumnAccessor<JoinedCols, JoinedSource>) => Condition<P>
 
 // Query state (runtime storage)
 
@@ -114,7 +133,7 @@ interface TypedJoinClause {
 	readonly innerQuery?: CHQuery<any, any, any>
 	readonly alias: string
 	/** ON callback, evaluated during compilation with source codecs. Omitted for CROSS JOIN. */
-	readonly on?: JoinOnCallback<any, any>
+	readonly on?: JoinOnCallback<any, any, any, any, any>
 	/** The joined table's tenant column, if it declared one. */
 	readonly tenantColumn?: string
 	/** The joined table's column definitions, for decoding joined selections. */
@@ -229,36 +248,50 @@ export interface CHQuery<
 	Output extends Record<string, any> = {},
 	Joins extends Record<string, ColumnDefs> = {},
 	Route extends string | undefined = string | undefined,
-	/** The `param.*` placeholders the query uses, as `ParamEntry`s. */
+	/** The `param.*` placeholders the query uses, as `ParamEntry`s, and its dialect and missing-source entries. */
 	Params = never,
+	/**
+	 * The FROM source's name: the alias, else the table name. Its refs carry it
+	 * (see `SourceEntry`). `never`, the default, is a query type written without
+	 * one, which takes a query of any source.
+	 */
+	Source extends string = never,
 > {
 	/** @internal — runtime query state */
 	readonly _state: CHQueryState
 	/** phantom */
-	readonly _phantom?: { cols: Cols; output: Output; joins: Joins; route: Route; params: (entries: Params) => void }
+	readonly _phantom?: {
+		cols: Cols
+		output: Output
+		joins: Joins
+		route: Route
+		params: (entries: Params) => void
+		/** Contravariant like `params`: a query of any source is a `CHQuery` written without one. */
+		source: (name: Source) => void
+	}
 
 	/** Select every column of the FROM table, as drizzle's bare `select()` does. Output keys are the column keys. */
-	select(): CHQuery<Cols, { readonly [K in keyof Cols]: InferTS<Cols[K]> }, Joins, Route, Params>
+	select(): CHQuery<Cols, { readonly [K in keyof Cols]: InferTS<Cols[K]> }, Joins, Route, Params, Source>
 
 	/** Select specific columns by name. Output keys match column names. */
 	select<K extends keyof Cols & string>(
 		...columns: K[]
-	): CHQuery<Cols, { readonly [P in K]: InferTS<Cols[P]> }, Joins, Route, Params>
+	): CHQuery<Cols, { readonly [P in K]: InferTS<Cols[P]> }, Joins, Route, Params, Source>
 
 	/** Select computed expressions via callback. */
 	select<S extends SelectRecord>(
-		fn: ($: JoinedColumnAccessor<Cols, Joins>) => S,
-	): CHQuery<Cols, InferOutput<S>, Joins, Route, Params | ParamsIn<S[keyof S]>>
+		fn: ($: JoinedColumnAccessor<Cols, Joins, Source>) => S,
+	): CHQuery<Cols, InferOutput<S>, Joins, Route, Params | BindSources<ParamsIn<S[keyof S]>, OwnSources<Source, Joins>>, Source>
 
 	/**
 	 * Filter rows: conditions AND-joined, an `undefined` one skipped. Calling it
 	 * again adds conditions, ANDed with the earlier ones.
 	 */
 	where<const C extends ReadonlyArray<Condition | undefined>>(
-		fn: ($: JoinedColumnAccessor<Cols, Joins>) => C,
-	): CHQuery<Cols, Output, Joins, Route, Params | ParamsIn<C[number]>>
+		fn: ($: JoinedColumnAccessor<Cols, Joins, Source>) => C,
+	): CHQuery<Cols, Output, Joins, Route, Params | BindSources<ParamsIn<C[number]>, OwnSources<Source, Joins>>, Source>
 
-	groupBy(...keys: Array<keyof Output & string>): CHQuery<Cols, Output, Joins, Route, Params>
+	groupBy(...keys: Array<keyof Output & string>): CHQuery<Cols, Output, Joins, Route, Params, Source>
 
 	/**
 	 * Post-aggregation filter, applied after `GROUP BY`.
@@ -274,51 +307,51 @@ export interface CHQuery<
 	 * Calling it again adds conditions, as `where` does.
 	 */
 	having<const C extends ReadonlyArray<Condition | undefined>>(
-		fn: ($: JoinedColumnAccessor<Cols, Joins>) => C,
-	): CHQuery<Cols, Output, Joins, Route, Params | ParamsIn<C[number]>>
+		fn: ($: JoinedColumnAccessor<Cols, Joins, Source>) => C,
+	): CHQuery<Cols, Output, Joins, Route, Params | BindSources<ParamsIn<C[number]>, OwnSources<Source, Joins>>, Source>
 
-	orderBy(...specs: Array<OrderBySpec<Output>>): CHQuery<Cols, Output, Joins, Route, Params>
+	orderBy(...specs: Array<OrderBySpec<Output>>): CHQuery<Cols, Output, Joins, Route, Params, Source>
 	/** Sort by expressions of the source's columns, selected or not: `orderBy(($) => [[$.CreatedAt, "desc"]])`. */
-	orderBy<Q = never>(
-		fn: ($: JoinedColumnAccessor<Cols, Joins>) => ReadonlyArray<readonly [Expr<any, Q>, "asc" | "desc"]>,
-	): CHQuery<Cols, Output, Joins, Route, Params | Q>
+	orderBy<const O extends ReadonlyArray<readonly [Expr<any>, "asc" | "desc"]>>(
+		fn: ($: JoinedColumnAccessor<Cols, Joins, Source>) => O,
+	): CHQuery<Cols, Output, Joins, Route, Params | BindSources<ParamsIn<O[number][0]>, OwnSources<Source, Joins>>, Source>
 
 	/** At most `n` rows: a non-negative integer. */
-	limit<N extends number>(n: RowCount<N>): CHQuery<Cols, Output, Joins, Route, Params>
+	limit<N extends number>(n: RowCount<N>): CHQuery<Cols, Output, Joins, Route, Params, Source>
 
 	/** Skip `n` rows: a non-negative integer. */
-	offset<N extends number>(n: RowCount<N>): CHQuery<Cols, Output, Joins, Route, Params>
+	offset<N extends number>(n: RowCount<N>): CHQuery<Cols, Output, Joins, Route, Params, Source>
 
-	format(fmt: "JSON" | "JSONEachRow"): CHQuery<Cols, Output, Joins, Route, Params>
+	format(fmt: "JSON" | "JSONEachRow"): CHQuery<Cols, Output, Joins, Route, Params, Source>
 
 	/** `SELECT DISTINCT`: drop duplicate output rows. */
-	distinct(): CHQuery<Cols, Output, Joins, Route, Params>
+	distinct(): CHQuery<Cols, Output, Joins, Route, Params, Source>
 
 	/**
 	 * `SELECT DISTINCT ON (keys)`: keep the first row of each group of these
 	 * output aliases, in ORDER BY order (Postgres wants the keys to lead the
 	 * ORDER BY). Replaces `distinct()`.
 	 */
-	distinctOn(...keys: [keyof Output & string, ...Array<keyof Output & string>]): CHQuery<Cols, Output, Joins, Route, Params>
+	distinctOn(...keys: [keyof Output & string, ...Array<keyof Output & string>]): CHQuery<Cols, Output, Joins, Route, Params, Source>
 
 	/**
 	 * `FOR UPDATE`: lock the selected rows until the transaction ends. Run it
 	 * inside `Database.transaction`. Postgres only; replaces any earlier lock.
 	 */
-	forUpdate(options?: LockOptions): CHQuery<Cols, Output, Joins, Route, Params>
+	forUpdate(options?: LockOptions): CHQuery<Cols, Output, Joins, Route, Params, Source>
 	/** `FOR NO KEY UPDATE`: as `forUpdate`, without blocking inserts that reference the rows. */
-	forNoKeyUpdate(options?: LockOptions): CHQuery<Cols, Output, Joins, Route, Params>
+	forNoKeyUpdate(options?: LockOptions): CHQuery<Cols, Output, Joins, Route, Params, Source>
 	/** `FOR SHARE`: a shared lock, which blocks writers but not other sharers. */
-	forShare(options?: LockOptions): CHQuery<Cols, Output, Joins, Route, Params>
+	forShare(options?: LockOptions): CHQuery<Cols, Output, Joins, Route, Params, Source>
 	/** `FOR KEY SHARE`: the weakest lock, blocking only deletes and key updates. */
-	forKeyShare(options?: LockOptions): CHQuery<Cols, Output, Joins, Route, Params>
+	forKeyShare(options?: LockOptions): CHQuery<Cols, Output, Joins, Route, Params, Source>
 
 	/**
 	 * Tag this query with an execution route, carried through to the compiled
 	 * query as a type-level fact. The tag is opaque to the builder: what routes
 	 * exist, and what an executor does with one, is the caller's vocabulary.
 	 */
-	route<NewRoute extends string>(route: NewRoute): CHQuery<Cols, Output, Joins, NewRoute, Params>
+	route<NewRoute extends string>(route: NewRoute): CHQuery<Cols, Output, Joins, NewRoute, Params, Source>
 
 	/**
 	 * Declare that this query deliberately reads across every tenant, forcing
@@ -329,26 +362,33 @@ export interface CHQuery<
 	 * "someone forgot the tenant filter" until an author says which. Executors
 	 * are expected to refuse these on the ordinary read path.
 	 */
-	crossTenant(): CHQuery<Cols, Output, Joins, Route, Params>
+	crossTenant(): CHQuery<Cols, Output, Joins, Route, Params, Source>
 
 	// Type-safe joins with Table
 
 	innerJoin<JName extends string, JCols extends ColumnDefs, Alias extends string, OnParams = never>(
 		table: Table<JName, JCols>,
 		alias: FreshAlias<Alias, Cols, Joins>,
-		on: JoinOnCallback<Cols, JCols, OnParams>,
-	): CHQuery<Cols, Output, Joins & { readonly [K in Alias]: JCols }, Route, Params | OnParams>
+		on: JoinOnCallback<Cols, JCols, OnParams, Source, Alias>,
+	): CHQuery<Cols, Output, Joins & { readonly [K in Alias]: JCols }, Route, JoinParams<Params, OnParams, Source, Joins, Alias>, Source>
 
 	leftJoin<JName extends string, JCols extends ColumnDefs, Alias extends string, OnParams = never>(
 		table: Table<JName, JCols>,
 		alias: FreshAlias<Alias, Cols, Joins>,
-		on: JoinOnCallback<Cols, JCols, OnParams>,
-	): CHQuery<Cols, Output, Joins & { readonly [K in Alias]: NullableColumnDefs<JCols> }, Route, Params | OnParams>
+		on: JoinOnCallback<Cols, JCols, OnParams, Source, Alias>,
+	): CHQuery<
+		Cols,
+		Output,
+		Joins & { readonly [K in Alias]: NullableColumnDefs<JCols> },
+		Route,
+		JoinParams<Params, OnParams, Source, Joins, Alias>,
+		Source
+	>
 
 	crossJoin<JName extends string, JCols extends ColumnDefs, Alias extends string>(
 		table: Table<JName, JCols>,
 		alias: FreshAlias<Alias, Cols, Joins>,
-	): CHQuery<Cols, Output, Joins & { readonly [K in Alias]: JCols }, Route, Params>
+	): CHQuery<Cols, Output, Joins & { readonly [K in Alias]: JCols }, Route, BindSources<Params, Alias>, Source>
 
 	// Type-safe joins with subquery (CHQuery)
 
@@ -362,13 +402,14 @@ export interface CHQuery<
 	>(
 		query: CHQuery<JCols, JOutput, JJoins, string | undefined, JParams> & NeedsSelect<JOutput>,
 		alias: FreshAlias<Alias, Cols, Joins>,
-		on: JoinOnCallback<Cols, OutputToColumnDefs<JOutput>, OnParams>,
+		on: JoinOnCallback<Cols, OutputToColumnDefs<JOutput>, OnParams, Source, Alias>,
 	): CHQuery<
 		Cols,
 		Output,
 		Joins & { readonly [K in Alias]: OutputToColumnDefs<JOutput> },
 		Route,
-		Params | JParams | OnParams
+		JoinParams<Params, OnParams, Source, Joins, Alias> | JParams,
+		Source
 	>
 
 	leftJoinQuery<
@@ -381,13 +422,14 @@ export interface CHQuery<
 	>(
 		query: CHQuery<JCols, JOutput, JJoins, string | undefined, JParams> & NeedsSelect<JOutput>,
 		alias: FreshAlias<Alias, Cols, Joins>,
-		on: JoinOnCallback<Cols, OutputToColumnDefs<JOutput>, OnParams>,
+		on: JoinOnCallback<Cols, OutputToColumnDefs<JOutput>, OnParams, Source, Alias>,
 	): CHQuery<
 		Cols,
 		Output,
 		Joins & { readonly [K in Alias]: NullableColumnDefs<OutputToColumnDefs<JOutput>> },
 		Route,
-		Params | JParams | OnParams
+		JoinParams<Params, OnParams, Source, Joins, Alias> | JParams,
+		Source
 	>
 
 	crossJoinQuery<
@@ -399,7 +441,7 @@ export interface CHQuery<
 	>(
 		query: CHQuery<JCols, JOutput, JJoins, string | undefined, JParams> & NeedsSelect<JOutput>,
 		alias: FreshAlias<Alias, Cols, Joins>,
-	): CHQuery<Cols, Output, Joins & { readonly [K in Alias]: OutputToColumnDefs<JOutput> }, Route, Params | JParams>
+	): CHQuery<Cols, Output, Joins & { readonly [K in Alias]: OutputToColumnDefs<JOutput> }, Route, BindSources<Params, Alias> | JParams, Source>
 
 	/**
 	 * Add a CTE (WITH clause). The CTE is prepended to the compiled query, and
@@ -413,7 +455,7 @@ export interface CHQuery<
 	withCTE<CTEOutput extends Record<string, any>, CTEParams = never>(
 		name: string,
 		query: CHQuery<any, CTEOutput, any, string | undefined, CTEParams> & NeedsSelect<CTEOutput>,
-	): CHQuery<Cols, Output, Joins, Route, Params | CTEParams>
+	): CHQuery<Cols, Output, Joins, Route, Params | CTEParams, Source>
 
 	/**
 	 * Attach a CTE from pre-compiled SQL.
@@ -428,7 +470,7 @@ export interface CHQuery<
 		name: string,
 		sql: string,
 		options?: { readonly tenantScope?: TenantScope },
-	): CHQuery<Cols, Output, Joins, Route, Params>
+	): CHQuery<Cols, Output, Joins, Route, Params, Source>
 }
 
 // Type utilities for extracting output types from queries
@@ -487,7 +529,7 @@ export function createQualifiedColumnAccessor(
 	alias: string,
 	tenantColumn?: string,
 	columns?: ColumnDefs,
-): ColumnAccessor<any> {
+): ColumnAccessor<any, any> {
 	const cache = new Map<string, ColumnRef<string, CHType<string, any>>>()
 	const get = (prop: string) => {
 		let ref = cache.get(prop)
@@ -498,7 +540,7 @@ export function createQualifiedColumnAccessor(
 		return ref
 	}
 
-	return new Proxy<ColumnAccessor<any>>({} as ColumnAccessor<any>, {
+	return new Proxy<ColumnAccessor<any, any>>({} as ColumnAccessor<any, any>, {
 		get: (_target, prop) => (typeof prop === "string" ? get(prop) : undefined),
 		...spreadColumns(columns, get),
 	})
@@ -570,7 +612,7 @@ function makeQuery<
 	Output extends Record<string, any>,
 	Joins extends Record<string, ColumnDefs>,
 	Route extends string | undefined,
->(state: CHQueryState): CHQuery<Cols, Output, Joins, Route, any> {
+>(state: CHQueryState): CHQuery<Cols, Output, Joins, Route, any, any> {
 	return {
 		_state: state,
 
@@ -740,10 +782,10 @@ function makeQuery<
 
 // Entry points
 
-export function from<Name extends string, Cols extends ColumnDefs>(
+export function from<Name extends string, Cols extends ColumnDefs, const Alias extends string = Name>(
 	table: Table<Name, Cols>,
-	alias?: string,
-): CHQuery<Cols, {}, {}, undefined> {
+	alias?: Alias,
+): CHQuery<Cols, {}, {}, undefined, never, Alias> {
 	return makeQuery({
 		tableName: table.name,
 		tableAlias: alias,
@@ -777,7 +819,7 @@ export function fromQuery<
 >(
 	query: CHQuery<InnerCols, InnerOutput, InnerJoins, string | undefined, InnerParams> & NeedsSelect<InnerOutput>,
 	alias: Alias,
-): CHQuery<OutputToColumnDefs<InnerOutput>, {}, {}, undefined, InnerParams> {
+): CHQuery<OutputToColumnDefs<InnerOutput>, {}, {}, undefined, InnerParams, Alias> {
 	return makeQuery({
 		tableName: alias,
 		columns: {},
@@ -811,7 +853,7 @@ export function fromQuery<
 export function fromUnion<Output extends Record<string, any>, Alias extends string, UnionParams = never>(
 	union: import("./union").CHUnionQuery<Output, UnionParams>,
 	alias: Alias,
-): CHQuery<OutputToColumnDefs<Output>, {}, {}, undefined, UnionParams> {
+): CHQuery<OutputToColumnDefs<Output>, {}, {}, undefined, UnionParams, Alias> {
 	return makeQuery({
 		tableName: alias,
 		columns: {},

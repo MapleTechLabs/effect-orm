@@ -6,7 +6,8 @@
 // written, how resolved param values reach the server, which clauses exist, and
 // how a portable param kind encodes. See `design/dialects.md`.
 
-import type { Schema } from "effect"
+import { Context, type Schema } from "effect"
+import { fiberLocal } from "../sql/fiber-local"
 import { quoteClickHouseString } from "../sql/sql-fragment"
 import { activeSqlSyntax, withSqlSyntax, type SqlSyntax } from "../sql/sql-syntax"
 import { QueryBuilderError } from "./errors"
@@ -130,7 +131,7 @@ export const noTransactions: DialectTransactions = {
  * finished text, so a value that spelled one would be rewritten too. A literal
  * that does is refused at compile time rather than trusted.
  */
-export interface Dialect extends Omit<SqlSyntax, "dialect"> {
+export interface Dialect<Functions extends string = string> extends Omit<SqlSyntax, "dialect"> {
 	/** Shown in errors. */
 	readonly name: string
 	readonly params: ParamStyle
@@ -149,12 +150,17 @@ export interface Dialect extends Omit<SqlSyntax, "dialect"> {
 	 * `/clickhouse` entry's functions) or `postgres` (`@maple-dev/effect-orm/postgres`).
 	 * A built-in function from another set fails to compile. Absent means
 	 * unchecked: a custom dialect says which set it renders, if either.
+	 *
+	 * The type parameter is the same name at the type level: a query that uses
+	 * a function of another set is a type error where it is compiled or run
+	 * for a `Dialect<"postgres">` (see `DialectSatisfied`). A plain `Dialect`
+	 * is not checked by the type.
 	 */
-	readonly functions?: string
+	readonly functions?: Functions
 }
 
 /** ClickHouse, with params written into the SQL as literals. The default. */
-export const clickhouseDialect: Dialect = {
+export const clickhouseDialect: Dialect<"clickhouse"> = {
 	name: "clickhouse",
 	quoteIdent: (name) => name,
 	quoteString: quoteClickHouseString,
@@ -175,28 +181,35 @@ export const clickhouseDialect: Dialect = {
 	functions: "clickhouse",
 }
 
-// The dialect of the enclosing compile, beside the syntax installed for the
-// fragment renderer. Same save/restore discipline as `withSqlSyntax`.
-let current: Dialect | undefined
+/**
+ * The dialect a compile writes SQL for, when it is not passed as `options.dialect`.
+ *
+ * Provide it to an Effect (`Effect.provideService(CurrentDialect, postgresDialect)`)
+ * and every `compile` inside writes for that dialect. Each fiber has its own, so
+ * compiles for two dialects can run at the same time. A compile also installs its
+ * own dialect here for the queries nested in it. Absent, `compile` uses its
+ * entry's dialect: ClickHouse from `/clickhouse`, Postgres from `/postgres`.
+ */
+export const CurrentDialect = Context.Reference<Dialect | undefined>("@maple-dev/effect-orm/CurrentDialect", {
+	defaultValue: () => undefined,
+})
+
+// Beside the syntax installed for the fragment renderer, with the same
+// save/restore discipline as `withSqlSyntax`.
+const current = fiberLocal(CurrentDialect)
 
 /** The dialect of the enclosing compile, or ClickHouse outside one. */
-export const currentDialect = (): Dialect => current ?? clickhouseDialect
+export const currentDialect = (): Dialect => current.get() ?? clickhouseDialect
 
 /** The dialect of the enclosing compile, or `undefined` outside one. */
-export const activeDialect = (): Dialect | undefined => current
+export const activeDialect = (): Dialect | undefined => current.get()
 
 /** Run `body` with `dialect`'s syntax installed, literals checked as above. */
 export function withDialect<A>(dialect: Dialect, body: () => A): A {
 	// A nested compile for the dialect already installed keeps the checked
 	// syntax that is there instead of wrapping it again.
-	if (current === dialect && activeSqlSyntax() !== undefined) return body()
-	const previous = current
-	current = dialect
-	try {
-		return withSqlSyntax(checkedSyntax(dialect), body)
-	} finally {
-		current = previous
-	}
+	if (current.get() === dialect && activeSqlSyntax() !== undefined) return body()
+	return current.with(dialect, () => withSqlSyntax(checkedSyntax(dialect), body))
 }
 
 /** `dialect.literal`, checked as above. For params written in after the
