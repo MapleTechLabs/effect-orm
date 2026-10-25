@@ -2,7 +2,8 @@
 
 Status: first slice built (issue #79; `docs/relations.md`). `one` and `many` relations over
 single-column keys, `with` to any depth, `where` and `orderBy` per level, `limit` and `offset` on
-the top level. Section 5 lists what is not built.
+the top level. Relation filters and counts (issue #80) are in section 6. Section 5 lists what is
+not built.
 
 ## 1. Goal
 
@@ -103,6 +104,60 @@ grandchild reached through a shared table.
 | `limit` per parent on a nested level | Needs `row_number()` over a partition, or a lateral join |
 | Composite keys | The loader would match tuples; no issue asks for it yet |
 | `findFirst` | `findMany` with `limit: 1`; cardinality helpers are #69 |
-| `_count`, `some` / `every` / `none` | Issue #80 |
+| `_count` of a `one` relation | `r.author.some()` says the same; no call site needs a 0/1 count |
+| Relation filters in `update` / `delete` | Their accessor is not qualified, so there is no alias to correlate on; refused |
+| `orderBy` a relation count | Select `count()` on a builder query and order by its alias |
 | Params in nested `where` | `findMany` takes no params; values go in as literals |
 | SQLite, MySQL, D1 | Not on main yet; the SQL here is plain `IN`, so no dialect work is expected |
+
+## 6. Relation filters and counts
+
+```ts
+Db.findMany(schema.users, {
+	where: ($, r) => [$.orgId.eq(orgId), r.posts.some(($) => [$.published.eq(false)])],
+	_count: { posts: true },
+})
+PG.from(Users).select(($) => ({ id: $.id, posts: Db.related(schema.users, $).posts.count() }))
+```
+
+- **Filters are correlated subqueries.** `some` is `EXISTS`, `none` is `NOT EXISTS`, `every` is
+  `NOT EXISTS (… AND NOT (where))`, as Prisma compiles them. A filter is a condition inside one
+  statement, so it cannot be a separate level: the outer rows it filters do not exist yet. The
+  subquery reads the target under the alias `<outer alias>__<relation>`, which differs from every
+  enclosing alias, so a self-relation needs nothing special.
+- **`Db.related(schema.table, $)` is the one entry point.** It builds the filters from the `$` of
+  any select over the table, so the builder and `findMany` share one implementation. `findMany`
+  passes it as the second argument of every `where`.
+- **`_count` in `findMany` is a grouped level, not a subquery.** `SELECT <to>, count(*) …
+  WHERE <to> IN (<keys>) GROUP BY <to>`, with the same tenant pin as a loaded level. This keeps
+  #79's model: no correlation, so it runs on every dialect and every ClickHouse version, and the
+  count decodes through one codec. `r.posts.count()` is the correlated form, for builder queries,
+  wrapped in `coalesce(…, 0)` because ClickHouse returns NULL for a correlated count over no rows.
+
+### Tenant scope inside the subquery
+
+A subquery's scope counts as one more source of the outer query (docs/tenant-scoping.md), so a
+subquery that pins no tenant made every filter `"cross-tenant"`. Writing the tenant value into
+the subquery is not possible: the filter is built before the outer `where` is known, and the
+value can be a param.
+
+So when both tables declare a tenant column, the filter writes
+`<inner tenant> = <outer tenant>` into the subquery and marks the subquery with the outer column
+(`markCorrelatedTenant`, internal). Compiled as a subquery of the outer query, the marked query's
+main source starts bound to a token for that outer column. If the subquery is single-tenant on
+that token, the outer compile counts it as a source on the outer tenant column, which the outer
+`where` binds like any other. Nested filters chain: the inner filter's token resolves against the
+middle subquery's own main column.
+
+This is sound because only the filters set the mark, and they always write the equality the mark
+claims. A subquery whose own `where` pins a literal tenant is bound to that literal instead, and
+the outer query must pin the same one. A marked query compiled alone ignores the mark. The write
+paths (insert, update, delete) do not read the mark, so a marked subquery there stays
+`"cross-tenant"`.
+
+### ClickHouse
+
+Correlated subqueries run on ClickHouse 25 and later. On 26.8 (CI): `EXISTS` / `NOT EXISTS`,
+nested, and a correlated count in `WHERE` work. A correlated scalar subquery in `SELECT` next to a
+`WHERE` fails with `NOT_IMPLEMENTED` unless the correlated outer columns are also selected. The
+docs say to select them, or to use `_count`, which needs no correlation.
