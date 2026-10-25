@@ -28,7 +28,7 @@ export const pinned: Record<string, ReadonlyArray<unknown>> = {
 		}),
 		// fromquery-select-all.
 		{ ...rows({ k: "rows", select: [["id", { k: "col", col: "Id" }]], distinct: false, orderBy: [] }), wrap: "all" },
-		// clickhouse-server-and-absorption.
+		// A ClickHouse server bug (a one-argument and()): run again without the rewrite, rows still checked (dialects/clickhouse.ts).
 		{
 			...rows({ k: "rows", select: [["id", { k: "col", col: "Id" }]], distinct: false, orderBy: [] }),
 			where: [
