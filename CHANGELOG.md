@@ -1,5 +1,42 @@
 # @maple-dev/effect-orm
 
+## 0.8.0
+
+### Minor Changes
+
+- ec94fd2: `Db.afterCommit(effect)` queues work, such as an SMS or an HTTP call, to run after the outermost transaction commits, and never after a rollback. It delegates to Effect's `SqlClient.afterCommit` and, like `requireTransaction`, adds `Transaction` to the requirements, so queueing outside a transaction does not compile. A failing hook does not fail the committed transaction: its cause goes to the `ErrorReporter`s in context and to an error log, and the next hook still runs.
+- 2ca58aa: Require Effect 4.0.6 (`effect ^4.0.6` peer). Effect now fails a transaction whose COMMIT failed
+  with a `SqlError` instead of dying; `transaction` still reports it as `TransactionCommitFailed`.
+  `ClickhouseHttpClient` names its driver `"clickhouse-http"` (`SqlClient.driver`), and Effect's own
+  statement span is now named after the database (`db.namespace`) rather than `sql.execute`.
+- d8bae8c: Add the `/sqlite` query entry with SQLite codecs, functions and positional bindings. Use
+  `sqliteDialect` with an Effect SQLite SqlClient, or `d1Dialect` for Cloudflare D1's binding limit
+  and explicit refusal of interactive transactions. `timestamp` stores SQLite's own
+  `YYYY-MM-DD HH:MM:SS.SSS` UTC text, so it compares correctly with what `strftime` writes; `LIKE`
+  escapes with `\` as on every dialect; text with U+0000 and integers past 2^53 are refused rather
+  than silently changed.
+- 8eb7200: `effect-orm generate` supports `dialect: "sqlite"`. It diffs `SQLite.table` definitions against
+  the migrations folder and writes `<timestamp>_<name>/migration.sql` plus `snapshot.json`, the
+  drizzle-kit 1.0 layout that Alchemy's D1 resource applies. `ALTER TABLE` adds, drops and renames
+  where SQLite allows it; other column, primary key and UNIQUE changes rebuild the table. Renames
+  need a `confirm_rename` hint. `generate --baseline --from-drizzle` adopts a drizzle-kit 1.0
+  SQLite folder. Snapshots gain a `sqlite` dialect. `/migrate` refuses SQLite folders for now.
+- b4b84c3: `SQLite.table(name, { columns, primaryKey, indexes })` declares a SQLite table with its DDL:
+  `NOT NULL` from the column type, single and composite primary keys, literal and expression
+  defaults (`SQLite.timestampNow` for a `timestamp` column), unique columns, and named indexes and
+  unique indexes. `sqliteEntitiesOf` and
+  `renderSqliteSchema` from `/schema` check a schema and write its `CREATE TABLE` and
+  `CREATE INDEX` statements. `table(name, columns, options?)` and
+  `table(name, { external: true, columns })` stay query-only.
+
+### Patch Changes
+
+- a3bd763: On ClickHouse, a `unionAll` ordered by a numeric column whose branches may differ in type (`Id + 1`
+  and `Id - 1`, or a `UInt32` and an `Int64` column) no longer fails with "Data types Variant/Dynamic
+  are not allowed in ORDER BY keys". The union's ORDER BY sorts such a column by
+  `CAST(x AS Nullable(Float64)), accurateCastOrNull(x, 'Int128')`, which keeps integers past 2^53 in exact order; the
+  values themselves are not converted.
+
 ## 0.7.2
 
 ### Patch Changes
