@@ -1,7 +1,11 @@
 // Diff two SQLite schemas into migration ops.
 //
 // Pure and offline, like `diffPgSchemas`, with the same data-loss rule:
-// dropping a table or a column needs a `confirm_data_loss` hint.
+// dropping a table or a column needs a `confirm_data_loss` hint. A change
+// SQLite's ALTER TABLE can make becomes an ALTER TABLE; any other change to a
+// table becomes one `rebuild_table` op that carries the whole new table (see
+// `sqlite-ops.ts`). Renames are never guessed: a `confirm_rename` hint turns
+// a drop plus an add into a RENAME.
 
 import { canonicalJson, entityKey } from "./entities"
 import { hintKey, type DiffResult, type Hint, type UnsupportedChange } from "./diff"
@@ -14,9 +18,9 @@ const same = (a: unknown, b: unknown): boolean => canonicalJson(a) === canonical
 const pick = <K extends SqliteSchemaEntity["kind"]>(entities: ReadonlyArray<SqliteSchemaEntity>, kind: K) =>
 	entities.filter((e): e is Extract<SqliteSchemaEntity, { kind: K }> => e.kind === kind)
 
-// Indexes go first, so no dropped column is still indexed; new tables and
-// columns exist before the indexes that need them; a rebuilt table's indexes
-// are created after it.
+// Renames first, so later ops use the new names. Index drops before column
+// drops, so no dropped column is still indexed. Tables and columns exist
+// before the indexes that need them, and a rebuilt table before its indexes.
 const opOrder: Record<SqliteMigrationOp["op"], number> = {
 	rename_table: 0,
 	rename_column: 1,
@@ -97,7 +101,6 @@ export const diffSqliteSchemas = (
 		unsupported,
 	}
 }
-
 
 interface TableState {
 	readonly table: SqliteTableEntity
