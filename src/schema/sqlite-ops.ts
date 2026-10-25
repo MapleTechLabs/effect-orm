@@ -75,7 +75,10 @@ export const renderSqliteOp = (op: SqliteMigrationOp): ReadonlyArray<string> => 
 		case "drop_table":
 			return [`DROP TABLE IF EXISTS ${sqliteIdent(op.name)}`]
 		case "rename_table":
-			return [`ALTER TABLE ${sqliteIdent(op.from)} RENAME TO ${sqliteIdent(op.to)}`]
+			// SQLite refuses a rename to the same name in another case ("already another table"): go through a temporary one.
+			return op.from.toLowerCase() === op.to.toLowerCase()
+				? [`ALTER TABLE ${sqliteIdent(op.from)} RENAME TO ${sqliteIdent(`__rename_${op.to}`)}`, `ALTER TABLE ${sqliteIdent(`__rename_${op.to}`)} RENAME TO ${sqliteIdent(op.to)}`]
+				: [`ALTER TABLE ${sqliteIdent(op.from)} RENAME TO ${sqliteIdent(op.to)}`]
 		case "add_column":
 			return [`ALTER TABLE ${sqliteIdent(op.column.table)} ADD COLUMN ${renderSqliteColumnDefinition(op.column)}`]
 		case "drop_column":

@@ -40,6 +40,9 @@ export const diffSqliteSchemas = (
 	next: ReadonlyArray<SqliteSchemaEntity>,
 	hints: ReadonlyArray<Hint> = [],
 ): DiffResult<SqliteMigrationOp> => {
+	// SQLite compares table and column names without case: `Name` to `name` is the same column,
+	// renamed, never a drop and an add (which would collide). No hint needed: nothing is lost.
+	hints = [...hints, ...caseOnlyRenames(original, next, hints)]
 	const given = new Set(hints.map(hintKey))
 	const ops: Array<SqliteMigrationOp> = []
 	const missingHints: Array<Hint> = []
@@ -144,6 +147,8 @@ const diffTable = (
 	const added = after.columns.filter((c) => !old.has(c.name))
 	const dropped = before.columns.filter((c) => !kept.has(c.name))
 	const changed = after.columns.filter((c) => old.has(c.name) && !same(definition(old.get(c.name)!), definition(c)))
+	// A new type rewrites the column's values by SQLite's affinity rules ('007' becomes 7): confirm it like a drop.
+	const retyped = changed.filter((c) => old.get(c.name)!.type !== c.type)
 	const needsRebuild =
 		changed.length > 0 ||
 		!same(before.table.primaryKey, after.table.primaryKey) ||
@@ -159,11 +164,40 @@ const diffTable = (
 			uniques: after.uniques,
 			copy: after.columns.filter((c) => old.has(c.name)).map((c) => c.name),
 		}
-		confirm(dropped.map((c) => dropHint(c.name)), rebuild)
+		confirm([...dropped, ...retyped].map((c) => dropHint(c.name)), rebuild)
 		return
 	}
 	for (const column of added) ops.push({ op: "add_column", column })
 	for (const column of dropped) confirm(dropHint(column.name), { op: "drop_column", table: name, name: column.name })
+}
+
+/**
+ * `confirm_rename` hints for names that differ only in case, tables first: a
+ * next table or column with no exact match whose name, ignoring case, is an
+ * old one's that is gone. Columns are matched in the table's new name.
+ */
+const caseOnlyRenames = (prev: ReadonlyArray<SqliteSchemaEntity>, next: ReadonlyArray<SqliteSchemaEntity>, hints: ReadonlyArray<Hint>): Array<Hint> => {
+	const renames: Array<Hint> = []
+	const tables = (entities: ReadonlyArray<SqliteSchemaEntity>) => pick(entities, "table").map((t) => t.name)
+	const match = (before: ReadonlyArray<string>, after: ReadonlyArray<string>) =>
+		after.flatMap((name) => {
+			if (before.includes(name)) return []
+			const old = before.find((b) => b.toLowerCase() === name.toLowerCase() && !after.includes(b))
+			return old === undefined ? [] : [[old, name] as const]
+		})
+	const hinted = new Map(hints.flatMap((h) => (h.type === "confirm_rename" && h.kind === "table" ? [[h.to, h.entity] as const] : [])))
+	const tableRenames = match(tables(prev).filter((t) => ![...hinted.values()].includes(t)), tables(next).filter((t) => !hinted.has(t)))
+	for (const [from, to] of tableRenames) renames.push({ type: "confirm_rename", kind: "table", entity: from, to })
+	const source = new Map([...hinted, ...tableRenames.map(([from, to]) => [to, from] as const)])
+	const columnsOf = (entities: ReadonlyArray<SqliteSchemaEntity>, table: string) => pick(entities, "column").filter((c) => c.table === table).map((c) => c.name)
+	const hintedColumns = new Set(hints.flatMap((h) => (h.type === "confirm_rename" && h.kind === "column" ? [h.entity] : [])))
+	for (const table of tables(next)) {
+		const before = columnsOf(prev, source.get(table) ?? table)
+		for (const [from, to] of match(before, columnsOf(next, table))) {
+			if (!hintedColumns.has(`${table}.${from}`)) renames.push({ type: "confirm_rename", kind: "column", entity: `${table}.${from}`, to })
+		}
+	}
+	return renames
 }
 
 const byName = (uniques: ReadonlyArray<SqliteUniqueEntity>) =>

@@ -119,7 +119,9 @@ it.each(rebuilds)("rebuilds the table for %s, keeps its rows and recreates its i
 	const index = `indexes: [SQLite.index("links_url", ["url"])],`
 	await generateFrom(links(before, index))
 	const v2 = links(after, index)
-	const second = await generateFrom(v2)
+	// A new column type rewrites values by SQLite's affinity rules, so it is confirmed like a drop.
+	const hints = before.includes("hits") ? [{ type: "confirm_data_loss" as const, kind: "column" as const, entity: "links.hits" }] : []
+	const second = await generateFrom(v2, { hints })
 	expect(second.plan.map((p) => p.label)).toEqual(["rebuild", "metadata"])
 	expect(second.plan[0]!.sql).toEqual([
 		"PRAGMA foreign_keys=OFF",
@@ -175,11 +177,47 @@ it("creates and drops indexes without touching the table", async () => {
 it("asks to confirm a column a rebuild leaves behind", async () => {
 	await generateFrom(links(`id: SQLite.text, url: SQLite.text, note: SQLite.nullable(SQLite.text)`))
 	const v2 = links(`id: SQLite.text, url: SQLite.integer`)
-	await expect(generateFrom(v2)).rejects.toMatchObject({ code: "missing_hints", details: [expect.stringContaining("links.note")] })
-	const second = await generateFrom(v2, { hints: [{ type: "confirm_data_loss", kind: "column", entity: "links.note" }] })
+	// `note` is left behind, and `url` changes type (text to integer), which rewrites its values.
+	await expect(generateFrom(v2)).rejects.toMatchObject({ code: "missing_hints", details: [expect.stringMatching(/links\.note.*links\.url/)] })
+	const second = await generateFrom(v2, {
+		hints: [
+			{ type: "confirm_data_loss", kind: "column", entity: "links.note" },
+			{ type: "confirm_data_loss", kind: "column", entity: "links.url" },
+		],
+	})
 	expect(second.plan.map((p) => p.label)).toEqual(["rebuild"])
 	expect(second.plan[0]!.sql[2]).toBe('INSERT INTO "__new_links"("id", "url") SELECT "id", "url" FROM "links"')
 	await expectMigratedToEqualFresh(v2)
+})
+
+it("asks before a type change rewrites a column's values", async () => {
+	await generateFrom(links(`id: SQLite.text, code: SQLite.text`))
+	const v2 = links(`id: SQLite.text, code: SQLite.integer`)
+	await expect(generateFrom(v2)).rejects.toMatchObject({ code: "missing_hints", details: [expect.stringContaining("links.code")] })
+	await generateFrom(v2, { hints: [{ type: "confirm_data_loss", kind: "column", entity: "links.code" }] })
+	// What the hint confirms: SQLite's integer affinity reads '007' as 7.
+	const seed = [`INSERT INTO "links" ("id", "code") VALUES ('a', '007')`]
+	expect(await rowsAfter(allStatements(seed), 'SELECT "code" FROM "links"')).toEqual([{ code: 7 }])
+})
+
+it("renames a table or column whose name changes only in case, with no hint and no data lost", async () => {
+	await generateFrom(links(`id: SQLite.text, Url: SQLite.text`))
+	const v2 = `
+export const Links = SQLite.table("Links", {
+	columns: { id: SQLite.text, url: SQLite.text },
+	primaryKey: ["id"],
+})`
+	const second = await generateFrom(v2)
+	// SQLite refuses `links` to `Links` in one step, so it goes through a temporary name.
+	expect(second.plan.flatMap((p) => p.sql)).toEqual([
+		'ALTER TABLE "links" RENAME TO "__rename_Links"',
+		'ALTER TABLE "__rename_Links" RENAME TO "Links"',
+		'ALTER TABLE "Links" RENAME COLUMN "Url" TO "url"',
+	])
+	await expectMigratedToEqualFresh(v2)
+	expect(await rowsAfter(allStatements([`INSERT INTO "links" ("id", "Url") VALUES ('a', 'https://a')`]), 'SELECT "id", "url" FROM "Links"')).toEqual([
+		{ id: "a", url: "https://a" },
+	])
 })
 
 it("drops a table only once the data loss is confirmed", async () => {

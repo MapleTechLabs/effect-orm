@@ -287,6 +287,8 @@ const shapeOf = async (db: Engine): Promise<Shape> => {
 interface RenamePlan {
 	readonly table: boolean
 	readonly column: number | null
+	/** Rename by case only (`t0` to `T0`), with no hint: SQLite names ignore case, so the diff must see a rename. */
+	readonly caseOnly?: boolean
 }
 
 /**
@@ -298,11 +300,12 @@ interface RenamePlan {
 const withRenames = (before: SchemaPlan, after: SchemaPlan, plan: RenamePlan | undefined) => {
 	const shared = after.find((t) => before.some((b) => b.name === t.name))
 	const old = before.find((b) => b.name === shared?.name)
-	const tableTo = shared !== undefined && plan?.table === true ? `${shared.name}r` : undefined
+	const caseOnly = plan?.caseOnly === true
+	const tableTo = shared !== undefined && plan?.table === true ? (caseOnly ? shared.name.toUpperCase() : `${shared.name}r`) : undefined
 	const kept = shared === undefined || old === undefined ? [] : shared.columns.filter((c) => old.columns.some((o) => o.name === c.name)).map((c) => c.name)
 	const columnFrom = plan?.column != null && kept.length > 0 ? kept[plan.column % kept.length] : undefined
 	const table = (name: string) => (name === shared?.name && tableTo !== undefined ? tableTo : name)
-	const column = (tableName: string, name: string) => (tableName === shared?.name && name === columnFrom ? `${name}r` : name)
+	const column = (tableName: string, name: string) => (tableName === shared?.name && name === columnFrom ? (caseOnly ? name.toUpperCase() : `${name}r`) : name)
 	const renamed: SchemaPlan = after.map((t) =>
 		t !== shared
 			? t
@@ -313,7 +316,7 @@ const withRenames = (before: SchemaPlan, after: SchemaPlan, plan: RenamePlan | u
 					indexes: t.indexes.map((index) => ({ ...index, columns: index.columns.map((c) => column(t.name, c)) })),
 				},
 	)
-	const hints = [
+	const hints = caseOnly ? [] : [
 		...(tableTo !== undefined ? [{ type: "confirm_rename" as const, kind: "table" as const, entity: shared!.name, to: tableTo }] : []),
 		...(columnFrom !== undefined ? [{ type: "confirm_rename" as const, kind: "column" as const, entity: `${table(shared!.name)}.${columnFrom}`, to: `${columnFrom}r` }] : []),
 	]
@@ -334,8 +337,11 @@ const migrates = async ([before, after, count, nulls, renamePlan]: Input, engine
 		...renameHints,
 		...before.flatMap((t) => [
 			{ type: "confirm_data_loss" as const, kind: "table" as const, entity: t.name },
+			// Old and new names: a drop is named in the table's new name, a type change also in the column's.
 			...t.columns.flatMap((c) =>
-				[...new Set([t.name, table(t.name)])].map((name) => ({ type: "confirm_data_loss" as const, kind: "column" as const, entity: `${name}.${c.name}` })),
+				[...new Set([t.name, table(t.name)])].flatMap((name) =>
+					[...new Set([c.name, column(t.name, c.name)])].map((col) => ({ type: "confirm_data_loss" as const, kind: "column" as const, entity: `${name}.${col}` })),
+				),
 			),
 		]),
 	]
@@ -385,7 +391,7 @@ const input = fc.tuple(
 	schemaPlan,
 	fc.integer({ min: 0, max: 3 }),
 	fc.array(fc.boolean(), { minLength: 1, maxLength: 5 }),
-	fc.record({ table: fc.boolean(), column: fc.option(fc.nat(), { nil: null }) }),
+	fc.record({ table: fc.boolean(), column: fc.option(fc.nat(), { nil: null }), caseOnly: fc.boolean() }),
 )
 
 describe("SQLite migrations", () => {

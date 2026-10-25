@@ -446,7 +446,7 @@ What each change becomes:
 | New table, dropped table | `CREATE TABLE`, `DROP TABLE` (confirm the data loss) |
 | New column | `ALTER TABLE ... ADD COLUMN`, when SQLite allows it: the column is nullable or has a literal default, and is not in the primary key or a UNIQUE constraint. Otherwise a rebuild |
 | Dropped column | `ALTER TABLE ... DROP COLUMN` (confirm the data loss), unless it is in the primary key or a UNIQUE constraint. Otherwise a rebuild |
-| A column's type, nullability or default; the primary key; a UNIQUE column | A table rebuild |
+| A column's type, nullability or default; the primary key; a UNIQUE column | A table rebuild. A new type also needs `confirm_data_loss` for the column: the copy converts values by SQLite's type affinity (`'007'` to `7`) |
 | New or changed index | `DROP INDEX`, `CREATE [UNIQUE] INDEX` |
 | Renamed table or column | `ALTER TABLE ... RENAME`, only with a `confirm_rename` hint |
 
@@ -477,8 +477,10 @@ is the rowid and is copied.
 last in the database and first-to-last order differs from a fresh create. Name columns in
 `INSERT` and `SELECT`, as the builder does.
 
-A rename is never guessed. Without a hint it reads as a drop plus an add, and the drop asks for
-confirmation. Pass the rename instead:
+A rename is never guessed, except by case: SQLite compares table and column names without case,
+so `Url` to `url` (or `links` to `Links`) is the same name, renamed with no hint and no data lost.
+Any other rename without a hint reads as a drop plus an add, and the drop asks for confirmation.
+Pass the rename instead:
 
 ```json
 [
