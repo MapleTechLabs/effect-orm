@@ -14,6 +14,7 @@
 
 import type { DateTime } from "effect"
 import { describe, expect, it } from "@effect/vitest"
+import { expectTypeOf } from "expect-type"
 import { Effect, Exit, Option, Schema } from "effect"
 import * as CH from "./ch/index"
 import * as T from "./ch/types"
@@ -395,6 +396,24 @@ describe("docs/joins-and-subqueries.md", () => {
 				"INNER JOIN services AS s ON (e.Name = s.Name AND e.OrgId = s.OrgId) WHERE e.OrgId = 'org_123'",
 		)
 		expect(compileCHUnsafe(query, {}).tenantScope).toBe("single-tenant")
+	})
+
+	it("A where before select narrows a joined column", () => {
+		const query = CH.from(Events, "e")
+			.leftJoin(Services, "s", (main, joined) => main.Name.eq(joined.Name).and(main.OrgId.eq(joined.OrgId)))
+			.where(($) => [$.OrgId.eq("org_123"), $.s.Team.isNotNull()])
+			.select(($) => ({ name: $.Name, team: $.s.Team }))
+		const compiled = compileCHUnsafe(query, {})
+
+		expectTypeOf(compiled.decodeRows).returns.toEqualTypeOf<
+			Effect.Effect<ReadonlyArray<{ readonly name: string; readonly team: string }>, CH.CompiledQueryDecodeError>
+		>()
+		expect(oneLine(compiled.sql)).toBe(
+			"SELECT e.Name AS name, s.Team AS team FROM events AS e " +
+				"LEFT JOIN services AS s ON (e.Name = s.Name AND e.OrgId = s.OrgId) " +
+				"WHERE e.OrgId = 'org_123' AND s.Team IS NOT NULL",
+		)
+		expect(Exit.isFailure(Effect.runSyncExit(compiled.decodeRows([{ name: "api", team: null }])))).toBe(true)
 	})
 
 	it("Subquery in FROM uses flat accessors", () => {

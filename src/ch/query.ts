@@ -26,7 +26,7 @@
 
 import type { ColumnDefs, CHType, InferTS, OutputToColumnDefs, NullableColumnDefs } from "./types"
 import type { Table } from "./table"
-import type { Expr, Condition, ColumnRef, ParamsIn, Widen } from "./expr"
+import type { AllFacts, Expr, Condition, ColumnRef, ParamsIn, Widen } from "./expr"
 import { makeColumnRef } from "./expr"
 import type { TenantScope } from "./compile"
 
@@ -51,8 +51,9 @@ const selectEvery =
 	($: any): Record<string, any> =>
 		Object.fromEntries(columns.map((column) => [column, $[column]]))
 
-export type ColumnAccessor<Cols extends ColumnDefs> = {
-	readonly [K in keyof Cols & string]: ColumnRef<K, Cols[K]>
+/** A source's columns. `Source`, a join alias, makes them record `NotNullFact`s. */
+export type ColumnAccessor<Cols extends ColumnDefs, Source extends string = never> = {
+	readonly [K in keyof Cols & string]: ColumnRef<K, Cols[K], Source>
 }
 
 /** Combined accessor: main table columns + nested alias accessors for joins. */
@@ -60,8 +61,28 @@ export type JoinedColumnAccessor<
 	Cols extends ColumnDefs,
 	Joins extends Record<string, ColumnDefs>,
 > = ColumnAccessor<Cols> & {
-	readonly [A in keyof Joins & string]: ColumnAccessor<Joins[A]>
+	readonly [A in keyof Joins & string]: ColumnAccessor<Joins[A], A>
 }
+
+/** A column type without its NULL. */
+type NonNullColumn<C> = C extends CHType<infer Tag, infer A, infer I> ? CHType<Tag, NonNullable<A>, NonNullable<I>> : C
+
+/**
+ * The joined sources once the facts `F` (`{ alias: { column: true } }`) hold:
+ * each proven column loses its `| null`. Unchanged when nothing is proven, so
+ * a query without facts keeps the exact `Joins` type it had.
+ */
+export type NarrowJoins<Joins extends Record<string, ColumnDefs>, F> = {} extends F
+	? Joins
+	: {
+			readonly [A in keyof Joins]: {
+				readonly [K in keyof Joins[A]]: A extends keyof F
+					? K extends keyof F[A]
+						? NonNullColumn<Joins[A][K]>
+						: Joins[A][K]
+					: Joins[A][K]
+			}
+		}
 
 type SelectRecord = Record<string, Expr<any>>
 
@@ -133,6 +154,12 @@ export interface CHQueryState {
 	 */
 	readonly selectAll?: true
 	readonly whereFn?: ($: any) => ReadonlyArray<Condition | undefined>
+	/**
+	 * The WHERE conditions there were when `select` was called. Their facts
+	 * narrow the SELECT's joined columns, as `where`'s type narrows them for a
+	 * later `select` only.
+	 */
+	readonly selectWhereFn?: ($: any) => ReadonlyArray<Condition | undefined>
 	readonly groupByKeys: string[]
 	/** Post-aggregation filter. Deliberately NOT consulted when deriving tenant
 	 *  scope — see `having()` on the interface. */
@@ -253,10 +280,16 @@ export interface CHQuery<
 	/**
 	 * Filter rows: conditions AND-joined, an `undefined` one skipped. Calling it
 	 * again adds conditions, ANDed with the earlier ones.
+	 *
+	 * A condition that proves a joined column not NULL (`$.o.Id.isNotNull()`,
+	 * `$.o.Status.eq(…)`, alone or under `and`) narrows that column for the
+	 * calls after this one: a later `select` reads it without `| null`, in the
+	 * type and in the row schema. A `select` made before the `where` keeps
+	 * `| null`.
 	 */
 	where<const C extends ReadonlyArray<Condition | undefined>>(
 		fn: ($: JoinedColumnAccessor<Cols, Joins>) => C,
-	): CHQuery<Cols, Output, Joins, Route, Params | ParamsIn<C[number]>>
+	): CHQuery<Cols, Output, NarrowJoins<Joins, AllFacts<C>>, Route, Params | ParamsIn<C[number]>>
 
 	groupBy(...keys: Array<keyof Output & string>): CHQuery<Cols, Output, Joins, Route, Params>
 
@@ -487,12 +520,14 @@ export function createQualifiedColumnAccessor(
 	alias: string,
 	tenantColumn?: string,
 	columns?: ColumnDefs,
+	/** Set for a joined source: its columns record `NotNullFact`s under this alias. */
+	factSource?: string,
 ): ColumnAccessor<any> {
 	const cache = new Map<string, ColumnRef<string, CHType<string, any>>>()
 	const get = (prop: string) => {
 		let ref = cache.get(prop)
 		if (!ref) {
-			ref = makeColumnRef(`${alias}.${prop}`, prop, tenantColumn, columns?.[prop])
+			ref = makeColumnRef(`${alias}.${prop}`, prop, tenantColumn, columns?.[prop], factSource)
 			cache.set(prop, ref)
 		}
 		return ref
@@ -531,7 +566,7 @@ export function createJoinedColumnAccessor<Cols extends ColumnDefs, Joins extend
 
 			if (aliasSet.has(prop)) {
 				// Return a nested proxy for the joined table's columns
-				cached = createQualifiedColumnAccessor(prop, joinTenantColumns?.[prop], joinColumns?.[prop])
+				cached = createQualifiedColumnAccessor(prop, joinTenantColumns?.[prop], joinColumns?.[prop], prop)
 				cache.set(prop, cached)
 				return cached
 			}
@@ -575,15 +610,16 @@ function makeQuery<
 		_state: state,
 
 		select(...args: any[]): any {
+			const selected = { ...state, selectWhereFn: state.whereFn }
 			if (args.length === 0) {
 				return state.fromQuery !== undefined || state.fromUnion !== undefined
-					? makeQuery({ ...state, selectFn: undefined, selectAll: true })
-					: makeQuery({ ...state, selectFn: selectEvery(Object.keys(state.columns)) })
+					? makeQuery({ ...selected, selectFn: undefined, selectAll: true })
+					: makeQuery({ ...selected, selectFn: selectEvery(Object.keys(state.columns)) })
 			}
 			// String overload: select("Col1", "Col2") → select($ => ({ Col1: $.Col1, Col2: $.Col2 }))
-			if (typeof args[0] === "string") return makeQuery({ ...state, selectFn: selectEvery(args as string[]), selectAll: undefined })
+			if (typeof args[0] === "string") return makeQuery({ ...selected, selectFn: selectEvery(args as string[]), selectAll: undefined })
 			// Callback overload: select($ => ({ ... }))
-			return makeQuery({ ...state, selectFn: args[0], selectAll: undefined })
+			return makeQuery({ ...selected, selectFn: args[0], selectAll: undefined })
 		},
 
 		where(fn) {

@@ -340,6 +340,27 @@ SELECT
 }
 `;
 
+exports[`core SQL (clickhouse) > left-join-not-null 1`] = `
+{
+  "parameters": [],
+  "sql": "WITH orders AS (
+<orders fixture>
+),
+customers AS (
+<customers fixture>
+)
+SELECT
+          orders.Id AS id,
+          c.Tier AS tier
+        FROM orders
+        LEFT JOIN customers AS c ON (orders.Customer = c.Name AND orders.OrgId = c.OrgId)
+        WHERE orders.OrgId = 'org_1'
+          AND orders.Id >= 3
+          AND c.Tier IS NOT NULL
+        ORDER BY id ASC",
+}
+`;
+
 exports[`core SQL (clickhouse) > limit-offset 1`] = `
 {
   "parameters": [],
@@ -966,6 +987,30 @@ SELECT
         LEFT JOIN "customers" AS "c" ON ("orders"."Customer" = "c"."Name" AND "orders"."OrgId" = "c"."OrgId")
         WHERE "orders"."OrgId" = $1
           AND "orders"."Id" >= $2
+        ORDER BY "id" ASC",
+}
+`;
+
+exports[`core SQL (postgres) > left-join-not-null 1`] = `
+{
+  "parameters": [
+    "org_1",
+    3,
+  ],
+  "sql": "WITH "orders" AS (
+<orders fixture>
+),
+"customers" AS (
+<customers fixture>
+)
+SELECT
+          "orders"."Id" AS "id",
+          "c"."Tier" AS "tier"
+        FROM "orders"
+        LEFT JOIN "customers" AS "c" ON ("orders"."Customer" = "c"."Name" AND "orders"."OrgId" = "c"."OrgId")
+        WHERE "orders"."OrgId" = $1
+          AND "orders"."Id" >= $2
+          AND "c"."Tier" IS NOT NULL
         ORDER BY "id" ASC",
 }
 `;

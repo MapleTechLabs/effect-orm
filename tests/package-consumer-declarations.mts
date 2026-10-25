@@ -47,3 +47,12 @@ export const Recent = CH.table("recent", { external: true, columns: { name: CH.s
 export const withRecent = CH.from(Recent).withCTE("recent", eventsByApp).select(($) => ({ name: $.name }))
 export const fromSub = CH.fromQuery(eventsByApp, "sub").select(($) => ({ name: $.name }))
 export const both = CH.unionAll(eventsByApp, CH.from(Events).select(($) => ({ name: $.name })))
+
+// A where that proves a joined column not NULL: the query's type carries
+// `NarrowJoins`, and a fact-carrying condition `NotNullFacts`.
+export const sessionNotNull = CH.from(Events)
+	.leftJoin(Sessions, "s", (e, s) => e.appId.eq(s.appId))
+	.where(($) => [$.s.id.isNotNull()])
+	.select(($) => ({ sessionId: $.s.id }))
+export const sessionFilter = (accessor: CH.JoinedColumnAccessor<typeof Events.columns, { s: typeof Sessions.columns }>) =>
+	accessor.s.id.isNotNull()

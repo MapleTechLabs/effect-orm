@@ -56,7 +56,7 @@ Tables come from the dialect's `table`: [`CH.table`](#tables-and-ddl) or
 | Method                                                  | Notes                                                                 |
 | ------------------------------------------------------- | --------------------------------------------------------------------- |
 | `select(...names)` / `select(fn)`                       | Required before compiling                                             |
-| `where(fn)`                                             | Returns `Array<Condition \| undefined>`; AND-joined                   |
+| `where(fn)`                                             | Returns `Array<Condition \| undefined>`; AND-joined. Narrows a joined column it proves not NULL for a later `select` ([joins](./joins-and-subqueries.md#narrowing-a-joined-column-with-where)) |
 | `groupBy(...outputKeys)`                                | Takes select aliases, not column names                                |
 | `having(fn)`                                            | Post-aggregation filter; input accessor or `dynamicColumn` aliases    |
 | `orderBy(...[col, dir])`                                | **Tuples**, not two strings                                           |
@@ -144,7 +144,11 @@ outer set and its failures land in the outer error channel. See
 `wrap` receives the inner SQL and returns the text to emit. It defaults to wrapping the SQL in
 parentheses, which is the plain "this value is a sub-SELECT" case.
 
-`Condition` methods: `and`, `or` (both parenthesise; both drop the tenant marker).
+`Condition` methods: `and`, `or` (both parenthesise; both drop the tenant marker). `and`
+keeps the not-NULL facts of both sides; `or` keeps none.
+
+On a joined column, `isNotNull()` and `eq(…)` return a `Condition` that proves the column not
+NULL. Its second type parameter holds that fact.
 
 `ColumnRef` adds `.get(key)` for `Map` columns; the result decodes as the map's value type.
 

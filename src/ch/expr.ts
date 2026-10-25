@@ -16,6 +16,7 @@ import { encodeColumnLiteral, isSubnormal, numberText, sqlLiteral } from "./lite
 import { QueryBuilderError } from "./errors"
 import { fail } from "./failure"
 import { markTenantColumn, markTenantPredicate, tenantColumnOf, tenantPredicatesOf } from "./tenant"
+import { markNotNullFacts, notNullFactsOf, type NotNullFact } from "./facts"
 
 // Core interfaces
 
@@ -252,10 +253,26 @@ export type Quotient<L, R> = [R] extends [number]
 			: number | Extract<L, null>
 	: number | null
 
-export interface ColumnRef<Name extends string, ColType extends CHType<string, any>> extends Expr<
+/**
+ * A column of a joined source, `Source` its alias. `isNotNull()` and `eq(…)`
+ * on it prove the column not NULL: the condition carries a `NotNullFact`, and a
+ * WHERE list that holds it narrows the column for a later `select`. The FROM
+ * source's columns have no `Source` and carry no fact.
+ */
+export interface ColumnRef<Name extends string, ColType extends CHType<string, any>, Source extends string = never> extends Expr<
 	InferTS<ColType>
 > {
 	readonly columnName: Name
+	/**
+	 * phantom: the column's type. Keeps a `ColumnRef` of one column type from
+	 * passing for another when the compiler compares refs member by member, as
+	 * it does for a `Source` it cannot measure (`get` needs a Map column).
+	 */
+	readonly _columnType?: ColType
+	/** `column = other`. True only for a non-NULL column, so it proves one. */
+	eq<Q = never>(other: Operand<InferTS<ColType>, Q>): Condition<Q, NotNullFacts<Source, Name>>
+	/** `column IS NOT NULL`. */
+	isNotNull(): Condition<never, NotNullFacts<Source, Name>>
 	/**
 	 * Access a key in a Map column: `$.Attrs.get("http.method")`.
 	 *
@@ -276,14 +293,50 @@ export interface ColumnRef<Name extends string, ColType extends CHType<string, a
  */
 export type MapValueOf<ColType> = [ColType] extends [CHType<"Map", Record<string, infer V>, any>] ? V : string
 
-export interface Condition<P = never> {
+export interface Condition<P = never, F extends {} = {}> {
 	readonly _brand: "Condition"
 	/** phantom: the `param.*` placeholders inside this condition. */
 	readonly _params?: (entries: P) => void
+	/**
+	 * phantom: the joined columns this condition proves not NULL, as
+	 * `{ alias: { column: true } }` (see `NotNullFacts`). An object, so a
+	 * condition can drop a fact on assignment but never gain one.
+	 */
+	readonly _facts?: F
 	toFragment(): SqlFragment
-	and<Q = never>(other: Condition<Q>): Condition<P | Q>
+	/** Both conditions hold, so the facts of both do. */
+	and<Q = never, G extends {} = {}>(other: Condition<Q, G>): Condition<P | Q, F & G>
+	/** Either condition may hold: no fact survives. */
 	or<Q = never>(other: Condition<Q>): Condition<P | Q>
 }
+
+/**
+ * The columns proven not NULL: `{ alias: { column: true } }`. `{}` when the
+ * source is `never`, which is how a FROM column proves nothing.
+ */
+export type NotNullFacts<Source extends string, Column extends string> = {
+	readonly [S in Source]: { readonly [C in Column]: true }
+}
+
+/** The facts a condition proves, `{}` for none. */
+export type FactsIn<X> = 0 extends 1 & X
+	? {}
+	: X extends { readonly _facts?: infer F }
+		? 0 extends 1 & F
+			? {}
+			: Exclude<F, undefined>
+		: {}
+
+/**
+ * The facts every condition of a list proves, when all of them are present.
+ * A list of unknown length may be empty, and a member typed `| undefined` may
+ * be skipped, so neither proves anything.
+ */
+export type AllFacts<C extends ReadonlyArray<unknown>> = number extends C["length"]
+	? {}
+	: FactsIntersection<{ readonly [K in keyof C]: undefined extends C[K] ? {} : FactsIn<C[K]> }[number]>
+
+type FactsIntersection<U> = (U extends unknown ? (u: U) => void : never) extends (i: infer I) => void ? I & {} : {}
 
 // Core helpers (exported for define-fn.ts and consumer extensibility)
 
@@ -610,6 +663,11 @@ export function makeColumnRef<Name extends string, ColType extends CHType<string
 	tenantColumn?: string,
 	/** The column's declared type, whose schema decodes its wire value. */
 	columnType?: ColType,
+	/**
+	 * The join alias the column belongs to. Set for a joined source's columns:
+	 * their `isNotNull()` and `eq(…)` record a `NotNullFact` (see `./facts`).
+	 */
+	factSource?: string,
 ): ColumnRef<Name, ColType> {
 	// `alias.Column` when qualified: the qualifier is quoted segment by segment,
 	// the column as one identifier (a ClickHouse `Nested` column has a dot).
@@ -645,7 +703,7 @@ export function makeColumnRef<Name extends string, ColType extends CHType<string
 			? toFragment(value)
 			: known(() => encodeColumnLiteral(columnType, value, columnName ?? name))
 	}
-	return Object.assign(
+	const ref = Object.assign(
 		base,
 		isTenantColumn
 			? {
@@ -679,18 +737,29 @@ export function makeColumnRef<Name extends string, ColType extends CHType<string
 			},
 		},
 	) as ColumnRef<Name, ColType>
+	if (factSource === undefined) return ref
+	// `x = y` and `x IS NOT NULL` are never true for a NULL `x`.
+	const fact: ReadonlyArray<NotNullFact> = [{ source: factSource, column: columnName ?? name }]
+	const { eq, isNotNull } = ref
+	return Object.assign(ref, {
+		eq: (other: any) => markNotNullFacts(eq(other), fact),
+		isNotNull: () => markNotNullFacts(isNotNull(), fact),
+	})
 }
 
 // Condition implementation
 
-export function makeCond(fragment: SqlFragment): Condition<any> {
+export function makeCond(fragment: SqlFragment): Condition<any, any> {
 	return {
 		_brand: "Condition" as const,
 		toFragment: () => fragment,
 		and(other) {
-			return markTenantPredicate(
-				makeCond(known(() => `(${compile(fragment)} AND ${compile(other.toFragment())})`)),
-				[...tenantPredicatesOf(this), ...tenantPredicatesOf(other)],
+			return markNotNullFacts(
+				markTenantPredicate(
+					makeCond(known(() => `(${compile(fragment)} AND ${compile(other.toFragment())})`)),
+					[...tenantPredicatesOf(this), ...tenantPredicatesOf(other)],
+				),
+				[...notNullFactsOf(this), ...notNullFactsOf(other)],
 			)
 		},
 		or: (other) => makeCond(known(() => `(${compile(fragment)} OR ${compile(other.toFragment())})`)),
@@ -749,18 +818,21 @@ export function notInList(expr: Expr<string>, values: readonly string[]): Condit
 /**
  * Conditions AND-joined, an `undefined` one skipped: `and(a, when(x, f), b)`.
  * With none left it is `undefined`, which a `where` list skips in turn. Tenant
- * evidence carries through, as with `.and`.
+ * evidence and not-NULL facts carry through, as with `.and`.
  */
-export function and<const C extends ReadonlyArray<Condition>>(...conditions: C): Condition<ParamsIn<C[number]>>
+export function and<const C extends ReadonlyArray<Condition>>(...conditions: C): Condition<ParamsIn<C[number]>, AllFacts<C>>
 export function and<const C extends ReadonlyArray<Condition | undefined>>(
 	...conditions: C
 ): Condition<ParamsIn<C[number]>> | undefined
 export function and(...conditions: ReadonlyArray<Condition | undefined>): Condition | undefined {
 	const present = conditions.filter((c): c is Condition => c !== undefined)
 	if (present.length <= 1) return present[0]
-	return markTenantPredicate(
-		makeCond(known(() => `(${present.map((c) => compile(c.toFragment())).join(" AND ")})`)),
-		present.flatMap((c) => tenantPredicatesOf(c)),
+	return markNotNullFacts(
+		markTenantPredicate(
+			makeCond(known(() => `(${present.map((c) => compile(c.toFragment())).join(" AND ")})`)),
+			present.flatMap((c) => tenantPredicatesOf(c)),
+		),
+		present.flatMap((c) => notNullFactsOf(c)),
 	)
 }
 
