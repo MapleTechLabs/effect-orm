@@ -187,6 +187,8 @@ it("refuses definitions SQLite would only reject when it runs the DDL", async ()
 			copy: SQLite.column(SQLite.text, { defaultExpr: ($) => $.b }),
 			maybe: SQLite.column(SQLite.text, { default: undefined as never }),
 			stamped: SQLite.column(SQLite.timestamp, { defaultExpr: "(CURRENT_TIMESTAMP)" }),
+			epoch: SQLite.column(SQLite.timestamp, { defaultExpr: "(strftime('%s', 'now'))" }),
+			dsl: SQLite.column(SQLite.timestamp, { defaultExpr: () => SQLite.rawExpr("datetime('now')", SQLite.timestamp) }),
 		},
 		primaryKey: ["id", "id"],
 		indexes: [SQLite.index("bad_ddl_twice", ["b", "b"])],
@@ -201,6 +203,9 @@ it("refuses definitions SQLite would only reject when it runs the DDL", async ()
 		"b is listed more than once",
 		"defaultExpr reads b",
 		"default is undefined",
+		"bad_ddl.stamped",
+		"bad_ddl.epoch",
+		"bad_ddl.dsl",
 		"use SQLite.timestampNow",
 	]) {
 		expect(messages).toContain(expected)

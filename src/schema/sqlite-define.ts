@@ -127,6 +127,25 @@ export const uniqueIndex = <Cols extends ColumnDefs>(name: string, on: DdlKey<Co
 const isTimestamp = (type: CHType<string, any, any>): boolean =>
 	type.schema === timestamp.schema || (type._tag === "Nullable" && (type as { element?: CHType<string, any, any> }).element?.schema === timestamp.schema)
 
+/**
+ * SQLite compares timestamp text by bytes, so a timestamp column's default
+ * must write the column's own form (`timestampNow`). CURRENT_TIMESTAMP,
+ * datetime(), unixepoch() and a strftime with another format write another
+ * form, which misorders against the column's values.
+ */
+const checkTimestampDefault = (problems: ProblemSink, table: string, name: string, spec: ColumnSpec<CHType<string, any, any>>, sql: string): void => {
+	if (!isTimestamp(spec.type)) return
+	const otherForm =
+		/\bcurrent_(timestamp|date|time)\b|\b(datetime|date|time|julianday|unixepoch)\s*\(/i.test(sql) ||
+		/\bstrftime\s*\(\s*'(?!%Y-%m-%d %H:%M:%f')/i.test(sql)
+	if (otherForm) {
+		problems.push({
+			object: `${table}.${name}`,
+			message: `defaultExpr ${sql} writes a different text form than a timestamp column compares with; use SQLite.timestampNow`,
+		})
+	}
+}
+
 const columnDefault = (
 	problems: ProblemSink,
 	table: string,
@@ -145,13 +164,7 @@ const columnDefault = (
 	}
 	if (options.defaultExpr !== undefined) {
 		if (typeof options.defaultExpr === "string") {
-			// SQLite compares timestamp text by bytes: a default in another form misorders against the column's values.
-			if (isTimestamp(spec.type) && /\bcurrent_(timestamp|date|time)\b|\b(datetime|date|time|unixepoch)\s*\(/i.test(options.defaultExpr)) {
-				problems.push({
-					object: `${table}.${name}`,
-					message: `defaultExpr ${options.defaultExpr} writes a different text form than a timestamp column compares with; use SQLite.timestampNow`,
-				})
-			}
+			checkTimestampDefault(problems, table, name, spec, options.defaultExpr)
 			return options.defaultExpr
 		}
 		// SQLite refuses a DEFAULT that reads a column ("default value of column is not constant").
@@ -167,6 +180,7 @@ const columnDefault = (
 		if (read.length > 0) {
 			problems.push({ object: `${table}.${name}`, message: `defaultExpr reads ${[...new Set(read)].join(", ")}; SQLite requires a constant default` })
 		}
+		checkTimestampDefault(problems, table, name, spec, sql)
 		return `(${sql})`
 	}
 	if (options.default === undefined || options.default === null) return null

@@ -236,6 +236,7 @@ const checkedSyntax = (dialect: Dialect): SqlSyntax => ({
 	ilike: dialect.ilike,
 	likeEscape: dialect.likeEscape,
 	inexactNumberText: dialect.inexactNumberText,
+	integerComparesFraction: dialect.integerComparesFraction,
 	quoteIdent: dialect.quoteIdent,
 	quoteString: (value) => checked(dialect, dialect.quoteString(value), "a string literal"),
 	literal: (value, context) => checkedLiteral(dialect, value, context),
