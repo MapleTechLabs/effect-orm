@@ -90,6 +90,8 @@ export const pinned: Record<string, ReadonlyArray<unknown>> = {
 		{ dialect: "clickhouse", column: "OrgId", site: "add", value: undefined },
 		{ dialect: "clickhouse", column: "OrgId", site: "add", value: new Date(Number.NaN) },
 	],
+	// A Date before year 0 reached a timestamp encoder that threw instead of failing.
+	"hostile values are refused, never thrown (sqlite)": [{ dialect: "sqlite", column: "Created", site: "gt", value: new Date("-000001-12-31T23:59:59.999Z") }],
 	"hostile values are refused, never thrown (postgres)": [
 		{ dialect: "postgres", column: "OrgId", site: "param.dateTime", value: "" },
 		{ dialect: "postgres", column: "Created", site: "param.of", value: "2026-13-45 99:99:99" },
