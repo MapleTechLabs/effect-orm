@@ -8,7 +8,7 @@ import { DateTime, Effect, Exit } from "effect"
 import type * as CH from "@maple-dev/effect-orm/clickhouse"
 import type { CoreContext } from "../core-cases"
 import type { FuzzDialect } from "./dialects/types"
-import type { Agg, Cond, Expr, Operand, Plan } from "./plan"
+import type { Agg, Cond, Expr, Operand, Plan, UnionPlan } from "./plan"
 
 const pad = (n: number, width = 2) => String(n).padStart(width, "0")
 /** `YYYY-MM-DD hh:mm:ss.sss` in UTC: the string form a DateTime comparison accepts. */
@@ -18,13 +18,13 @@ export const timeString = (ms: number): string => {
 }
 
 /** Every param operand in the plan, in a fixed walk order, with the name it compiles as. */
-const nameParams = (plan: Plan): { readonly names: Map<Operand, string>; readonly params: Record<string, unknown> } => {
+const nameParams = (plan: Plan, prefix: string): { readonly names: Map<Operand, string>; readonly params: Record<string, unknown> } => {
 	const names = new Map<Operand, string>()
 	const params: Record<string, unknown> = { orgId: plan.orgId }
 	const operand = (op: Operand) => {
 		if (op.k === "expr") return expr(op.e)
 		if (op.k !== "param") return
-		const name = `p${names.size}`
+		const name = `${prefix}p${names.size}`
 		names.set(op, name)
 		params[name] = op.kind === "dateTime" ? DateTime.makeUnsafe(op.v as number) : op.v
 	}
@@ -74,9 +74,10 @@ export interface Built {
 	readonly params: Record<string, unknown>
 }
 
-export const buildPlan = (dialect: FuzzDialect, ctx: CoreContext, plan: Plan): Built => {
+/** `prefix` keeps the params of union branches apart: each branch names its own from `<prefix>p0`. */
+export const buildPlan = (dialect: FuzzDialect, ctx: CoreContext, plan: Plan, prefix = ""): Built => {
 	const { lit, param, and, or, not, rawCond, fromQuery } = dialect.module
-	const { names, params } = nameParams(plan)
+	const { names, params } = nameParams(plan, prefix)
 
 	const expr = ($: any, e: Expr): any => {
 		switch (e.k) {
@@ -196,10 +197,9 @@ export type Compiled =
  * `QueryBuilderError` is `Refused`; a die is a `Defect`; an exception that
  * escapes `compile` — or the builder calls before it — is `Threw`.
  */
-export const compilePlan = (dialect: FuzzDialect, ctx: CoreContext, plan: Plan): Compiled => {
+export const classify = (compile: () => Effect.Effect<CH.CompiledQuery<any>, unknown>): Compiled => {
 	try {
-		const { query, params } = buildPlan(dialect, ctx, plan)
-		const exit = Effect.runSyncExit(dialect.module.compile(query, params))
+		const exit = Effect.runSyncExit(compile())
 		if (Exit.isSuccess(exit)) return { _tag: "Compiled", compiled: exit.value }
 		const failure = exit.cause.reasons.find((reason) => reason._tag === "Fail")
 		return failure !== undefined
@@ -209,3 +209,26 @@ export const compilePlan = (dialect: FuzzDialect, ctx: CoreContext, plan: Plan):
 		return { _tag: "Threw", error: error instanceof Error ? `${error.name}: ${error.message}\n${error.stack}` : String(error) }
 	}
 }
+
+export const compilePlan = (dialect: FuzzDialect, ctx: CoreContext, plan: Plan): Compiled =>
+	classify(() => {
+		const { query, params } = buildPlan(dialect, ctx, plan)
+		return dialect.module.compile(query, params)
+	})
+
+/** A union plan as `unionAll(...)` of its branches, each with its own params. */
+export const buildUnion = (dialect: FuzzDialect, ctx: CoreContext, plan: UnionPlan): Built => {
+	const built = plan.branches.map((branch, i) => buildPlan(dialect, ctx, branch, `b${i}`))
+	let union: any = (dialect.module.unionAll as (...queries: ReadonlyArray<unknown>) => unknown)(...built.map((b) => b.query))
+	if (plan.orderBy.length > 0) union = union.orderBy(...plan.orderBy.map(([alias, dir]) => [alias, dir]))
+	if (plan.limit !== undefined) union = union.limit(plan.limit)
+	if (plan.offset !== undefined) union = union.offset(plan.offset)
+	if (plan.crossTenant) union = union.crossTenant()
+	return { query: union, params: Object.assign({}, ...built.map((b) => b.params)) }
+}
+
+export const compileUnionPlan = (dialect: FuzzDialect, ctx: CoreContext, plan: UnionPlan): Compiled =>
+	classify(() => {
+		const { query, params } = buildUnion(dialect, ctx, plan)
+		return dialect.module.compileUnion(query, params)
+	})

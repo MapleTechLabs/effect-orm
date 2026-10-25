@@ -5,7 +5,7 @@
 // target at once). Inputs that hit an open entry in `known-issues.ts` are
 // skipped until the bug is fixed, then replayed for good.
 import { DateTime } from "effect"
-import type { Plan, RowsShape } from "./plan"
+import type { Plan, RowsShape, UnionPlan } from "./plan"
 
 const rows = (shape: RowsShape): Plan => ({ orgId: "org_1", join: undefined, where: [], shape, wrap: false, crossTenant: false })
 
@@ -86,6 +86,20 @@ export const pinned: Record<string, ReadonlyArray<unknown>> = {
 			[true],
 		],
 	],
+
+	// Unions.
+	"unions match the model": [
+		// clickhouse-union-variant-order-by: `Id + 1` (UInt64) under `Id + -1` (Int64), ordered by that column.
+		{
+			orgId: "org_1",
+			branches: [
+				rows({ k: "rows", select: [["id", { k: "col", col: "Id" }], ["e0", { k: "arith", op: "add", l: { k: "col", col: "Id" }, r: 1 }]], distinct: false, orderBy: [] }),
+				rows({ k: "rows", select: [["id", { k: "col", col: "Id" }], ["e0", { k: "arith", op: "add", l: { k: "col", col: "Id" }, r: -1 }]], distinct: false, orderBy: [] }),
+			],
+			orderBy: [["e0", "asc"], ["id", "asc"]],
+			crossTenant: false,
+		},
+	] satisfies ReadonlyArray<UnionPlan>,
 
 	// Hostile values.
 	"hostile values are refused, never thrown (clickhouse)": [

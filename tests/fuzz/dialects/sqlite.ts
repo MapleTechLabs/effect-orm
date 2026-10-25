@@ -7,7 +7,7 @@ import * as SQLite from "@maple-dev/effect-orm/sqlite"
 import { d1Context, sqliteContext } from "../../core-cases"
 import { d1Database, sqliteDatabase } from "../../sqlite-support"
 import { finite, nastyString, nullOr, utc, type LiteralType } from "../values"
-import { runWith, type DialectModule, type FuzzDialect, type Semantics, type StringRules } from "./types"
+import { runWith, type DialectModule, type FuzzDialect, type Semantics, type StringRules, type WriteSupport } from "./types"
 
 const semantics: Semantics = {
 	missingJoinColumn: "null",
@@ -100,6 +100,25 @@ const literals = (dialect: string): ReadonlyArray<LiteralType> => {
 const sqliteDb = sqliteDatabase()
 const d1Db = d1Database()
 
+/** Everything but per-cell DEFAULT, which the dialect refuses (SQLite has none in VALUES). */
+const writes = (exec: (sql: string) => Promise<unknown>): WriteSupport => ({
+	insertSelect: true,
+	update: true,
+	delete: true,
+	onConflict: true,
+	returning: true,
+	defaultCells: false,
+	scratch: {
+		table: (name) =>
+			SQLite.table(name, { Id: SQLite.integer, OrgId: SQLite.text, Name: SQLite.text, Note: SQLite.nullable(SQLite.text), Qty: SQLite.integer }, { defaults: ["Qty"] }),
+		create: (name) => [`CREATE TABLE "${name}" ("Id" integer PRIMARY KEY, "OrgId" text NOT NULL, "Name" text NOT NULL, "Note" text, "Qty" integer NOT NULL DEFAULT 5)`],
+		drop: (name) => `DROP TABLE IF EXISTS "${name}"`,
+		exec: async (sql) => {
+			await exec(sql)
+		},
+	},
+})
+
 export const sqlite: FuzzDialect = {
 	name: "sqlite",
 	module: SQLite as never,
@@ -107,6 +126,7 @@ export const sqlite: FuzzDialect = {
 	strings,
 	ilike: false,
 	literals: literals("sqlite"),
+	writes: writes((sql) => sqliteDb.query(sql, [])),
 	targets: [{ name: "sqlite", available: true, semantics, run: (compiled) => runWith(compiled, sqliteDb.query) }],
 	close: sqliteDb.close,
 }
@@ -114,6 +134,7 @@ export const sqlite: FuzzDialect = {
 const d1Module: DialectModule = {
 	...(SQLite as never as DialectModule),
 	compile: (query, params) => SQLite.compile(query, params, { dialect: SQLite.d1Dialect }),
+	compileUnion: (union, params) => SQLite.compileUnion(union, params, { dialect: SQLite.d1Dialect }),
 }
 
 export const d1: FuzzDialect = {
@@ -123,6 +144,7 @@ export const d1: FuzzDialect = {
 	strings,
 	ilike: false,
 	literals: literals("d1"),
+	writes: writes((sql) => d1Db.query(sql, [])),
 	targets: [{ name: "d1", available: true, semantics, run: (compiled) => runWith(compiled, d1Db.query) }],
 	close: d1Db.close,
 }

@@ -41,7 +41,8 @@ export const knownHostileIssue = (input: HostileInput): string | undefined =>
 
 // Query plans (queries.fuzz.test.ts)
 
-import type { Plan } from "./plan"
+import { chKind } from "./model"
+import type { Plan, UnionPlan } from "./plan"
 
 export interface PlanInput {
 	/** The target name (`dialects/*.ts`), or the dialect name for compile-only properties. */
@@ -89,3 +90,19 @@ const planIssues: ReadonlyArray<KnownIssue<PlanInput>> = [
 ]
 
 export const knownPlanIssue = (input: PlanInput): string | undefined => firstMatch(planIssues, input)
+
+// Unions (queries.fuzz.test.ts)
+
+export interface UnionInput {
+	readonly target: string
+	readonly plan: UnionPlan
+}
+
+/** The expression a branch selects under `alias`. */
+const selected = (branch: Plan, alias: string) => (branch.shape.k === "rows" ? branch.shape.select.find(([a]) => a === alias)?.[1] : undefined)
+
+const unionIssues: ReadonlyArray<KnownIssue<UnionInput>> = [
+
+]
+
+export const knownUnionIssue = (input: UnionInput): string | undefined => firstMatch(unionIssues, input)

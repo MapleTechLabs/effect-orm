@@ -12,7 +12,7 @@
 import { fixtureRows } from "../core-cases"
 import type { Semantics } from "./dialects/types"
 import { skip } from "./harness"
-import type { Agg, AggShape, ArithOp, Cond, Expr, Operand, Plan, RowsShape } from "./plan"
+import type { Agg, ArithOp, Cond, Expr, Operand, Plan, UnionPlan } from "./plan"
 
 type V = number | string | null
 type Bool = boolean | null
@@ -69,7 +69,7 @@ const isTime = (e: Expr) => e.k === "col" && e.col === "Created"
  * database does (`-7 % toUInt32(3)` is 0), so the model declines those.
  */
 type ChKind = "unsigned" | "signed" | "float"
-const chKind = (e: Expr | number): ChKind => {
+export const chKind = (e: Expr | number): ChKind => {
 	if (typeof e === "number") return !Number.isInteger(e) ? "float" : e >= 0 ? "unsigned" : "signed"
 	switch (e.k) {
 		case "col":
@@ -310,7 +310,7 @@ const sortRows = (env: Env, rows: Array<OutRow>, orderBy: ReadonlyArray<readonly
 		return 0
 	})
 
-const page = <A>(rows: ReadonlyArray<A>, shape: RowsShape | AggShape): ReadonlyArray<A> => {
+const page = <A>(rows: ReadonlyArray<A>, shape: { readonly limit?: number | undefined; readonly offset?: number | undefined }): ReadonlyArray<A> => {
 	const start = shape.offset ?? 0
 	return rows.slice(start, shape.limit === undefined ? undefined : start + shape.limit)
 }
@@ -392,4 +392,19 @@ export const evaluate = (plan: Plan, sem: Semantics): ModelResult => {
 	const total = uniqueKeys.length > 0 && uniqueKeys.every((key) => shape.orderBy.some(([alias]) => alias === key))
 	sortRows(env, rows, shape.orderBy)
 	return { rows: page(rows, shape), ordered: total && !plan.wrap, orgs }
+}
+
+/**
+ * A union: each branch's rows (its own ORDER BY and LIMIT applied first),
+ * concatenated, then the union's ORDER BY, LIMIT and OFFSET. Rows compare as
+ * a list only when the union orders by every alias.
+ */
+export const evaluateUnion = (plan: UnionPlan, sem: Semantics): ModelResult => {
+	const parts = plan.branches.map((branch) => evaluate(branch, sem))
+	const rows = parts.flatMap((part) => [...part.rows])
+	const first = plan.branches[0]!
+	const aliases = first.shape.k === "rows" ? first.shape.select.map(([alias]) => alias) : []
+	sortRows({ sem, plan: first, joined: false }, rows, plan.orderBy)
+	const total = plan.orderBy.length > 0 && aliases.every((alias) => plan.orderBy.some(([key]) => key === alias))
+	return { rows: page(rows, plan), ordered: total, orgs: new Set(parts.flatMap((part) => [...part.orgs])) }
 }

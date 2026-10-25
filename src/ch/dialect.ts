@@ -169,6 +169,13 @@ export interface Dialect extends Omit<SqlSyntax, "dialect"> {
 	 * unchecked: a custom dialect says which set it renders, if either.
 	 */
 	readonly functions?: string
+	/**
+	 * Casts a numeric UNION ALL column whose branches may have different types
+	 * to one type. ClickHouse has no common type for `UInt64` and `Int64` (or
+	 * `Int64` and `Float64`): it makes the column a `Variant`, which ORDER BY
+	 * refuses. Absent: the dialect unifies numeric branches itself.
+	 */
+	readonly unionNumberCast?: (sql: string) => string
 }
 
 /** ClickHouse, with params written into the SQL as literals. The default. */
@@ -191,6 +198,8 @@ export const clickhouseDialect: Dialect = {
 	},
 	transactions: noTransactions,
 	functions: "clickhouse",
+	// Every numeric ClickHouse type decodes to a JS number (CHNumber), so Float64 loses nothing the decode keeps.
+	unionNumberCast: (sql) => `toFloat64(${sql})`,
 }
 
 // The dialect of the enclosing compile, beside the syntax installed for the

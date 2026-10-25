@@ -28,9 +28,13 @@ themselves keep whatever ordering they declared.
 
 Unions compile with **`compileUnion`**, not `compile`.
 
-> **Watch branch types.** ClickHouse unifies column types across `UNION ALL` branches, and a
-> branch pairing (say) a `Float64` with a `UInt64` can be rejected outright depending on server
-> settings. Cast explicitly in each branch when the types are not already identical.
+> **Numeric branch types.** ClickHouse has no common type for some numeric pairs (`UInt64` and
+> `Int64`, `Int64` and `Float64`): it makes the column a `Variant`, which ORDER BY refuses, or,
+> with `use_variant_as_common_type = 0`, rejects the union. So on ClickHouse a numeric column whose
+> branches may differ in type (different declared types, or different arithmetic: `Id + 1` is
+> `UInt64`, `Id - 1` is `Int64`) is selected as `toFloat64(…)` in every branch. Numbers decode to
+> JS numbers either way, so this loses nothing the decode keeps. Identical columns and identical
+> expressions are left as they are. Cast other types explicitly when the branches differ.
 
 _(Backed by `docs/unions-and-ctes.md > unionAll with an outer ORDER BY`.)_
 
