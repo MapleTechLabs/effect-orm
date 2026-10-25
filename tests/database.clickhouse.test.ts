@@ -198,6 +198,24 @@ describe("database", () => {
 			expect(result.nulls).toEqual([{ Id: 1 }, { Id: 3 }])
 		})
 
+		it("keeps the numeric error code, and a violated CHECK is CheckViolation", async () => {
+			const { raw, error } = await Effect.runPromise(
+				withDatabase((db) =>
+					Effect.gen(function* () {
+						yield* db.execute(
+							Db.sql`CREATE TABLE rents (Id UInt32, Cents Int32, CONSTRAINT positive CHECK Cents > 0) ENGINE = MergeTree ORDER BY Id`,
+						)
+						const insert = db.execute(Db.sql`INSERT INTO rents VALUES (${1}, ${-5})`)
+						return { raw: yield* Effect.flip(insert), error: yield* Effect.flip(insert.pipe(Db.refineConstraints)) }
+					}),
+				),
+			)
+			expect(raw.errorCode).toBe(469)
+			expect(error).toBeInstanceOf(Db.CheckViolation)
+			expect(error).toMatchObject({ constraint: "positive", errorCode: 469 })
+			expect((error as Db.CheckViolation).table).toMatch(/\.rents$/)
+		})
+
 		it("refuses a transaction before sending anything", async () => {
 			const result = await Effect.runPromise(
 				withDatabase((db, sent) =>
