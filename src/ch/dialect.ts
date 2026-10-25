@@ -182,8 +182,8 @@ export const clickhouseDialect: Dialect = {
 	},
 	transactions: noTransactions,
 	functions: "clickhouse",
-	// Float64 orders every number; the Int128 tiebreak keeps integers past 2^53 (one Float64) in exact order.
-	unionNumberOrderKeys: (column) => [`toFloat64(${column})`, `accurateCastOrNull(${column}, 'Int128')`],
+	// CAST, not toFloat64: ClickHouse 26.2's toFloat64 refuses a Variant. Float64 orders every number; the Int128 tiebreak keeps integers past 2^53 (one Float64) in exact order.
+	unionNumberOrderKeys: (column) => [`CAST(${column} AS Nullable(Float64))`, `accurateCastOrNull(${column}, 'Int128')`],
 }
 
 // The dialect of the enclosing compile, beside the syntax installed for the
