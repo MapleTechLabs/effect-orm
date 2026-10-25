@@ -83,7 +83,7 @@ Calling `withdraw(1, 30)` outside `transfer` does not compile: `requireTransacti
 | `fromSqlClient(sql, options)` | A `DatabaseApi` over a client. `options.dialect` is required; `options.requireTenantScope` refuses unscoped queries ([Tenant scoping](./tenant-scoping.md#enforcing-it)) |
 | `layerSqlClient(options)` | A `Database` layer over the `SqlClient` in context |
 | `Database` | The service |
-| `run(query, params?)` | Compile a query for the database's dialect, run it, decode its rows |
+| `run(query, params?)` | Compile a query for the database's dialect, run it, decode its rows. A write first runs its table's [client-side defaults](./inserts.md#client-side-defaults) and requires what they need |
 | `sql\`...\`` | A statement with every `${value}` bound; `sql.identifier(name)` for a table or column name |
 | `query(statement, schema?)` | Run a statement and return its rows, decoded when a schema is given |
 | `execute(statement)` | Run a statement and discard its rows |

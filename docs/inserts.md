@@ -51,6 +51,8 @@ The row type is derived from the column options that also write the [DDL](./migr
 it cannot drift from what the database fills in:
 
 - `default` or `defaultExpr` (both dialects) or `identity` (Postgres) makes a column optional.
+- `defaultFn` or `onUpdate` (Postgres) makes a column optional too. The client fills it, not the
+  database: see [client-side defaults](#client-side-defaults).
 - `materialized` or `alias` (ClickHouse) makes a column not writable: it is not in the row type,
   and a row that names it anyway fails to compile. It stays readable.
 
@@ -66,6 +68,50 @@ no DDL, but its column options still drive the row type the same way.
 ClickHouse fills every column it is not given with a default, even without a `DEFAULT` clause:
 `0` for a number, `''` for a string. The row type still requires those columns unless they
 declare a default, so a forgotten value is a type error rather than a silent zero.
+
+### Client-side defaults
+
+A `PG.column` can take a default that the client computes: `defaultFn` and `onUpdate` are
+Effects, so they can read the `Clock`, `Random` or a service. They write no DDL.
+
+```ts
+import { Context, DateTime, Effect } from "effect"
+import * as Db from "@maple-dev/effect-orm/database"
+import * as PG from "@maple-dev/effect-orm/postgres"
+
+class IdGen extends Context.Service<IdGen, { readonly next: Effect.Effect<string> }>()("IdGen") {}
+
+const Notes = PG.table("notes", {
+	columns: {
+		id: PG.column(PG.text, { defaultFn: Effect.flatMap(Effect.service(IdGen), (gen) => gen.next) }),
+		body: PG.text,
+		createdAt: PG.column(PG.timestamptz, { defaultFn: DateTime.now }),
+		updatedAt: PG.column(PG.timestamptz, { onUpdate: DateTime.now }),
+	},
+	primaryKey: ["id"],
+})
+
+// Effect<ReadonlyArray<never>, ..., Database | IdGen>
+const add = Db.run(PG.insertInto(Notes).values({ body: "hello" }))
+```
+
+- `Database.run` runs `defaultFn` once for each row that leaves its column out (or gives
+  `undefined`). A value the row gives, `null` included, is kept, and the Effect does not run.
+- `onUpdate` runs once for each update that does not set its column (see
+  [Updating](./updates-and-deletes.md#set)). An insert that leaves the column out runs it too,
+  when the column has no `defaultFn`, `default`, `defaultExpr` or `identity`.
+- What the Effects need is in the type of the write: the insert above requires `IdGen`, and
+  `Db.run` passes the requirement on. `DateTime.now` needs only the `Clock`, which every Effect
+  has, so it adds nothing. In a test, `TestClock` and a test `IdGen` layer give exact values.
+- The Effects cannot fail: their error type is `never`. A default that can fail should handle
+  the failure itself.
+- `compile` does not run Effects. To compile such a write yourself, pass it through
+  `fillDefaults` first: `Effect.flatMap(PG.fillDefaults(insert), (filled) => PG.compile(filled))`.
+  `compile` refuses (`QueryBuilderDefect`) a write that still leaves out a client default.
+- An `INSERT ... SELECT` and `onConflictDoUpdate`'s SET get no client defaults; select or set
+  the column yourself.
+
+_(Backed by `src/database/client-defaults.test.ts` and `src/database/client-defaults.test-d.ts`.)_
 
 ## What it compiles to
 
@@ -240,6 +286,7 @@ A batch that mixes tenants on purpose, such as an ingest flush, declares it with
 | A param with no value                             | `QueryBuilderError` `UnresolvedParam`    |
 | Over the dialect's bound-value limit              | `QueryBuilderError` `InvalidArguments`   |
 | Compiling without `values`                        | `QueryBuilderDefect`                     |
+| Compiling a row that leaves out a client default  | `QueryBuilderDefect`                     |
 | `returning` for a dialect without RETURNING       | `QueryBuilderDefect`                     |
 | `onConflictDoUpdate` setting no or unknown columns | `QueryBuilderError` `InvalidArguments`  |
 | `onConflict*` without ON CONFLICT, a bad target   | `QueryBuilderDefect`                     |
