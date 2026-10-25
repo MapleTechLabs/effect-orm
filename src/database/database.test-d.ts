@@ -1,6 +1,6 @@
 // Type-level tests: rows from `run`, `requireTransaction`, and what `transaction` removes.
 
-import { Effect, Schema } from "effect"
+import { Effect, Schema, Stream } from "effect"
 import { expectTypeOf } from "expect-type"
 import * as CH from "../ch/index"
 import * as PG from "../postgres"
@@ -77,3 +77,12 @@ expectTypeOf(Db.run(upsert, { count: 1 })).toEqualTypeOf<Effect.Effect<ReadonlyA
 // @ts-expect-error the param is still required
 Db.run(upsert)
 expectTypeOf(PG.compileUnsafe(upsert, { count: 1 })).toEqualTypeOf<CH.CompiledQuery<{ readonly count: number }, undefined>>()
+
+// `stream` infers the same rows as `run`, as a Stream, and checks params the same way.
+expectTypeOf(Db.stream(CH.from(Items).select("id", "note"))).toEqualTypeOf<Stream.Stream<Row, RunError, Db.Database>>()
+const byNote = CH.from(Items)
+	.select("id", "note")
+	.where(($) => [$.note.eq(CH.param.string("note"))])
+expectTypeOf(Db.stream(byNote, { note: "a" })).toEqualTypeOf<Stream.Stream<Row, RunError, Db.Database>>()
+// @ts-expect-error -- a missing param is a type error
+Db.stream(byNote)

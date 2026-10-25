@@ -16,6 +16,7 @@ export {
 	requireTransaction,
 	retryContention,
 	run,
+	stream,
 	transaction,
 	type DatabaseApi,
 	type RowOf,
