@@ -20,6 +20,7 @@ import {
 	AuthenticationError,
 	AuthorizationError,
 	ConnectionError,
+	ConstraintError,
 	SqlError,
 	SqlSyntaxError,
 	StatementTimeoutError,
@@ -82,7 +83,9 @@ const Settings = Context.Reference<Readonly<Record<string, ClickhouseSetting>>>(
 )
 
 // The codes Effect's Node driver classifies, so a failure means the same thing
-// whichever client ran it.
+// whichever client ran it. One exception: that driver reads 469
+// (VIOLATED_CONSTRAINT, a failed CHECK) as a statement timeout, which says
+// retry; here it is a ConstraintError.
 const SYNTAX_ERROR_CODES = new Set([36, 60, 62, 242])
 
 const classify = (code: number | undefined, message: string, cause: unknown, operation: string) => {
@@ -90,7 +93,8 @@ const classify = (code: number | undefined, message: string, cause: unknown, ope
 	if (code === 516) return new AuthenticationError(props)
 	if (code === 497) return new AuthorizationError(props)
 	if (code !== undefined && SYNTAX_ERROR_CODES.has(code)) return new SqlSyntaxError(props)
-	if (code === 159 || code === 469) return new StatementTimeoutError(props)
+	if (code === 159) return new StatementTimeoutError(props)
+	if (code === 469) return new ConstraintError(props)
 	return new UnknownError(props)
 }
 
