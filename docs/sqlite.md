@@ -82,8 +82,11 @@ The tests apply this DDL and drizzle-kit's SQL for the same tables to real SQLit
 1.0 drops `NOT NULL` from a primary key column, so SQLite then accepts a NULL key in a `text`
 key column. This entry keeps `NOT NULL`.
 
-There is no SQLite schema diff, introspection, migration ledger or kit dialect yet. Run the
-rendered statements yourself, or keep migrating with your current tool. `WITHOUT ROWID`,
+`effect-orm generate` with `dialect: "sqlite"` diffs these tables against the migrations folder
+and writes the next migration, in the drizzle-kit 1.0 folder layout. See
+[SQLite migrations](./migrations.md#sqlite). effect-orm does not apply SQLite migrations yet,
+and has no SQLite introspection or drift check: apply the folder with a tool that reads
+drizzle-kit folders, such as Alchemy's D1 resource. `WITHOUT ROWID`,
 `STRICT`, `AUTOINCREMENT`, partial indexes, foreign keys and `CHECK` constraints are not
 declared yet.
 
