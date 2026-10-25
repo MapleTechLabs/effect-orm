@@ -8,15 +8,13 @@
 // become DDL records a problem, and `pgEntitiesOf` fails with it.
 
 import { Schema } from "effect"
-import { compile as compileFragment } from "../sql/sql-fragment"
 import { withDialect } from "../ch/dialect"
-import type { Condition, Expr } from "../ch/expr"
 import { encodeColumnLiteral } from "../ch/literal"
-import { createColumnAccessor, type ColumnAccessor } from "../ch/query"
 import type { Table } from "../ch/table"
 import { columnSqlName, type CHType, type ColumnDefs, type InferTS } from "../ch/types"
 import type { PgType } from "../pg/types"
 import { postgresDialect } from "../pg/dialect"
+import { ddlRenderer, type DdlPredicate } from "./ddl-expr"
 import { externalTable, type DdlExpr, type DdlKey } from "./define"
 import { withRenderProblems, type DefinitionProblem, type ProblemSink } from "./problems"
 import {
@@ -33,22 +31,11 @@ import {
 	type PgUniqueEntity,
 } from "./pg-entities"
 
-const quoteIdent = (name: string): string => `"${name.replace(/"/g, '""')}"`
+const ddl = ddlRenderer(postgresDialect)
+const renderExpr = ddl.expr
+const renderKeyParts = ddl.keyParts
 
-const renderValue = (value: Expr<any> | Condition | string): string =>
-	typeof value === "string" ? value : withDialect(postgresDialect, () => compileFragment(value.toFragment()))
-
-/** A partial index's predicate: SQL, or a condition built with the DSL. */
-export type DdlPredicate<Cols extends ColumnDefs> = string | (($: ColumnAccessor<Cols>) => Condition | Expr<any> | string)
-
-const renderExpr = <Cols extends ColumnDefs>(expr: DdlExpr<Cols> | DdlPredicate<Cols>, columns: Cols): string =>
-	typeof expr === "string" ? expr : renderValue(expr(createColumnAccessor(columns)))
-
-/** Key parts: a column name is written quoted, an expression as it renders. */
-const renderKeyParts = <Cols extends ColumnDefs>(key: DdlKey<Cols>, columns: Cols): ReadonlyArray<string> =>
-	typeof key === "function"
-		? key(createColumnAccessor(columns)).map(renderValue)
-		: key.map((column) => quoteIdent(columnSqlName(columns, column)))
+export type { DdlPredicate }
 
 // Columns
 
