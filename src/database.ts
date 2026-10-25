@@ -30,6 +30,7 @@ export {
 } from "./database/database"
 export {
 	DatabaseError,
+	InvalidCursor,
 	TenantScopeViolation,
 	TransactionClosed,
 	TransactionCommitFailed,
@@ -38,6 +39,14 @@ export {
 	TransactionUnsupported,
 	type TransactionError,
 } from "./database/errors"
+export {
+	paginate,
+	type KeysetColumn,
+	type KeysetDirection,
+	type KeysetOrder,
+	type Page,
+	type PaginateOptions,
+} from "./database/paginate"
 export { QuerySummary, withQuerySummary } from "./database/tracing"
 export { sql, type SqlIdentifier, type SqlRawText, type SqlTemplate } from "./database/sql"
 export type { DialectTransactions, IsolationLevel, TransactionSettings } from "./ch/dialect"

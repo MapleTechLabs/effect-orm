@@ -511,8 +511,8 @@ placeholders, double-quoted identifiers.
 | `ClickHouseStatementFromString`, `splitTerminalClauses`, `maskLiteralsAndComments`               | `/sql`            |
 | Schema tooling: `isSchemaObject`, `makeSnapshot`, `renderSchema`, `diffSchemas`, `diffPgSchemas`, `fromDrizzleSnapshot`, snapshot and entity schemas (`PgEnumEntity`, `PgUniqueEntity`, …), `Hint` | `/schema`         |
 | `run`, `status`, `verify`, `baseline`, `MigrationDriver` and the migrate errors                  | `/migrate`        |
-| `Database`, `run`, `sql`, `query`, `execute`, `transaction`, `requireTransaction`, `retryContention`, `Transaction` | `/database` |
-| `DatabaseError`, `TransactionCommitFailed`, `TransactionRollbackFailed` and the other transaction errors | `/database` |
+| `Database`, `run`, `paginate`, `sql`, `query`, `execute`, `transaction`, `requireTransaction`, `retryContention`, `Transaction` | `/database` |
+| `DatabaseError`, `InvalidCursor`, `TransactionCommitFailed`, `TransactionRollbackFailed` and the other transaction errors | `/database` |
 | `withQuerySummary`, `QuerySummary` — the `db.query.summary` of the statements an effect runs, for spans | `/database` |
 | `ClickhouseHttpClient`, `layer`, `make`, `ClickhouseHttpClientConfig` — a ClickHouse `SqlClient` over `fetch`, for Workers | `/clickhouse-http` |
 | `defineConfig`, `generate`, `check`, `pull`, `loadSchema`, `readMigrations`, `analyze`, `KitError` | `/kit`            |

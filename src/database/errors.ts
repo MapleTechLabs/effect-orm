@@ -82,3 +82,13 @@ export type TransactionError =
 	| TransactionCommitFailed
 	| TransactionRollbackFailed
 	| TransactionClosed
+
+/**
+ * `paginate` was given a cursor it cannot read: not one it wrote, one written
+ * for another sort order, or one changed on the way. The cursor usually comes
+ * from a request, so this is an error to answer (a 400), not a defect.
+ */
+export class InvalidCursor extends Schema.TaggedError<InvalidCursor>()("@maple-dev/effect-orm/InvalidCursor", {
+	message: Schema.String,
+	cause: Schema.Defect(),
+}) {}
