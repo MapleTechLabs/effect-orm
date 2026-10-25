@@ -124,7 +124,8 @@ it.each(rebuilds)("rebuilds the table for %s, keeps its rows and recreates its i
 	expect(second.plan[0]!.sql).toEqual([
 		"PRAGMA foreign_keys=OFF",
 		expect.stringMatching(/^CREATE TABLE "__new_links" \(/),
-		expect.stringMatching(/^INSERT INTO "__new_links"\("id", "url"(, "hits")?\) SELECT "id", "url"(, "hits")? FROM "links"$/),
+		// A NOT NULL column with a default copies through COALESCE, so old NULLs take the default.
+		expect.stringMatching(/^INSERT INTO "__new_links"\("id", "url"(, "hits")?\) SELECT "id", ("url"|COALESCE\("url", 'none'\))(, "hits")? FROM "links"$/),
 		'DROP TABLE "links"',
 		'ALTER TABLE "__new_links" RENAME TO "links"',
 		"PRAGMA foreign_keys=ON",
@@ -133,6 +134,18 @@ it.each(rebuilds)("rebuilds the table for %s, keeps its rows and recreates its i
 	await expectMigratedToEqualFresh(v2)
 	const rows = await rowsAfter(allStatements(seedLinks), 'SELECT "id", "url" FROM "links" ORDER BY "id"')
 	expect(rows).toEqual([{ id: "a", url: "https://a" }, { id: "b", url: "https://b" }])
+})
+
+it("fills existing NULLs with the default when a column becomes NOT NULL with one", async () => {
+	await generateFrom(links(`id: SQLite.text, url: SQLite.nullable(SQLite.text)`))
+	const v2 = links(`id: SQLite.text, url: SQLite.column(SQLite.text, { default: "none" })`)
+	await generateFrom(v2)
+	await expectMigratedToEqualFresh(v2)
+	const seed = [`INSERT INTO "links" ("id", "url") VALUES ('a', 'https://a'), ('b', NULL)`]
+	expect(await rowsAfter(allStatements(seed), 'SELECT "id", "url" FROM "links" ORDER BY "id"')).toEqual([
+		{ id: "a", url: "https://a" },
+		{ id: "b", url: "none" },
+	])
 })
 
 it("rebuilds the table for a primary key change", async () => {

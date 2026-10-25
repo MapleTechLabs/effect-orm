@@ -19,16 +19,18 @@ const pick = <K extends SqliteSchemaEntity["kind"]>(entities: ReadonlyArray<Sqli
 	entities.filter((e): e is Extract<SqliteSchemaEntity, { kind: K }> => e.kind === kind)
 
 // Renames first, so later ops use the new names. Index drops before column
-// drops, so no dropped column is still indexed. Tables and columns exist
-// before the indexes that need them, and a rebuilt table before its indexes.
+// drops, so no dropped column is still indexed. Column adds before column
+// drops: SQLite cannot drop a table's last column, and replacing every column
+// would otherwise try to. Tables and columns exist before the indexes that
+// need them, and a rebuilt table before its indexes.
 const opOrder: Record<SqliteMigrationOp["op"], number> = {
 	rename_table: 0,
 	rename_column: 1,
 	drop_index: 2,
-	drop_column: 3,
-	drop_table: 4,
-	create_table: 5,
-	add_column: 6,
+	add_column: 3,
+	drop_column: 4,
+	drop_table: 5,
+	create_table: 6,
 	rebuild_table: 7,
 	create_index: 8,
 }

@@ -57,6 +57,16 @@ export const rebuildName = (table: string): string => `__new_${table}`
 
 const list = (names: ReadonlyArray<string>): string => names.map(sqliteIdent).join(", ")
 
+/**
+ * What a rebuild copies into a column. A column that gains NOT NULL keeps its
+ * default for existing NULLs: an explicit NULL in `INSERT ... SELECT` does not
+ * take the column's default, so the copy would fail on the old NULLs.
+ */
+const copied = (column: SqliteColumnEntity | undefined, name: string): string =>
+	column?.notNull === true && column.default !== null && column.default.toUpperCase() !== "NULL"
+		? `COALESCE(${sqliteIdent(name)}, ${column.default})`
+		: sqliteIdent(name)
+
 /** The statements one op runs, in order. */
 export const renderSqliteOp = (op: SqliteMigrationOp): ReadonlyArray<string> => {
 	switch (op.op) {
@@ -78,7 +88,11 @@ export const renderSqliteOp = (op: SqliteMigrationOp): ReadonlyArray<string> => 
 			return [
 				"PRAGMA foreign_keys=OFF",
 				created,
-				...(op.copy.length === 0 ? [] : [`INSERT INTO ${sqliteIdent(temporary)}(${list(op.copy)}) SELECT ${list(op.copy)} FROM ${sqliteIdent(op.table.name)}`]),
+				// With no column in common the rows still carry over, every column taking its default:
+				// only the dropped columns' data was confirmed lost, not the table's rows.
+				op.copy.length === 0
+					? `INSERT INTO ${sqliteIdent(temporary)}(rowid) SELECT rowid FROM ${sqliteIdent(op.table.name)}`
+					: `INSERT INTO ${sqliteIdent(temporary)}(${list(op.copy)}) SELECT ${op.copy.map((name) => copied(op.columns.find((c) => c.name === name), name)).join(", ")} FROM ${sqliteIdent(op.table.name)}`,
 				`DROP TABLE ${sqliteIdent(op.table.name)}`,
 				`ALTER TABLE ${sqliteIdent(temporary)} RENAME TO ${sqliteIdent(op.table.name)}`,
 				"PRAGMA foreign_keys=ON",

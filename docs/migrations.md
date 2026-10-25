@@ -454,9 +454,28 @@ A rebuild follows [SQLite's procedure](https://www.sqlite.org/lang_altertable.ht
 the way drizzle-kit writes it: `PRAGMA foreign_keys=OFF`, `CREATE TABLE "__new_<table>"` with the
 new definition, `INSERT INTO "__new_<table>" (...) SELECT ...` for every column both tables
 have, `DROP TABLE`, `ALTER TABLE "__new_<table>" RENAME TO "<table>"`, `PRAGMA foreign_keys=ON`,
-then every index of the table again. A copy fails when the rows do not fit the new table, such
-as a column made NOT NULL over existing NULLs or a new NOT NULL column with no default. A
-column a rebuild leaves out needs the same `confirm_data_loss` hint as a dropped column.
+then every index of the table again. A column made NOT NULL that has a default is copied as
+`COALESCE(<column>, <default>)`, so existing NULLs take the default. A copy fails when the rows
+do not fit the new table, such as a column made NOT NULL over existing NULLs with no default, or
+a new UNIQUE constraint over duplicate values. A column a rebuild leaves out needs the same
+`confirm_data_loss` hint as a dropped column.
+
+> [!WARNING]
+> `PRAGMA foreign_keys=OFF` does nothing inside a transaction, and D1 and most migrators run each
+> migration in one. There, the rebuild's `DROP TABLE` deletes every row of the old table first, so
+> a table that references it with `ON DELETE CASCADE` loses its rows, and `ON DELETE SET NULL`
+> clears them. effect-orm declares no foreign keys, but a database may have them from another
+> tool. Before applying a rebuild of a referenced table, check for such keys
+> (`SELECT * FROM pragma_foreign_key_list('<child>')`) and, if there are any, run the rebuild
+> outside a transaction with foreign keys off.
+
+A rebuild renumbers rowids: the copy may read the old rows in any order. A table whose rows are
+referenced by rowid (rather than by a declared key) should declare an `integer` primary key, which
+is the rowid and is copied.
+
+`ALTER TABLE ... ADD COLUMN` always appends, so a column declared between two existing ones is
+last in the database and first-to-last order differs from a fresh create. Name columns in
+`INSERT` and `SELECT`, as the builder does.
 
 A rename is never guessed. Without a hint it reads as a drop plus an add, and the drop asks for
 confirmation. Pass the rename instead:
