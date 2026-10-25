@@ -47,6 +47,7 @@ Everything in this section is exported, identically, from both `/clickhouse` and
 | `update`     | `(table) => CHUpdateStart`, then `CHUpdate`: `.set(record \| fn)`, `.where(fn)` or `.allRows()`, `.returning(...)`, `.settings(record)`. See [Updating and deleting](./updates-and-deletes.md) |
 | `deleteFrom` | `(table) => CHDelete`: `.where(fn)` or `.allRows()`, `.returning(...)`, `.settings(record)` |
 | `insertInto` | `(table) => CHInsertStart`, then `CHInsert`; `.values(row \| rows)` or `.select(query)` sets its rows, `.settings(record)` ClickHouse `SETTINGS`, `.returning(...)` the RETURNING list, `.onConflictDoNothing(options?)` / `.onConflictDoUpdate(options)` the ON CONFLICT clause (Postgres). See [Inserting rows](./inserts.md) |
+| `fillDefaults` | `(write) => Effect<write, never, RequirementsOf<write>>`: runs the `defaultFn` / `onUpdate` Effects of an insert's or update's table into its rows or SET. `Database.run` calls it; call it before `compile` when you compile a write yourself. See [client-side defaults](./inserts.md#client-side-defaults) |
 
 Tables come from the dialect's `table`: [`CH.table`](#tables-and-ddl) or
 [`PG.table`](#tables-and-ddl-1).
@@ -180,6 +181,10 @@ decoded type of a column), `InferEncoded` (its wire type), `ColumnDefs`, `Nullab
 
 **Inference** — `InferOutput`, `InferQueryOutput`, `InferUnionOutput`, `SelectRowOf`,
 `InsertRow`, `InsertRowOf`, `UpdateSet`, `UpdateSetOf`.
+
+**Client-side defaults** — `RequirementsOf<W>` (what a write's client defaults need; `never` for
+anything else), `ClientDefaults` (the `insert` and `update` Effects per column, on
+`Table.clientDefaults`).
 
 **What `compile` checks** — `NeedsSelect<Output>` (the query has a SELECT list) and
 `ParamsSatisfied<Params, Given>` (the params object fills every required param). A helper generic
@@ -453,7 +458,11 @@ const Users = PG.table("users", {
 `/clickhouse`: a view, a catalog table, one another tool migrates. No DDL.
 
 **`ColumnOptions`** — one of `default`, `defaultExpr`, `identity` (`"always"` or
-`"by default"`); any of them lets an insert leave the column out (`DefaultedColumnsOf`). Also
+`"by default"`); any of them lets an insert leave the column out (`DefaultedColumnsOf`).
+`defaultFn` and `onUpdate` are client-side defaults: an `Effect` of a value of the column's type
+that cannot fail, run by `Database.run` for an insert that leaves the column out and an update
+that does not set it. Either one lets an insert leave the column out, and its requirements
+become the write's ([client-side defaults](./inserts.md#client-side-defaults)). Also
 `name` (the column's name in SQL) and `unique` (`true`, a constraint name, or
 `UniqueColumnOptions`: `{ name?, nullsNotDistinct? }`), which names a one-column constraint
 `<table>_<column>_unique` by default.

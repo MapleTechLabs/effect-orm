@@ -35,6 +35,13 @@ names the record type.
 
 `update(table)` offers only `set` until it has one (its type is `CHUpdateStart`).
 
+A Postgres column with `onUpdate` (an Effect, see
+[client-side defaults](./inserts.md#client-side-defaults)) is set by every update that does not
+set it: `Database.run` runs the Effect once and adds the value to the SET. With a SET callback,
+the Effect runs before the callback, and a value the callback gives wins. The update requires
+what the Effect needs. `compile` refuses an update that does not set the column, unless it went
+through `fillDefaults` first.
+
 ## WHERE, and writing every row
 
 `where` works as in a query: a list of conditions, AND-joined, with an `undefined` one skipped,
