@@ -3,6 +3,23 @@
 import { DatabaseSync } from "node:sqlite"
 import { Miniflare } from "miniflare"
 
+/**
+ * Retry what failed to reach workerd ("fetch failed": a dropped local socket
+ * under a soak's load), as the ClickHouse helper retries a dropped request. A
+ * database error is not retried: it reached the database and is the finding.
+ */
+export const retryTransport = async <A>(run: () => Promise<A>): Promise<A> => {
+	for (let attempt = 1; ; attempt++) {
+		try {
+			return await run()
+		} catch (error) {
+			const message = error instanceof Error ? `${error.message} ${String((error as { cause?: unknown }).cause ?? "")}` : String(error)
+			if (attempt >= 5 || !/fetch failed|ECONNRESET|ECONNREFUSED|socket hang up/.test(message)) throw error
+			await new Promise((resolve) => setTimeout(resolve, 100 * 2 ** attempt))
+		}
+	}
+}
+
 export type RawQuery = (sql: string, parameters: ReadonlyArray<unknown>) => Promise<ReadonlyArray<Record<string, unknown>>>
 
 /** An in-memory SQLite (Node's built-in driver, the one `@effect/sql-sqlite-node` uses). */
@@ -31,7 +48,7 @@ export const d1Database = (): { readonly query: RawQuery; readonly close: () => 
 	return {
 		query: async (sql, parameters) => {
 			const { db } = await start()
-			return (await db.prepare(sql).bind(...parameters).all()).results
+			return retryTransport(async () => (await db.prepare(sql).bind(...parameters).all()).results)
 		},
 		close: async () => {
 			if (started !== undefined) await (await started).mf.dispose()
