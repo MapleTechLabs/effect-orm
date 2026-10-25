@@ -37,8 +37,17 @@ export const clickhouseText = async (
 	}
 }
 
+/**
+ * A ClickHouse server bug, not the builder's: the common-expression rewrite can
+ * leave a one-argument and() (`a AND ((b AND a) OR a)`, `(a OR 0 OR a) AND (a OR 0)`,
+ * and more shapes than a matcher keeps up with), which fails with this error.
+ * The query is run again with the rewrite off, and its rows still checked.
+ */
+const SERVER_AND_BUG = /Number of arguments for function "and" should be at least 2/
+
 const runClickHouse = async (compiled: CH.CompiledQuery<any>, settings: Record<string, string>): Promise<Outcome> => {
-	const { ok, text } = await clickhouseText(compiled.sql, settings)
+	let { ok, text } = await clickhouseText(compiled.sql, settings)
+	if (!ok && SERVER_AND_BUG.test(text)) ({ ok, text } = await clickhouseText(compiled.sql, { ...settings, optimize_extract_common_expressions: "0" }))
 	if (!ok) return { _tag: "DatabaseError", message: text.trim() }
 	const wire = text
 		.split("\n")
