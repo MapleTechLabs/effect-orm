@@ -556,8 +556,17 @@ export function makeExpr<T>(
 			arith<number | Extract<T | R, null>>(fragment, "-", n, schema),
 		mod: <R extends number | null>(n: R | Expr<R>) => arith<Quotient<T, R>>(fragment, "%", n, schema),
 	}
+	operands.set(self, operand)
 	return self
 }
+
+// How each expression writes a plain value on the right of a comparison, for
+// SQL that compares outside the comparison methods: a row value `(a, b) > (x, y)`.
+const operands = new WeakMap<Expr<any, any>, (value: unknown) => SqlFragment>()
+
+/** A plain value as `expr`'s comparisons write it: through the column's codec when `expr` is a column. */
+export const operandOf = (expr: Expr<any, any>, value: unknown): SqlFragment =>
+	operands.get(expr)?.(value) ?? toFragment(value)
 
 /**
  * An expression with no declared result type — {@link untypedExpr}'s
