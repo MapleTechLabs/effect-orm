@@ -1400,14 +1400,14 @@ const isNumberSchema = (schema: unknown): boolean => {
 }
 
 /**
- * The union columns to cast to one numeric type, on a dialect with a
- * `unionNumberCast`: every branch selects a number there, and their types may
- * differ, because the branches declare different column types, or compute it
- * differently (arithmetic has no declared type: `Id + 1` is UInt64, `Id - 1` Int64).
+ * The union columns a dialect with `unionNumberOrderKeys` orders through those
+ * keys: every branch selects a number, and their types may differ, because the
+ * branches declare different column types or compute it differently
+ * (arithmetic has no declared type: `Id + 1` is UInt64, `Id - 1` Int64).
  */
-function unionNumberCasts(queries: ReadonlyArray<CHQuery<any, any, any, any>>, selectKeys: ReadonlyArray<string>): ReadonlySet<string> {
+function mixedNumberColumns(queries: ReadonlyArray<CHQuery<any, any, any, any>>, selectKeys: ReadonlyArray<string>): ReadonlySet<string> {
 	const casts = new Set<string>()
-	if (currentDialect().unionNumberCast === undefined || queries.length < 2) return casts
+	if (currentDialect().unionNumberOrderKeys === undefined || queries.length < 2) return casts
 	for (const alias of selectKeys) {
 		const exprs = queries.map((q) => (selectExprsOf(q) as Record<string, unknown> | undefined)?.[alias])
 		const kinds = exprs.map((expr) => {
@@ -1452,14 +1452,7 @@ function compileUnionInner<Output extends Record<string, any>, Params extends Re
 	const subQueries = state.queries.map((q) =>
 		compileInner(q, params, { skipFormat: true, deferParams, nested: true, selectKeys, enclosingCtes }),
 	)
-	// Cast around each branch, not inside it: a branch's DISTINCT, GROUP BY and LIMIT still see the
-	// exact values (two UInt64s past 2^53 are one Float64).
-	const castNumbers = unionNumberCasts(state.queries, selectKeys)
-	const numberCast = currentDialect().unionNumberCast
-	const branchSql = (sql: string): string =>
-		castNumbers.size === 0 || numberCast === undefined
-			? sql
-			: `SELECT ${selectKeys.map((key) => (castNumbers.has(key) ? `${numberCast(quoteIdent(key))} AS ${quoteIdent(key)}` : quoteIdent(key))).join(", ")} FROM (\n${sql}\n)${currentDialect().clauses.derivedTableAlias ? ` AS ${quoteIdent("__branch")}` : ""}`
+	const mixedNumbers = mixedNumberColumns(state.queries, selectKeys)
 	const bounds = new Set(
 		subQueries.flatMap((q) => {
 			const bound = tenantBoundOf(q)
@@ -1483,7 +1476,7 @@ function compileUnionInner<Output extends Record<string, any>, Params extends Re
 				: "cross-tenant"
 
 	const parenthesize = currentDialect().clauses.parenthesizeUnionBranches
-	let sql = subQueries.map((q) => branchSql(q.sql)).map((q) => (parenthesize ? `(\n${q}\n)` : q)).join("\nUNION ALL\n")
+	let sql = subQueries.map((q) => (parenthesize ? `(\n${q.sql}\n)` : q.sql)).join("\nUNION ALL\n")
 
 	// Wrap in outer SELECT if ordering/pagination is needed
 	const hasOuter =
@@ -1492,7 +1485,14 @@ function compileUnionInner<Output extends Record<string, any>, Params extends Re
 	if (hasOuter) {
 		sql = `SELECT * FROM (\n${sql}\n)${currentDialect().clauses.derivedTableAlias ? ` AS ${quoteIdent("__union")}` : ""}`
 		if (state.outerOrderBySpecs.length > 0) {
-			sql += `\nORDER BY ${orderByClause(state.outerOrderBySpecs).join(", ")}`
+			const orderKeys = currentDialect().unionNumberOrderKeys
+			const clause = orderByClause(state.outerOrderBySpecs).map((rendered, i) => {
+				const [column, direction] = state.outerOrderBySpecs[i]!
+				return orderKeys !== undefined && mixedNumbers.has(column)
+					? orderKeys(quoteIdent(column)).map((key) => `${key} ${direction.toUpperCase()}`).join(", ")
+					: rendered
+			})
+			sql += `\nORDER BY ${clause.join(", ")}`
 		}
 		if (state.outerLimitValue != null) {
 			sql += `\nLIMIT ${compileSqlFragment(rowCount("limit", state.outerLimitValue)!)}`
