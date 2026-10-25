@@ -12,7 +12,7 @@
 // identifier that happens to parse.
 
 import { activeLiteralBinder } from "../sql/literal-binder"
-import { Result, Schema } from "effect"
+import { Redacted, Result, Schema } from "effect"
 import { QueryBuilderError } from "./errors"
 import { quoteClickHouseString } from "../sql/sql-fragment"
 import { activeSqlSyntax } from "../sql/sql-syntax"
@@ -112,6 +112,14 @@ export function sqlLiteral(value: unknown, context: string): string {
 }
 
 /**
+ * Whether a value was given as `Redacted`, or is an array holding one: a value
+ * a span or a log must not show. A column whose schema is
+ * `Schema.RedactedFromValue(...)` takes only such values.
+ */
+export const isSensitive = (value: unknown): boolean =>
+	Redacted.isRedacted(value) || (Array.isArray(value) && value.some(isSensitive))
+
+/**
  * Encode a value through a schema, then write it as a literal.
  *
  * The schema is the contract in both directions, so a value of the wrong shape
@@ -120,7 +128,7 @@ export function sqlLiteral(value: unknown, context: string): string {
 export function encodeLiteral<A>(schema: Schema.Codec<A, any>, value: unknown, context: string): string {
 	const wire = encodeValue(schema, value, context)
 	const bind = activeLiteralBinder()
-	return bind !== undefined ? bind(wire) : (activeSqlSyntax()?.literal ?? sqlLiteral)(wire, context)
+	return bind !== undefined ? bind(wire, isSensitive(value)) : (activeSqlSyntax()?.literal ?? sqlLiteral)(wire, context)
 }
 
 /**

@@ -23,7 +23,7 @@ import { compileQuery, type SqlQuery } from "../sql/sql-query"
 import { track, untracked, type RenderTrack } from "../sql/render-tracker"
 import { PARAM_MARKER_PREFIX, PARAM_PLACEHOLDER_PATTERN, param, paramColumnTypeOf, paramSchema, type ParamKind } from "./param"
 import { mergeResultSchemas } from "./define-fn"
-import { encodeValue } from "./literal"
+import { encodeValue, isSensitive } from "./literal"
 import { checkedLiteral, clickhouseDialect, currentDialect, withDialect, type Dialect } from "./dialect"
 import { Effect, Option, Schema } from "effect"
 import { QueryBuilderDefect, QueryBuilderError } from "./errors"
@@ -201,6 +201,14 @@ interface CompiledQueryBase<Output> {
 	 * what ClickHouse (the default) does.
 	 */
 	readonly parameters: ReadonlyArray<unknown>
+	/**
+	 * The indexes in `parameters` of the values given as `Redacted`: a
+	 * comparison value, a param or a written value of a column whose schema is
+	 * `Schema.RedactedFromValue(...)`. The driver gets the plain value; a span
+	 * or a log must not. Absent when there are none, and on a dialect that
+	 * writes params into the SQL.
+	 */
+	readonly sensitiveParameters?: ReadonlyArray<number>
 	readonly tenantScope: TenantScope
 	/**
 	 * Set when the author asked for `"cross-tenant"`: `.crossTenant()` on the
@@ -424,6 +432,7 @@ const makeCompiledQuery = <Output, Route extends string | undefined>(
 	returning?: ReadonlyArray<string>,
 	crossTenantDeclared = false,
 	collection?: string,
+	sensitiveParameters: ReadonlyArray<number> = [],
 ): CompiledQuery<Output, Route> => {
 	let cachedDecodeRow: ((row: unknown) => Effect.Effect<Output, unknown, never>) | undefined
 	let decoderBuilt = false
@@ -488,6 +497,7 @@ const makeCompiledQuery = <Output, Route extends string | undefined>(
 		kind,
 		...(returning !== undefined ? { returning } : undefined),
 		parameters,
+		...(sensitiveParameters.length > 0 ? { sensitiveParameters } : undefined),
 		tenantScope,
 		...(crossTenantDeclared ? { crossTenantDeclared: true } : undefined),
 		// Resolved eagerly only here, where the getter is already memoised by
@@ -984,10 +994,12 @@ function compileInner<
 		// Once, at the top: a nested query's SQL is spliced into this one, and a
 		// dialect that binds numbers its placeholders across the whole statement.
 		let parameters: ReadonlyArray<unknown> = []
+		let sensitiveParameters: ReadonlyArray<number> = []
 		if (!deferParams && options?.nested !== true) {
 			const rendered = renderParams(sql, params, currentDialect())
 			sql = rendered.sql
 			parameters = rendered.parameters
+			sensitiveParameters = rendered.sensitiveParameters
 		}
 
 		const scope = deriveTenantScope(sources, [{ predicates: wherePredicates }, ...joinPredicates], (value) =>
@@ -1019,6 +1031,7 @@ function compileInner<
 				state.fromQuery || state.fromUnion || visibleCtes.some((c) => c.name === state.tableName)
 					? undefined
 					: state.tableName,
+				sensitiveParameters,
 			),
 			tenantScope === "single-tenant" ? scope.bound : undefined,
 		)
@@ -1467,10 +1480,12 @@ function compileUnionInner<Output extends Record<string, any>, Params extends Re
 	}
 
 	let parameters: ReadonlyArray<unknown> = []
+	let sensitiveParameters: ReadonlyArray<number> = []
 	if (!deferParams && options?.nested !== true) {
 		const rendered = renderParams(sql, params, currentDialect())
 		sql = rendered.sql
 		parameters = rendered.parameters
+		sensitiveParameters = rendered.sensitiveParameters
 	}
 
 	// A union decodes as its branches do — but not as its FIRST branch does.
@@ -1500,6 +1515,8 @@ function compileUnionInner<Output extends Record<string, any>, Params extends Re
 			"select",
 			undefined,
 			state.crossTenant === true,
+			undefined,
+			sensitiveParameters,
 		),
 		tenantScope === "single-tenant" ? [...bounds][0] : undefined,
 	)
@@ -1520,13 +1537,20 @@ function compileUnionInner<Output extends Record<string, any>, Params extends Re
  * Params the query doesn't mention are ignored — one bag of params is commonly
  * shared across a family of queries.
  */
+interface RenderedParams {
+	readonly sql: string
+	readonly parameters: ReadonlyArray<unknown>
+	readonly sensitiveParameters: ReadonlyArray<number>
+}
+
 function renderParams(
 	sql: string,
 	params: Record<string, unknown>,
 	dialect: Dialect,
-): { readonly sql: string; readonly parameters: ReadonlyArray<unknown> } {
+): RenderedParams {
 	const missing: Array<string> = []
 	const parameters: Array<unknown> = []
+	const sensitiveParameters: Array<number> = []
 	// Keyed by kind and name: `dateTime` and `dateTimeSeconds` read one value
 	// and encode it differently, so they are two bound values, not one.
 	const bound = new Map<string, string>()
@@ -1544,6 +1568,9 @@ function renderParams(
 		const key = `${kind}\0${name}`
 		const existing = style.reuse ? bound.get(key) : undefined
 		if (existing !== undefined) return existing
+		if (sensitiveNames?.has(name) === true || (literal === undefined && isSensitive(params[name]))) {
+			sensitiveParameters.push(parameters.length)
+		}
 		parameters.push(value)
 		const marker = style.placeholder(parameters.length, kind)
 		bound.set(key, marker)
@@ -1554,7 +1581,7 @@ function renderParams(
 		return fail(new QueryBuilderError({
 			code: "InvalidArguments",
 			message: `compile: the statement binds ${parameters.length} values, over the ${style.maxParameters} ${dialect.name} allows in one statement; send fewer rows per statement`,
-		}), { sql: "", parameters: [] })
+		}), { sql: "", parameters: [], sensitiveParameters: [] })
 	}
 
 	if (missing.length > 0) {
@@ -1563,7 +1590,7 @@ function renderParams(
 			message: `compile: no value given for param${missing.length > 1 ? "s" : ""} ${missing
 				.map((n) => `'${n}'`)
 				.join(", ")}`,
-		}), { sql: "", parameters: [] })
+		}), { sql: "", parameters: [], sensitiveParameters: [] })
 	}
 
 	// Nothing placeholder-shaped may survive a resolved compile. The loop above
@@ -1574,10 +1601,10 @@ function renderParams(
 		return fail(new QueryBuilderError({
 			code: "UnresolvedParam",
 			message: "compile: unresolved param placeholder remains in the compiled SQL",
-		}), { sql: "", parameters: [] })
+		}), { sql: "", parameters: [], sensitiveParameters: [] })
 	}
 
-	return { sql: resolved, parameters }
+	return { sql: resolved, parameters, sensitiveParameters }
 }
 
 /**
@@ -1631,6 +1658,9 @@ const LITERAL_PARAM = "$$l"
 /** The values bound by the enclosing compile, by param name; see `withBoundLiterals`. */
 let boundLiterals: Map<string, { readonly wire: unknown }> | undefined
 
+/** The params of the enclosing compile whose values were given as `Redacted`. */
+let sensitiveNames: Set<string> | undefined
+
 /**
  * Run a compile with its literal values bound, on a dialect that binds params:
  * each value becomes a param of its own, the same value the same param, so the
@@ -1642,9 +1672,11 @@ function withBoundLiterals<A>(dialect: Dialect, body: () => A): A {
 	const values = new Map<string, { readonly wire: unknown }>()
 	const names = new Map<string, string>()
 	const previous = boundLiterals
+	const previousSensitive = sensitiveNames
 	boundLiterals = values
+	sensitiveNames = new Set()
 	try {
-		return withLiteralBinder((wire) => {
+		return withLiteralBinder((wire, sensitive) => {
 			const key = `${typeof wire}\0${JSON.stringify(wire)}`
 			let name = names.get(key)
 			if (name === undefined) {
@@ -1652,10 +1684,13 @@ function withBoundLiterals<A>(dialect: Dialect, body: () => A): A {
 				names.set(key, name)
 				values.set(name, { wire })
 			}
+			// One value given both ways is one param: it is sensitive.
+			if (sensitive === true) sensitiveNames?.add(name)
 			return compileSqlFragment(param.of(insertWireValue, name).toFragment())
 		}, body)
 	} finally {
 		boundLiterals = previous
+		sensitiveNames = previousSensitive
 	}
 }
 
@@ -1739,7 +1774,7 @@ const returningOf = (
 
 /** A write's compiled query, with the row schema its RETURNING list derives. */
 const writeCompiledQuery = (
-	rendered: { readonly sql: string; readonly parameters: ReadonlyArray<unknown> },
+	rendered: RenderedParams,
 	kind: "insert" | "update" | "delete",
 	tenantScope: TenantScope,
 	tenantBound: string | undefined,
@@ -1764,6 +1799,7 @@ const writeCompiledQuery = (
 			returning?.aliases,
 			crossTenant === true,
 			collection,
+			rendered.sensitiveParameters,
 		),
 		crossTenant === true ? undefined : tenantBound,
 	)
@@ -1784,6 +1820,7 @@ const valueCells = (table: Table<string, ColumnDefs>, params: Record<string, unk
 		let name = `${VALUE_PARAM}${next++}`
 		while (Object.hasOwn(params, name)) name = `${VALUE_PARAM}${next++}`
 		values[name] = wire
+		if (isSensitive(value)) sensitiveNames?.add(name)
 		return compileSqlFragment(param.of(insertWireValue, name).toFragment())
 	}
 	return { values, cell }

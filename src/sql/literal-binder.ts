@@ -6,8 +6,11 @@
 // shape is one statement whatever the values. `compile` installs a binder here
 // for the duration of the compile, as it installs the dialect's syntax.
 
-/** Takes an encoded wire value; returns the SQL that stands for it. */
-export type LiteralBinder = (wire: unknown) => string
+/**
+ * Takes an encoded wire value, and whether it was given as `Redacted`; returns
+ * the SQL that stands for it.
+ */
+export type LiteralBinder = (wire: unknown, sensitive?: boolean) => string
 
 let current: LiteralBinder | undefined
 
