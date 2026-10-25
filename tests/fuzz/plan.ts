@@ -9,6 +9,7 @@
 // so a plan is well-typed by construction, and the builder refusing one is a
 // finding rather than noise.
 import fc from "fast-check"
+import type { FuzzDialect } from "./dialects/types"
 import { nastyString, wellFormed } from "./values"
 
 // The fixture (tests/core-cases.ts): five orders, four customers, two orgs.
@@ -106,6 +107,8 @@ export interface Plan {
 export interface GenOptions {
 	/** Strings for comparisons and LIKE patterns: anything, or only what sorts the same everywhere. */
 	readonly strings: fc.Arbitrary<string>
+	/** Whether the dialect has ILIKE (`FuzzDialect.ilike`). */
+	readonly ilike: boolean
 }
 
 /** Mostly the fixture's own numbers (Id 1–5, Amount 5/7/10/20/99), so comparisons split the rows. */
@@ -183,10 +186,32 @@ const operand = (sort: Sort, joined: boolean, options: GenOptions): fc.Arbitrary
 				{ weight: 1, arbitrary: expr(sort === "nstr" ? "str" : sort, joined, 1, options).map((e): Operand => ({ k: "expr", e })) },
 			)
 
-/** LIKE patterns over the fixture's letters; `\` only ever escapes `%`, `_` or `\`, which both databases agree on. */
-const likePattern = fc
+/** LIKE patterns over the fixture's letters; `\` only ever escapes `%`, `_` or `\`, which every database must agree on. */
+const soupPattern = fc
 	.array(fc.constantFrom("%", "_", "\\%", "\\_", "\\\\", "a", "c", "e", "m", "i", "o", "p", "AC", "G", "'", "s"), { maxLength: 5 })
 	.map((parts) => parts.join(""))
+
+/**
+ * A fixture value, edited letter by letter: re-cased, or replaced by `_` or `%`;
+ * a literal `_` or `%` in the value is escaped. Unlike letter soup, these
+ * patterns select rows, so case and escape rules change the result where
+ * dialects differ. A pattern that matches nothing tests nothing.
+ */
+const fixturePattern = fc
+	.tuple(fc.constantFrom(...FIXTURE_STRINGS), fc.array(fc.constantFrom("keep", "keep", "keep", "upper", "under", "pct"), { minLength: 1, maxLength: 9 }))
+	.map(([value, edits]) =>
+		[...value]
+			.map((ch, i) => {
+				const edit = edits[i % edits.length]
+				if (edit === "upper") return ch.toUpperCase()
+				if (edit === "under") return "_"
+				if (edit === "pct") return "%"
+				return ch === "_" || ch === "%" || ch === "\\" ? `\\${ch}` : ch
+			})
+			.join(""),
+	)
+
+const likePattern = fc.oneof(soupPattern, fixturePattern)
 
 const cond = (joined: boolean, depth: number, options: GenOptions): fc.Arbitrary<Cond> => {
 	const sorts: ReadonlyArray<Sort> = ["num", "str", "nstr", "time"]
@@ -202,7 +227,7 @@ const cond = (joined: boolean, depth: number, options: GenOptions): fc.Arbitrary
 		fc.constantFrom<Sort>("str", "nstr").chain((sort) =>
 			fc.record({
 				k: fc.constant("like" as const),
-				op: fc.constantFrom("like" as const, "notLike" as const, "ilike" as const),
+				op: fc.constantFrom("like" as const, "notLike" as const, ...(options.ilike ? (["ilike"] as const) : [])),
 				l: expr(sort, joined, 0, options),
 				pattern: likePattern,
 			}),
@@ -332,10 +357,12 @@ export const plan = (options: GenOptions): fc.Arbitrary<Plan> =>
 	})
 
 /** Every string the oracle compares by byte order: plain, so collation never enters. */
-export const plainOptions: GenOptions = {
+export const plainOptions = (dialect: FuzzDialect): GenOptions => ({
 	strings: fc.string({ unit: fc.constantFrom(..."abcdeghiklmnoprstuwxy_' -"), maxLength: 8 }),
-}
+	ilike: dialect.ilike,
+})
 /** Strings from the nasty generator: for escaping, where the model only needs equality. */
-export const nastyOptions = (dialect: "clickhouse" | "postgres" | "both"): GenOptions => ({
-	strings: nastyString(dialect).filter((s) => wellFormed(s)),
+export const nastyOptions = (dialect: FuzzDialect): GenOptions => ({
+	strings: nastyString(dialect.strings).filter((s) => wellFormed(s)),
+	ilike: dialect.ilike,
 })
