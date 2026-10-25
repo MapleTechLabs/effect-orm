@@ -241,7 +241,7 @@ Tag `"@maple-dev/effect-orm/CompiledQueryDecodeError"`. Fails the `decodeRows` /
 
 #### `SchemaDefinitionError`
 
-Tag `"@maple-dev/effect-orm/SchemaDefinitionError"`. Fails `S.entitiesOf`, `S.pgEntitiesOf` and
+Tag `"@maple-dev/effect-orm/SchemaDefinitionError"`. Fails `S.entitiesOf`, `S.pgEntitiesOf`, `S.sqliteEntitiesOf` and
 `TB.buildProject` when a definition cannot render: a name that is not a plain identifier, a
 MergeTree-family engine with no `orderBy`, a view reading from a union, a view writing to a table
 outside the schema. Fields: `problems` (every `DefinitionProblem`, `{ object, message }`) and
@@ -510,7 +510,7 @@ placeholders, double-quoted identifiers.
 | `SqlQuery`, `compileQuery`                                                                       | `/sql`            |
 | `ClickHouseStatement`, `parseStatement`, `renderStatement`, `withSettings`, `withFormat`         | `/sql`            |
 | `ClickHouseStatementFromString`, `splitTerminalClauses`, `maskLiteralsAndComments`               | `/sql`            |
-| Schema tooling: `isSchemaObject`, `makeSnapshot`, `renderSchema`, `diffSchemas`, `diffPgSchemas`, `fromDrizzleSnapshot`, snapshot and entity schemas (`PgEnumEntity`, `PgUniqueEntity`, …), `Hint` | `/schema`         |
+| Schema tooling: `isSchemaObject`, `makeSnapshot`, `renderSchema`, `diffSchemas`, `diffPgSchemas`, `fromDrizzleSnapshot`, snapshot and entity schemas (`PgEnumEntity`, `PgUniqueEntity`, …), `Hint`; for SQLite, `sqliteEntitiesOf`, `renderSqliteSchema`, `renderSqliteCreateTable`, `renderSqliteCreateIndex` and the `SqliteTableEntity`, `SqliteColumnEntity`, `SqliteIndexEntity`, `SqliteUniqueEntity` schemas | `/schema`         |
 | `run`, `status`, `verify`, `baseline`, `MigrationDriver` and the migrate errors                  | `/migrate`        |
 | `Database`, `run`, `sql`, `query`, `execute`, `transaction`, `requireTransaction`, `retryContention`, `Transaction` | `/database` |
 | `DatabaseError`, `TransactionCommitFailed`, `TransactionRollbackFailed` and the other transaction errors | `/database` |
@@ -522,8 +522,8 @@ placeholders, double-quoted identifiers.
 | `makeHttpClient`, `makeHttpTransport`, `httpConfigFromEnv`                                       | `/benchmark/http` |
 | `runCli`                                                                                         | `/benchmark/cli`  |
 
-`/schema` reads tables; it does not declare them. Declare tables with `table` from `/clickhouse`
-or `/postgres`. See [Schema and migrations](./migrations.md), [Database](./database.md),
+`/schema` reads tables; it does not declare them. Declare tables with `table` from `/clickhouse`,
+`/postgres` or `/sqlite`. See [Schema and migrations](./migrations.md), [Database](./database.md),
 [Running a query](./running-queries.md) for what the `/sql` statement helpers are for, and
 [Benchmarking](./benchmarking.md) for the complete benchmark API, command workflow, result
 verification, and JSON protocol.
@@ -545,13 +545,54 @@ interactive transactions. See [SQLite and D1](./sqlite.md) for driver wiring and
 | `boolean` | A boolean encoded as 0/1; other integers fail decoding |
 | `timestamp` | An instant stored as SQLite's `YYYY-MM-DD HH:MM:SS.SSS` UTC text; reads ISO-8601 too |
 | `sqliteTimestampText(epochMillis)` | That text for an instant, for raw SQL and seeds |
+| `timestampNow` | A `defaultExpr` for a `timestamp` column: the current time in that text form |
 | `blob` | Bytes from a Uint8Array or D1's array wire representation |
 | `json(schema)` | JSON text decoded through the supplied schema |
 | `nullable(type)`, `custom`, `brand` | Type composition |
-| `table(name, columns, options?)`, `TableOptions` | A query schema, including `tenantColumn`, defaults and computed-column metadata; no generated DDL |
-| `table(name, ExternalTableDefinition)`, `ExternalTableDefinition` | `{ external: true, columns, tenantColumn? }`, the same query schema in the `/clickhouse` and `/postgres` form |
 | `count`, `countDistinct`, `countIf`, `sum`, `avg`, `min`, `max` | SQLite aggregates; the last four can return SQL NULL |
 | `lower`, `upper`, `length`, `coalesce` | SQLite scalar functions |
 
-SQLite's table definition is for query typing and decoding. The schema/kit/migrate entries
-currently support ClickHouse and Postgres DDL only.
+### Tables and DDL
+
+```ts
+const Links = SQLite.table("short_link", {
+	columns: {
+		id: SQLite.text,
+		code: SQLite.column(SQLite.text, { unique: true }),
+		orgId: SQLite.column(SQLite.nullable(SQLite.text), { name: "org_id" }),
+		clickCount: SQLite.column(SQLite.integer, { name: "click_count", default: 0 }),
+		createdAt: SQLite.column(SQLite.text, { name: "created_at", defaultExpr: "(CURRENT_TIMESTAMP)" }),
+	},
+	primaryKey: ["id"],
+	indexes: [SQLite.index("short_link_org", ["orgId"])],
+	tenantColumn: "orgId",
+})
+```
+
+| Export | Signature |
+| --- | --- |
+| `table` | `(name, TableDefinition) => SqliteSchemaTable`, `(name, ExternalTableDefinition) => Table`, or `(name, columns, TableOptions?) => Table`, a query schema with no DDL |
+| `column` | `(type, ColumnOptions) => ColumnSpec` |
+| `index` | `(name, on) => IndexSpec`: columns, or a callback building expressions |
+| `uniqueIndex` | The same, `UNIQUE` |
+
+**`TableDefinition`** — `columns` (required), `primaryKey` (column names: one is written inline,
+several as a table constraint), `indexes`, `tenantColumn`. A column is `NOT NULL` unless its
+type is `nullable(...)`; a primary key column cannot be nullable.
+
+**`ExternalTableDefinition`** — `{ external: true, columns, tenantColumn? }`: a view, or a table
+another tool migrates. No DDL. **`TableOptions`** — `tenantColumn`, `defaults`, `computed`, for
+the bare-columns form.
+
+**`ColumnOptions`** — one of `default` (a literal, encoded through the column type; a boolean
+is written `true` / `false`) or `defaultExpr` (SQL as written, so add SQLite's parentheses, or a
+DSL callback, parenthesized for you); either lets an insert leave the column out
+(`DefaultedColumnsOf`). Also `name` (the column's name in SQL) and `unique` (`true` or a
+constraint name), an inline `UNIQUE` constraint named `<table>_<column>_unique` by default, as
+drizzle-kit 1.0 writes and names it.
+
+**Types** — `ColumnInput`, `ColumnSpec`, `ColumnsOf`, `IndexSpec`, `TableDdl`, `SqliteSchemaTable`,
+`DdlExpr`, `DdlKey`, `DefinitionProblem`. A definition that cannot render records a problem;
+`S.sqliteEntitiesOf` fails with a `SchemaDefinitionError`, and `S.renderSqliteSchema` writes
+the `CREATE TABLE` and `CREATE INDEX` statements. There is no SQLite diff, snapshot or migration
+runner yet.

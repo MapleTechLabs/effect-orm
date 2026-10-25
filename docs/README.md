@@ -102,4 +102,4 @@ See [Benchmarking](./benchmarking.md) and the
 
 ## SQLite and D1
 
-[SQLite and D1](./sqlite.md) covers `@maple-dev/effect-orm/sqlite`, its codecs and functions, Effect SQL drivers, tenant checks and transaction limits. SQLite migration generation is not implemented.
+[SQLite and D1](./sqlite.md) covers `@maple-dev/effect-orm/sqlite`, its codecs and functions, table DDL, Effect SQL drivers, tenant checks and transaction limits. SQLite migration generation is not implemented.

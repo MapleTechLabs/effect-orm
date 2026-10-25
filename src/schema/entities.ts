@@ -9,6 +9,7 @@
 
 import { Schema } from "effect"
 import { PgSchemaEntity } from "./pg-entities"
+import type { SqliteSchemaEntity } from "./sqlite-entities"
 
 /** `DEFAULT`, `MATERIALIZED`, or `ALIAS`, with its SQL expression. */
 export const ColumnDefault = Schema.Struct({
@@ -112,8 +113,11 @@ export type SchemaDialect = Snapshot["dialect"]
 /** An entity of either dialect. Everything dialect-neutral (keys, ordering, hashing, the branch graph) takes this. */
 export type AnySchemaEntity = SchemaEntity | PgSchemaEntity
 
+/** What `entityKey` and `sortEntities` take: a snapshot dialect's entity, or a SQLite one (no snapshot yet). */
+type KeyedEntity = AnySchemaEntity | SqliteSchemaEntity
+
 /** A stable key per entity, unique within a snapshot: `<kind>:<name>`, or `<kind>:<table>.<name>` for a table's parts. */
-export const entityKey = (entity: AnySchemaEntity): string =>
+export const entityKey = (entity: KeyedEntity): string =>
 	"table" in entity
 		? `${entity.kind}:${entity.table}.${entity.name}`
 		: entity.kind === "enum" && entity.schema !== null
@@ -131,7 +135,7 @@ const kindOrder: Record<AnySchemaEntity["kind"], number> = {
 }
 
 /** Enums, tables, then columns in declaration order, then indexes, unique constraints, foreign keys, views. Deterministic. */
-export const sortEntities = <E extends AnySchemaEntity>(entities: ReadonlyArray<E>): ReadonlyArray<E> =>
+export const sortEntities = <E extends KeyedEntity>(entities: ReadonlyArray<E>): ReadonlyArray<E> =>
 	[...entities].sort((a, b) => {
 		const byKind = kindOrder[a.kind] - kindOrder[b.kind]
 		if (byKind !== 0) return byKind

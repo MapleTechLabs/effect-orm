@@ -2,7 +2,7 @@ import { Schema, SchemaGetter } from "effect"
 import { brand, custom, type CHType } from "../ch/types"
 import { SqliteTimestamp, SqliteTimestampLiteral } from "./timestamp"
 
-export { sqliteTimestampText } from "./timestamp"
+export { sqliteTimestampText, timestampNow } from "./timestamp"
 
 /** A SQLite storage type and the codec for its wire values. */
 export type SqliteType<Tag extends string, A, I = A> = CHType<Tag, A, I>
