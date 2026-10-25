@@ -8,11 +8,12 @@
 
 import { fail } from "../ch/failure"
 import { Schema, type DateTime } from "effect"
-import { QueryBuilderDefect } from "../ch/errors"
-import { makeExpr, type Condition, type Expr } from "../ch/expr"
+import { QueryBuilderDefect, QueryBuilderError } from "../ch/errors"
+import { makeCond, makeExpr, type Condition, type Expr } from "../ch/expr"
 import { schemaOf, withoutNull } from "../ch/define-fn"
 import { compile, known, str } from "../sql/sql-fragment"
 import { encodeLiteral } from "../ch/literal"
+import { jsonPathSchema, type JsonContained, type JsonKey, type JsonPath, type JsonPathValue } from "../ch/json-path"
 import type { CHType } from "../ch/types"
 import { builtins } from "../ch/functions/builtin"
 import * as T from "./types"
@@ -133,6 +134,133 @@ export const coalesce = <A, Q1 = never, Q2 = never>(expr: Expr<A | null, Q1>, fa
 /** `expr ->> key`: a jsonb field as text, NULL when it is absent. */
 export const jsonText = <Q = never>(expr: Expr<unknown, Q>, key: string): Expr<string | null, Q> =>
 	makeExpr(scalar.lazy(() => `(${sql(expr)} ->> ${compile(str(key))})`), Schema.NullOr(Schema.String) as Schema.Codec<string | null, unknown>)
+
+// jsonb paths
+//
+// The path's type and decoder come from the column's schema (src/ch/json-path.ts);
+// only the SQL below is Postgres's. Keys are written as literals, not bound, so
+// an expression index on `payload -> 'profile'` matches the query.
+
+const describePath = (path: ReadonlyArray<JsonKey>): string => JSON.stringify(path)
+
+/** One key of a path as SQL: a string literal, or an array index. */
+const pathKey = (key: JsonKey, path: ReadonlyArray<JsonKey>): string =>
+	typeof key === "string"
+		? compile(str(key))
+		: Number.isSafeInteger(key)
+			? String(key)
+			: fail(new QueryBuilderDefect({ message: `jsonPath ${describePath(path)}: an array index must be a whole number, got ${key}` }), "0")
+
+/** The keys as `-> k1 -> k2`, the last one with `last` (`->` or `->>`). */
+const arrows = (path: ReadonlyArray<JsonKey>, last: "->" | "->>"): string =>
+	path.length === 0
+		? fail(new QueryBuilderDefect({ message: "jsonPath: a path needs at least one key" }), "")
+		: path.map((key, i) => ` ${i === path.length - 1 ? last : "->"} ${pathKey(key, path)}`).join("")
+
+/** The schema at `path` inside `expr`'s document; a path the schema does not have is a defect when rendered. */
+const pathSchema = (
+	expr: Expr<unknown, any>,
+	path: ReadonlyArray<JsonKey>,
+): { readonly schema: Schema.Codec<unknown, unknown> | undefined; readonly check: () => void } => {
+	if (expr.schema === undefined) return { schema: undefined, check: () => undefined }
+	const found = jsonPathSchema(expr.schema, path)
+	return found._tag === "Found"
+		? { schema: found.schema, check: () => undefined }
+		: {
+				schema: Schema.Unknown as Schema.Codec<unknown, unknown>,
+				check: () => fail(new QueryBuilderDefect({ message: `jsonPath ${describePath(path)}: the column's schema has no such path (${found.reason})` }), undefined),
+			}
+}
+
+/** A value as JSON text through `schema`, bound, cast to jsonb. */
+const jsonValue = (schema: Schema.Codec<unknown, unknown>, value: unknown, context: string): string =>
+	value === undefined || value === null
+		? fail(new QueryBuilderError({ code: "InvalidArguments", message: `${context}: no value given; write JSON null as a value of a nullable field's schema` }), "NULL")
+		: `${encodeLiteral(Schema.fromJsonString(schema), value, context)}::jsonb`
+
+/**
+ * `expr -> 'k1' -> 'k2'`: the jsonb value at a path, typed and decoded by the
+ * column's schema. `jsonPath($.payload, "profile", "city")` on a
+ * `jsonb(Schema.Struct({ profile: Schema.Struct({ city: Schema.String }) }))`
+ * column is an `Expr<string | null>`; a number key indexes an array. `null` when
+ * a key is absent. Compared with a value, the value is encoded by the field's
+ * schema and bound as JSON: `.eq("Kyiv")` matches the JSON string `"Kyiv"`.
+ */
+export const jsonPath = <A, const P extends JsonPath<A>, Q = never>(
+	expr: Expr<A, Q>,
+	...path: P
+): Expr<Exclude<JsonPathValue<A, P>, undefined> | null, Q> => {
+	const keys = path as unknown as ReadonlyArray<JsonKey>
+	const { schema, check } = pathSchema(expr as Expr<unknown, any>, keys)
+	const context = `jsonPath ${describePath(keys)}`
+	return makeExpr(
+		scalar.lazy(() => {
+			check()
+			return `(${sql(expr)}${arrows(keys, "->")})`
+		}, "jsonPath"),
+		schema === undefined ? undefined : (Schema.NullOr(schema) as Schema.Codec<Exclude<JsonPathValue<A, P>, undefined> | null, unknown>),
+		(value) => known(() => encodeLiteral(Schema.fromJsonString(schema ?? Schema.Unknown), value, context)),
+	)
+}
+
+/**
+ * `expr -> 'k1' ->> 'k2'`: the value at a path as text, `null` when a key is
+ * absent. A JSON string reads without its quotes; a number or object as its JSON
+ * text. For `like`, `ilike` and text comparisons.
+ */
+export const jsonPathText = <A, const P extends JsonPath<A>, Q = never>(expr: Expr<A, Q>, ...path: P): Expr<string | null, Q> => {
+	const keys = path as unknown as ReadonlyArray<JsonKey>
+	const { check } = pathSchema(expr as Expr<unknown, any>, keys)
+	return makeExpr(
+		scalar.lazy(() => {
+			check()
+			return `(${sql(expr)}${arrows(keys, "->>")})`
+		}, "jsonPathText"),
+		Schema.NullOr(Schema.String) as Schema.Codec<string | null, unknown>,
+		(value) => known(() => encodeLiteral(Schema.String, value, `jsonPathText ${describePath(keys)}`)),
+	)
+}
+
+/**
+ * `expr @> value::jsonb`: whether the document contains `value`, at any depth.
+ * Objects match on the keys given, arrays on the elements given (in any order).
+ * The value is bound as JSON text, as given: write a transformed field in its
+ * stored form. A GIN index on the column serves it.
+ */
+export const jsonContains = <A, Q = never>(expr: Expr<A, Q>, value: JsonContained<A>): Condition<Q> =>
+	makeCond(
+		scalar.lazy(
+			() => `(${sql(expr)} @> ${jsonValue(Schema.Unknown as Schema.Codec<unknown, unknown>, value, "jsonContains")})`,
+			"jsonContains",
+		),
+	)
+
+/**
+ * `jsonb_set(expr, ARRAY['k1', 'k2'], value::jsonb)`: the document with one
+ * path replaced, to write in `set` without reading the row first. The value is
+ * encoded by the field's schema. The last key is created if it is absent; a
+ * missing parent leaves the document unchanged, and a NULL document stays NULL.
+ * Nest calls to set several paths.
+ */
+export const jsonSet = <A, const P extends JsonPath<A>, Q = never>(
+	expr: Expr<A, Q>,
+	path: P,
+	value: Exclude<JsonPathValue<A, P>, undefined>,
+): Expr<A, Q> => {
+	const keys = path as unknown as ReadonlyArray<JsonKey>
+	const { schema, check } = pathSchema(expr as Expr<unknown, any>, keys)
+	const context = `jsonSet ${describePath(keys)}`
+	return makeExpr(
+		scalar.lazy(() => {
+			check()
+			if (keys.length === 0) return fail(new QueryBuilderDefect({ message: "jsonSet: a path needs at least one key" }), "NULL")
+			// jsonb_set takes the path as text[], an array index too.
+			const text = keys.map((key) => (typeof key === "number" ? `${pathKey(key, keys)}::text` : pathKey(key, keys)))
+			return `jsonb_set(${sql(expr)}, ARRAY[${text.join(", ")}], ${jsonValue(schema ?? (Schema.Unknown as Schema.Codec<unknown, unknown>), value, context)})`
+		}, "jsonSet"),
+		expr.schema,
+	)
+}
 
 /** `greatest(a, b, ...)`, decoding as `first` does. Postgres skips NULL arguments. */
 export const greatest = <A, Q = never>(first: Expr<A, Q>, ...rest: ReadonlyArray<Expr<A, Q>>): Expr<A, Q> =>
