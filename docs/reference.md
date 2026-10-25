@@ -8,7 +8,7 @@ import * as PG from "@maple-dev/effect-orm/postgres"
 import * as SQLite from "@maple-dev/effect-orm/sqlite"
 ```
 
-All carry the whole [query builder](#query-builder-both-entries). Each adds its own column
+All carry the whole [query builder](#query-builder-every-entry). Each adds its own column
 types, functions, table definitions and a `compile` that defaults to its dialect:
 [`/clickhouse`](#clickhouse) and [`/postgres`](#postgres). Everything else is on a
 [subpath](#other-subpaths) for a narrower job.
@@ -33,7 +33,7 @@ uniformly, which some codebases prefer for exactly this reason.
 
 ---
 
-## Query builder (both entries)
+## Query builder (every entry)
 
 Everything in this section is exported, identically, from `/clickhouse`, `/postgres` and `/sqlite`.
 
@@ -47,7 +47,7 @@ Everything in this section is exported, identically, from `/clickhouse`, `/postg
 | `unionAll`  | `(...queries) => CHUnionQuery`            |
 | `update`     | `(table) => CHUpdateStart`, then `CHUpdate`: `.set(record \| fn)`, `.where(fn)` or `.allRows()`, `.returning(...)`, `.settings(record)`. See [Updating and deleting](./updates-and-deletes.md) |
 | `deleteFrom` | `(table) => CHDelete`: `.where(fn)` or `.allRows()`, `.returning(...)`, `.settings(record)` |
-| `insertInto` | `(table) => CHInsertStart`, then `CHInsert`; `.values(row \| rows)` or `.select(query)` sets its rows, `.settings(record)` ClickHouse `SETTINGS`, `.returning(...)` the RETURNING list, `.onConflictDoNothing(options?)` / `.onConflictDoUpdate(options)` the ON CONFLICT clause (Postgres). See [Inserting rows](./inserts.md) |
+| `insertInto` | `(table) => CHInsertStart`, then `CHInsert`; `.values(row \| rows)` or `.select(query)` sets its rows, `.settings(record)` ClickHouse `SETTINGS`, `.returning(...)` the RETURNING list, `.onConflictDoNothing(options?)` / `.onConflictDoUpdate(options)` the ON CONFLICT clause (Postgres and SQLite). See [Inserting rows](./inserts.md) |
 
 Tables come from the dialect's `table`: [`CH.table`](#tables-and-ddl) or
 [`PG.table`](#tables-and-ddl-1).
