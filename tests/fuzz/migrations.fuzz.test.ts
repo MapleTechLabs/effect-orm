@@ -15,9 +15,10 @@
 import { DatabaseSync } from "node:sqlite"
 import fc from "fast-check"
 import { Effect } from "effect"
-import { describe, expect, it } from "vitest"
+import { Miniflare } from "miniflare"
+import { afterAll, afterEach, describe, expect, it } from "vitest"
 import * as SQLite from "@maple-dev/effect-orm/sqlite"
-import { diffSqliteSchemas, renderSqliteOp, renderSqliteSchema, sqliteEntitiesOf, type SqliteSchemaEntity } from "@maple-dev/effect-orm/schema"
+import { diffSqliteSchemas, fromDrizzleSqliteSnapshot, renderSqliteOp, renderSqliteSchema, sqliteEntitiesOf, type SqliteSchemaEntity } from "@maple-dev/effect-orm/schema"
 import { FuzzFailure, property, skip, withContext } from "./harness"
 
 // Schema plans
@@ -200,6 +201,61 @@ const expectedRows = (seed: Seed, after: TablePlan): ReadonlyArray<Record<string
 		),
 	)
 
+// Engines
+
+/** A database the migration runs on: node:sqlite in-process, or D1 in workerd. */
+interface Engine {
+	/** Statements one by one, as `renderSqliteSchema` output and seed rows are applied. */
+	readonly exec: (statements: ReadonlyArray<string>) => Promise<void>
+	/** One migration, atomically: a transaction on SQLite, one batch on D1 (as Alchemy applies it). */
+	readonly migrate: (statements: ReadonlyArray<string>) => Promise<void>
+	readonly all: (sql: string) => Promise<ReadonlyArray<Record<string, any>>>
+}
+
+const nodeEngine = (): Engine & { close: () => void } => {
+	const db = new DatabaseSync(":memory:")
+	const exec = async (statements: ReadonlyArray<string>) => {
+		for (const sql of statements) db.exec(sql)
+	}
+	return {
+		exec,
+		migrate: (statements) => exec(["BEGIN", ...statements, "COMMIT"]),
+		all: async (sql) => db.prepare(sql).all().map((row) => ({ ...row })),
+		close: () => db.close(),
+	}
+}
+
+interface D1Like {
+	prepare(sql: string): { all(): Promise<{ results: Array<Record<string, any>> }> }
+	batch(statements: ReadonlyArray<unknown>): Promise<unknown>
+}
+
+/** Two D1 databases (fresh and migrated) in one Miniflare, emptied between inputs. */
+let d1: Promise<{ readonly mf: Miniflare; readonly dbs: ReadonlyArray<D1Like> }> | undefined
+const d1Engines = async (): Promise<readonly [Engine, Engine]> => {
+	const { dbs } = await (d1 ??= (async () => {
+		const mf = new Miniflare({ modules: true, script: "export default { fetch() { return new Response('fuzz') } }", compatibilityDate: "2026-07-01", d1Databases: ["FRESH", "MIGRATED"] })
+		return { mf, dbs: [(await mf.getD1Database("FRESH")) as unknown as D1Like, (await mf.getD1Database("MIGRATED")) as unknown as D1Like] }
+	})())
+	const engine = (db: D1Like): Engine => ({
+		exec: async (statements) => {
+			for (const sql of statements) await db.prepare(sql).all()
+		},
+		migrate: async (statements) => {
+			if (statements.length > 0) await db.batch(statements.map((sql) => db.prepare(sql)))
+		},
+		all: async (sql) => (await db.prepare(sql).all()).results,
+	})
+	for (const db of dbs) {
+		const tables = (await db.prepare(`SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%'`).all()).results
+		for (const { name } of tables) await db.prepare(`DROP TABLE "${name}"`).all()
+	}
+	return [engine(dbs[0]!), engine(dbs[1]!)]
+}
+afterAll(async () => {
+	if (d1 !== undefined) await (await d1).mf.dispose()
+})
+
 // Shape
 
 interface Shape {
@@ -210,89 +266,205 @@ interface Shape {
  * What SQLite reports, minus what legitimately depends on history: column
  * order (ADD COLUMN appends, documented) and auto-index names and numbering.
  */
-const shapeOf = (db: DatabaseSync): Shape => {
-	const all = (sql: string) => db.prepare(sql).all().map((row) => ({ ...row }) as Record<string, any>)
+const shapeOf = async (db: Engine): Promise<Shape> => {
 	const shape: Record<string, Shape[string]> = {}
-	for (const { name } of all("SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name")) {
-		const columns = all(`SELECT name, type, "notnull", dflt_value, pk FROM pragma_table_info('${name}')`).sort((a, b) => (a.name < b.name ? -1 : 1))
-		const indexes = all(`SELECT name, "unique", origin, partial FROM pragma_index_list('${name}')`)
-			.map((index) => {
-				const keys = all(`SELECT seqno, name, "desc", coll FROM pragma_index_xinfo('${index.name}') WHERE "key" = 1`)
-				const label = String(index.name).startsWith("sqlite_autoindex_") ? `auto(${keys.map((k) => k.name).join(",")})` : index.name
-				return { ...index, name: label, keys }
-			})
-			.sort((a, b) => (a.name < b.name ? -1 : 1))
-		shape[name] = { columns, indexes }
+	for (const { name } of await db.all("SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%' ORDER BY name")) {
+		const columns = [...(await db.all(`SELECT name, type, "notnull", dflt_value, pk FROM pragma_table_info('${name}')`))].sort((a, b) => (a.name < b.name ? -1 : 1))
+		const indexes = []
+		for (const index of await db.all(`SELECT name, "unique", origin, partial FROM pragma_index_list('${name}')`)) {
+			const keys = await db.all(`SELECT seqno, name, "desc", coll FROM pragma_index_xinfo('${index.name}') WHERE "key" = 1`)
+			const label = String(index.name).startsWith("sqlite_autoindex_") ? `auto(${keys.map((k) => k.name).join(",")})` : index.name
+			indexes.push({ ...index, name: label, keys })
+		}
+		shape[name] = { columns, indexes: indexes.sort((a, b) => (a.name < b.name ? -1 : 1)) }
 	}
 	return shape
 }
 
-const run = (db: DatabaseSync, statements: ReadonlyArray<string>) => {
-	for (const sql of statements) db.exec(sql)
+// Renames
+
+/** Which table (if any) the migration renames, and which of its kept columns. */
+interface RenamePlan {
+	readonly table: boolean
+	readonly column: number | null
+}
+
+/**
+ * Rename one table the two schemas share, and one column both versions of it
+ * have, in the new schema, with the `confirm_rename` hints for them. Seeding
+ * and expected rows are worked out in the old names and mapped with `table` /
+ * `column`.
+ */
+const withRenames = (before: SchemaPlan, after: SchemaPlan, plan: RenamePlan | undefined) => {
+	const shared = after.find((t) => before.some((b) => b.name === t.name))
+	const old = before.find((b) => b.name === shared?.name)
+	const tableTo = shared !== undefined && plan?.table === true ? `${shared.name}r` : undefined
+	const kept = shared === undefined || old === undefined ? [] : shared.columns.filter((c) => old.columns.some((o) => o.name === c.name)).map((c) => c.name)
+	const columnFrom = plan?.column != null && kept.length > 0 ? kept[plan.column % kept.length] : undefined
+	const table = (name: string) => (name === shared?.name && tableTo !== undefined ? tableTo : name)
+	const column = (tableName: string, name: string) => (tableName === shared?.name && name === columnFrom ? `${name}r` : name)
+	const renamed: SchemaPlan = after.map((t) =>
+		t !== shared
+			? t
+			: {
+					name: table(t.name),
+					columns: t.columns.map((c) => ({ ...c, name: column(t.name, c.name) })),
+					primaryKey: t.primaryKey.map((c) => column(t.name, c)),
+					indexes: t.indexes.map((index) => ({ ...index, columns: index.columns.map((c) => column(t.name, c)) })),
+				},
+	)
+	const hints = [
+		...(tableTo !== undefined ? [{ type: "confirm_rename" as const, kind: "table" as const, entity: shared!.name, to: tableTo }] : []),
+		...(columnFrom !== undefined ? [{ type: "confirm_rename" as const, kind: "column" as const, entity: `${table(shared!.name)}.${columnFrom}`, to: `${columnFrom}r` }] : []),
+	]
+	return { renamed, hints, table, column }
 }
 
 // The property
 
-const migrates = async ([before, after, count, nulls]: readonly [SchemaPlan, SchemaPlan, number, ReadonlyArray<boolean>]) => {
+type Input = readonly [SchemaPlan, SchemaPlan, number, ReadonlyArray<boolean>, RenamePlan?]
+
+const migrates = async ([before, after, count, nulls, renamePlan]: Input, engines: () => Promise<readonly [Engine, Engine]>) => {
+	const { renamed, hints: renameHints, table, column } = withRenames(before, after, renamePlan)
 	const from = entitiesOf(before)
-	const to = entitiesOf(after)
-	// Every drop is confirmed: the property is about what a migration does, not the confirmation gate.
-	const hints = before.flatMap((table) => [
-		{ type: "confirm_data_loss" as const, kind: "table" as const, entity: table.name },
-		...table.columns.map((c) => ({ type: "confirm_data_loss" as const, kind: "column" as const, entity: `${table.name}.${c.name}` })),
-	])
+	const to = entitiesOf(renamed)
+	// Every drop is confirmed (under the old and the new table name): the property is about what a
+	// migration does, not the confirmation gate.
+	const hints = [
+		...renameHints,
+		...before.flatMap((t) => [
+			{ type: "confirm_data_loss" as const, kind: "table" as const, entity: t.name },
+			...t.columns.flatMap((c) =>
+				[...new Set([t.name, table(t.name)])].map((name) => ({ type: "confirm_data_loss" as const, kind: "column" as const, entity: `${name}.${c.name}` })),
+			),
+		]),
+	]
 	const diff = diffSqliteSchemas(from, to, hints)
 	if (diff.missingHints.length > 0 || diff.unsupported.length > 0) {
-		throw new FuzzFailure("the diff needs more than every drop confirmed", { missingHints: diff.missingHints, unsupported: diff.unsupported })
+		throw new FuzzFailure("the diff needs more than every drop and rename confirmed", { renamed, missingHints: diff.missingHints, unsupported: diff.unsupported })
 	}
 	const migration = diff.ops.flatMap(renderSqliteOp)
 	const seeds = seedRows(before, after, count, nulls)
 
-	const fresh = new DatabaseSync(":memory:")
-	const migrated = new DatabaseSync(":memory:")
+	const [fresh, migrated] = await engines()
+	await fresh.exec(renderSqliteSchema(to))
+	await migrated.exec([...renderSqliteSchema(from), ...insertsOf(seeds)])
+	const context = { before, after: renamed, renameHints, migration, seeds }
 	try {
-		run(fresh, renderSqliteSchema(to))
-		run(migrated, [...renderSqliteSchema(from), ...insertsOf(seeds)])
-		await withContext({ before, after, migration, seeds }, () => {
-			try {
-				run(migrated, ["BEGIN", ...migration, "COMMIT"])
-			} catch (error) {
-				throw new FuzzFailure(`the migration failed on rows that fit both schemas: ${(error as Error).message}`, {})
-			}
-			expect(shapeOf(migrated)).toEqual(shapeOf(fresh))
-			for (const seed of seeds) {
-				const next = after.find((t) => t.name === seed.table.name)
-				if (next === undefined || seed.rows.length === 0) continue
-				// A type change may convert a value (`'1'` to `1`); compared as text, it is the same value.
-				const text = (v: unknown) => (v === null || v === undefined ? null : String(v))
-				const want = expectedRows(seed, next).map((row) =>
-					Object.fromEntries(Object.entries(row).filter(([, v]) => v !== undefined).map(([k, v]) => [k, text(v)])),
-				)
-				// Compared as a multiset: a rebuild's copy may read the old rows in index order and renumber
-				// their rowids, as SQLite's documented procedure (and drizzle-kit) does.
-				const keys = Object.keys(want[0] ?? {})
-				const sorted = (rows: ReadonlyArray<Record<string, unknown>>) => rows.map((row) => JSON.stringify(keys.map((k) => row[k]))).sort()
-				const actual = migrated.prepare(`SELECT * FROM "${next.name}"`).all().map((row: Record<string, unknown>) => Object.fromEntries(keys.map((k) => [k, text(row[k])])))
-				expect(sorted(actual)).toEqual(sorted(want))
-			}
-		})
-	} finally {
-		fresh.close()
-		migrated.close()
+		await migrated.migrate(migration)
+	} catch (error) {
+		throw new FuzzFailure(`the migration failed on rows that fit both schemas: ${(error as Error).message}`, context)
 	}
+	const [migratedShape, freshShape] = [await shapeOf(migrated), await shapeOf(fresh)]
+	const tables: Array<{ name: string; want: ReadonlyArray<Record<string, unknown>>; rows: ReadonlyArray<Record<string, any>>; next: TablePlan }> = []
+	for (const seed of seeds) {
+		const next = after.find((t) => t.name === seed.table.name)
+		if (next === undefined || seed.rows.length === 0) continue
+		tables.push({ name: table(next.name), want: expectedRows(seed, next), rows: await migrated.all(`SELECT * FROM "${table(next.name)}"`), next })
+	}
+	await withContext(context, () => {
+		expect(migratedShape).toEqual(freshShape)
+		for (const { name, want, rows, next } of tables) {
+			// A type change may convert a value (`'1'` to `1`); compared as text, it is the same value.
+			const text = (v: unknown) => (v === null || v === undefined ? null : String(v))
+			const expected = want.map((row) =>
+				Object.fromEntries(Object.entries(row).filter(([, v]) => v !== undefined).map(([k, v]) => [column(next.name, k), text(v)])),
+			)
+			// Compared as a multiset: a rebuild's copy may read the old rows in index order and renumber
+			// their rowids, as SQLite's documented procedure (and drizzle-kit) does.
+			const keys = Object.keys(expected[0] ?? {})
+			const sorted = (list: ReadonlyArray<Record<string, unknown>>) => list.map((row) => JSON.stringify(keys.map((k) => row[k]))).sort()
+			const actual = rows.map((row) => Object.fromEntries(keys.map((k) => [k, text(row[k])])))
+			expect(sorted(actual), `rows of ${name}`).toEqual(sorted(expected))
+		}
+	})
 }
 
+const input = fc.tuple(
+	schemaPlan,
+	schemaPlan,
+	fc.integer({ min: 0, max: 3 }),
+	fc.array(fc.boolean(), { minLength: 1, maxLength: 5 }),
+	fc.record({ table: fc.boolean(), column: fc.option(fc.nat(), { nil: null }) }),
+)
+
 describe("SQLite migrations", () => {
-	const name = "migrations reach the fresh schema and keep the rows (sqlite)"
-	it(
-		name,
-		() =>
-			property(
-				name,
-				fc.tuple(schemaPlan, schemaPlan, fc.integer({ min: 0, max: 3 }), fc.array(fc.boolean(), { minLength: 1, maxLength: 5 })),
-				(input) => (input[0].length === 0 ? skip("no tables") : migrates(input)),
-				{ runs: 200 },
-			),
-		300_000,
+	const engines = {
+		sqlite: { runs: 200, open: async () => {
+			const pair = [nodeEngine(), nodeEngine()] as const
+			opened.push(...pair)
+			return pair
+		} },
+		// D1 applies each migration as one batch, as Alchemy's D1 resource sends it.
+		d1: { runs: 25, open: d1Engines },
+	}
+	const opened: Array<{ close: () => void }> = []
+	afterEach(() => {
+		for (const db of opened.splice(0)) db.close()
+	})
+	for (const [target, { runs, open }] of Object.entries(engines)) {
+		const name = `migrations reach the fresh schema and keep the rows (${target})`
+		it(name, () => property(name, input, (value) => (value[0].length === 0 ? skip("no tables") : migrates(value as Input, open)), { runs }), 600_000)
+	}
+})
+
+// Adopting a drizzle-kit folder
+
+/**
+ * The snapshot drizzle-kit 1.0 writes for these entities (version 7, as in
+ * src/kit/__fixtures__/drizzle-sqlite), including its one quirk: a primary key
+ * column is written `notNull: false`.
+ */
+const drizzleSnapshot = (entities: ReadonlyArray<SqliteSchemaEntity>) => {
+	const keyed = new Set(entities.flatMap((e) => (e.kind === "table" ? (e.primaryKey?.columns ?? []).map((c) => `${e.name}.${c}`) : [])))
+	const unquote = (part: string) => /^"(.*)"$/.exec(part)?.[1]?.replaceAll('""', '"')
+	const ddl = entities.flatMap((e): Array<Record<string, unknown>> => {
+		switch (e.kind) {
+			case "table":
+				return [
+					{ name: e.name, entityType: "tables" },
+					...(e.primaryKey === null ? [] : [{ table: e.name, name: `${e.name}_pk`, columns: e.primaryKey.columns, nameExplicit: false, entityType: "pks" }]),
+				]
+			case "column":
+				return [{ table: e.table, name: e.name, type: e.type, notNull: e.notNull && !keyed.has(`${e.table}.${e.name}`), autoincrement: false, default: e.default, generated: null, entityType: "columns" }]
+			case "index":
+				return [{
+					table: e.table,
+					name: e.name,
+					columns: e.columns.map((part) => (unquote(part) === undefined ? { value: part, isExpression: true } : { value: unquote(part), isExpression: false })),
+					isUnique: e.unique,
+					where: null,
+					origin: "manual",
+					entityType: "indexes",
+				}]
+			case "unique":
+				return [{ table: e.table, name: e.name, columns: e.columns, nameExplicit: false, entityType: "uniques" }]
+			default:
+				return []
+		}
+	})
+	// drizzle-kit lists columns in table order; entities sort by key, so order them by position first.
+	const position = (e: Record<string, unknown>) => (e.entityType === "columns" ? (entities.find((x) => x.kind === "column" && x.table === e.table && x.name === e.name) as { position: number }).position : 0)
+	return { version: "7", dialect: "sqlite", id: "fuzz", prevIds: [], ddl: [...ddl].sort((a, b) => position(a) - position(b)), renames: [] }
+}
+
+describe("adopting a drizzle-kit SQLite folder", () => {
+	const name = "a drizzle-kit snapshot of any schema imports with no change to generate (sqlite)"
+	it(name, () =>
+		property(
+			name,
+			schemaPlan,
+			(plan) => {
+				const entities = entitiesOf(plan)
+				const snapshot = drizzleSnapshot(entities)
+				const imported = fromDrizzleSqliteSnapshot(snapshot)
+				const diff = diffSqliteSchemas(imported.entities, entities)
+				return withContext({ plan, snapshot, imported: imported.entities, ops: diff.ops }, () => {
+					expect(imported.unsupported).toEqual([])
+					expect(diff.ops).toEqual([])
+				})
+			},
+			{ runs: 300 },
+		),
 	)
 })
