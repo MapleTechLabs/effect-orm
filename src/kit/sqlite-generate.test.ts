@@ -5,6 +5,7 @@ import { cpSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync }
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { Effect } from "effect"
+import { Miniflare } from "miniflare"
 import { afterEach, beforeEach, expect, it } from "vitest"
 import { generate, type GenerateOptions, type KitConfig } from "../kit"
 import { STATEMENT_BREAKPOINT } from "../migrate/source"
@@ -246,4 +247,29 @@ it("adopts a drizzle-kit 1.0 folder: a baseline from its snapshot, then no chang
 	// The folder drizzle-kit wrote, applied as it is, holds the same tables apart from the NOT NULL
 	// drizzle-kit drops from a text primary key.
 	expect(Object.keys(await shapeAfter(allStatements()))).toEqual(["membership", "short_link"])
+})
+
+it("writes migrations a local D1 database accepts, rebuilds included", async () => {
+	await generateFrom(links(`id: SQLite.text, url: SQLite.text`, `indexes: [SQLite.index("links_url", ["url"])],`))
+	await generateFrom(links(`id: SQLite.text, url: SQLite.column(SQLite.text, { unique: true }), hits: SQLite.column(SQLite.integer, { default: 0 })`, `indexes: [SQLite.index("links_url", ["url"])],`))
+	expect(folders()).toHaveLength(2)
+	const mf = new Miniflare({ modules: true, script: "export default { fetch() { return new Response('') } }", compatibilityDate: "2026-07-01", d1Databases: ["DB"] })
+	try {
+		const db = await mf.getD1Database("DB")
+		const [first, second] = folders()
+		await db.batch(statementsOf(first!).map((sql) => db.prepare(sql)))
+		await db.batch(seedLinks.map((sql) => db.prepare(sql)))
+		// One atomic batch per migration, as a D1 migration runner sends it.
+		await db.batch(statementsOf(second!).map((sql) => db.prepare(sql)))
+		const rows = await db.prepare('SELECT "id", "url", "hits" FROM "links" ORDER BY "id"').all()
+		expect(rows.results).toEqual([{ id: "a", url: "https://a", hits: 0 }, { id: "b", url: "https://b", hits: 0 }])
+		const indexes = await db.prepare(`SELECT name, origin FROM pragma_index_list('links') ORDER BY name`).all()
+		expect(indexes.results).toEqual([
+			{ name: "links_url", origin: "c" },
+			{ name: "sqlite_autoindex_links_1", origin: "pk" },
+			{ name: "sqlite_autoindex_links_2", origin: "u" },
+		])
+	} finally {
+		await mf.dispose()
+	}
 })
