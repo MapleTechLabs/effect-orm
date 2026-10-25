@@ -8,6 +8,7 @@
 export {
 	Database,
 	Transaction,
+	afterCommit,
 	execute,
 	fromSqlClient,
 	isContention,
@@ -29,6 +30,7 @@ export {
 	type TransactionOptions,
 } from "./database/database"
 export {
+	AfterCommitUnavailable,
 	DatabaseError,
 	TenantScopeViolation,
 	TransactionClosed,

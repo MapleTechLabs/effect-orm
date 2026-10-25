@@ -7,7 +7,7 @@
 // statements outliving their transaction, and contention retry. See
 // `design/transactions.md`.
 
-import { Cause, Context, Effect, Exit, Layer, Option, Schedule, Schema } from "effect"
+import { Cause, Context, Effect, ErrorReporter, Exit, Layer, Option, Schedule, Schema } from "effect"
 import { dual } from "effect/Function"
 import * as SqlClient from "effect/sql/SqlClient"
 import { isSqlError } from "effect/sql/SqlError"
@@ -20,6 +20,7 @@ import type { CHQuery, NeedsSelect } from "../ch/query"
 import type { CHUnionQuery, QueryParams } from "../ch/union"
 import type { ParamsSatisfied } from "../ch/expr"
 import {
+	AfterCommitUnavailable,
 	DatabaseError,
 	TransactionClosed,
 	TransactionCommitFailed,
@@ -164,11 +165,22 @@ export interface FromSqlClientOptions {
 	readonly requireTenantScope?: boolean
 }
 
+// Work queued by `afterCommit`, with the context it was queued in.
+interface Hook {
+	readonly effect: Effect.Effect<unknown, unknown, never>
+	readonly context: Context.Context<never>
+}
+
 // Whether the transaction a fiber's context belongs to is still open. Keyed by
 // client so a closed transaction on one database does not flag another.
+// `hooks` is this level's `afterCommit` queue: the outermost transaction runs
+// it after COMMIT, a savepoint hands it to its parent when it is kept.
+// `undefined` when no outer `transaction` of this client will run it (the
+// transaction was opened by a plain `sql.withTransaction`).
 interface OpenState {
 	open: boolean
 	readonly client: SqlClient.SqlClient
+	readonly hooks: Array<Hook> | undefined
 }
 class TransactionOpen extends Context.Service<TransactionOpen, OpenState>()("@maple-dev/effect-orm/TransactionOpen") {}
 
@@ -380,12 +392,15 @@ export const fromSqlClient = (sql: SqlClient.SqlClient, options: FromSqlClientOp
 			}
 
 			const outer = yield* Effect.serviceOption(Transaction)
+			const parentState = yield* Effect.serviceOption(TransactionOpen)
+			const parentHooks =
+				Option.isSome(parentState) && parentState.value.client === sql && parentState.value.open ? parentState.value.hooks : undefined
 			const info: TransactionInfo =
 				depth === 0 || Option.isNone(outer)
 					? { depth, isolationLevel: settings.isolationLevel, accessMode: settings.accessMode }
 					: { ...outer.value, depth }
 			const setTransaction = depth === 0 ? capabilities.setTransaction(settings) : undefined
-			const state: OpenState = { open: true, client: sql }
+			const state: OpenState = { open: true, client: sql, hooks: depth === 0 || parentHooks !== undefined ? [] : undefined }
 			let bodyExit: Exit.Exit<unknown, unknown> | undefined
 
 			const inner = Effect.gen(function* () {
@@ -405,8 +420,10 @@ export const fromSqlClient = (sql: SqlClient.SqlClient, options: FromSqlClientOp
 			)
 
 			const exit = yield* Effect.exit(sql.withTransaction(inner).pipe(Effect.ensuring(committed(state))))
-			if (Exit.isSuccess(exit)) return exit.value
-			return yield* restoreCause<E>(exit.cause, bodyExit, depth)
+			if (Exit.isFailure(exit)) return yield* restoreCause<E>(exit.cause, bodyExit, depth)
+			// Kept: a savepoint's queue joins its parent's, which commits or drops it.
+			if (depth > 0 && parentHooks !== undefined && state.hooks !== undefined) parentHooks.push(...state.hooks)
+			return [exit.value, depth === 0 ? state.hooks : undefined] as const
 		}).pipe(
 			Effect.withSpan("effect_orm.transaction", {
 				// Semconv defines no transaction attributes, and `db.*` is reserved for it.
@@ -415,6 +432,10 @@ export const fromSqlClient = (sql: SqlClient.SqlClient, options: FromSqlClientOp
 					...(options.accessMode !== undefined && { "effect_orm.transaction.access_mode": options.accessMode }),
 				},
 			}),
+			// After COMMIT, outside the transaction's span: the hooks are not part of it.
+			Effect.flatMap(([value, hooks]) =>
+				hooks === undefined || hooks.length === 0 ? Effect.succeed(value) : Effect.as(runHooks(sql, hooks), value),
+			),
 		) as Effect.Effect<A, E | DatabaseError | TransactionError, Exclude<R, Transaction>>
 
 	const transaction: DatabaseApi["transaction"] = (body, options = {}) =>
@@ -424,6 +445,51 @@ export const fromSqlClient = (sql: SqlClient.SqlClient, options: FromSqlClientOp
 
 	return { dialect, run, query, execute, transaction, retryContention }
 }
+
+// The services that say "inside this transaction". A hook runs with the context
+// it was queued in, minus these: it runs after COMMIT, on no connection of the
+// transaction, and a `run` in it must not trip the closed-transaction guard.
+const outsideTransaction = (
+	sql: SqlClient.SqlClient,
+	context: Context.Context<never>,
+	outside: Context.Context<never>,
+): Context.Context<never> => {
+	let result = context
+	const keys: ReadonlyArray<Context.Key<any, any>> = [sql.transactionService, TransactionOpen, Transaction]
+	for (const key of keys) {
+		const value = Context.getOption(outside, key)
+		result = Option.isSome(value) ? Context.add(result, key, value.value) : Context.omit(key)(result)
+	}
+	return result
+}
+
+/**
+ * Run the hooks `afterCommit` queued, in order, after COMMIT succeeded. The
+ * data is already committed, so a failing hook cannot undo it and must not
+ * look like the transaction failed: its cause goes to the `ErrorReporter`s in
+ * context and to an error log, and the next hook still runs.
+ */
+const runHooks = (sql: SqlClient.SqlClient, hooks: ReadonlyArray<Hook>): Effect.Effect<void> =>
+	Effect.flatMap(Effect.context<never>(), (outside) =>
+		Effect.forEach(
+			hooks,
+			(hook, index) =>
+				Effect.exit(Effect.provideContext(hook.effect, outsideTransaction(sql, hook.context, outside))).pipe(
+					Effect.flatMap((exit) =>
+						Exit.isSuccess(exit)
+							? Effect.void
+							: ErrorReporter.report(exit.cause).pipe(
+									Effect.andThen(
+										Effect.logError("afterCommit hook failed after the transaction committed", exit.cause).pipe(
+											Effect.annotateLogs({ "effect_orm.after_commit.index": index }),
+										),
+									),
+								),
+					),
+				),
+			{ discard: true },
+		),
+	).pipe(Effect.withSpan("effect_orm.after_commit", { attributes: { "effect_orm.after_commit.count": hooks.length } }))
 
 /**
  * Turn what came out of `withTransaction` back into what the caller should see.
@@ -518,6 +584,51 @@ export const execute = (statement: StatementInput): Effect.Effect<void, Database
  */
 export const requireTransaction = <A, E, R>(self: Effect.Effect<A, E, R>): Effect.Effect<A, E, R | Transaction> =>
 	Effect.andThen(Effect.service(Transaction), self)
+
+/**
+ * Queue `effect` to run after the outermost transaction commits, and never if
+ * it rolls back. For work that must not run inside a transaction: an SMS, an
+ * HTTP call, a job enqueue. It adds `Transaction` to the requirements, like
+ * `requireTransaction`, so a helper deep in the call stack can queue work
+ * without knowing where the transaction starts.
+ *
+ * - Hooks run in the order they were queued, one at a time, after COMMIT and
+ *   outside the transaction, with the context they were queued in.
+ * - A savepoint that rolls back drops what it queued; one that is kept hands
+ *   it to the outer transaction. A `retry` attempt that fails drops its hooks.
+ * - A hook that fails does not fail the transaction, which has committed: its
+ *   cause goes to the `ErrorReporter`s in context and to an error log, and the
+ *   next hook still runs. Handle errors in the hook when the caller must know.
+ * - At most once: a crash or interruption after COMMIT skips the hooks not yet
+ *   run. When the work must happen, write it to an outbox table in the
+ *   transaction instead.
+ *
+ * Inside a transaction that no `transaction` call will commit (one opened by a
+ * plain `sql.withTransaction`), or after the transaction ended, it dies with
+ * `AfterCommitUnavailable` rather than drop the work.
+ *
+ * ```ts
+ * yield* Db.afterCommit(sms.send(phone, text))
+ * ```
+ */
+export const afterCommit = <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<void, never, R | Transaction> =>
+	Effect.gen(function* () {
+		yield* Transaction
+		const state = yield* Effect.serviceOption(TransactionOpen)
+		const unavailable = (reason: string) =>
+			Effect.die(new AfterCommitUnavailable({ message: `afterCommit cannot queue work: ${reason}` }))
+		if (Option.isNone(state)) return yield* unavailable("no transaction opened by Db.transaction is open")
+		if (!state.value.open) {
+			return yield* unavailable("its transaction has ended; join fibers forked inside a transaction before it returns")
+		}
+		if (state.value.hooks === undefined) {
+			return yield* unavailable("the outermost transaction was opened by sql.withTransaction, which never runs queued work")
+		}
+		state.value.hooks.push({
+			effect: effect as Effect.Effect<A, E>,
+			context: (yield* Effect.context<R>()) as Context.Context<never>,
+		})
+	})
 
 /**
  * `transaction` on the `Database` in context. Data-first or pipeable, so it
