@@ -8,7 +8,7 @@
 
 import { Effect } from "effect"
 import type { CompiledQueryDecodeError } from "../ch/compile"
-import type { QueryBuilderError } from "../ch/errors"
+import { QueryBuilderDefect, type QueryBuilderError } from "../ch/errors"
 import { and, lit, makeCond, makeExpr, not, type Condition, type Expr, type ParamsIn } from "../ch/expr"
 import { builtins } from "../ch/functions/builtin"
 import { from, type ColumnAccessor, type CHQuery } from "../ch/query"
@@ -17,7 +17,8 @@ import type { SelectRowOf, Table } from "../ch/table"
 import { markCorrelatedTenant, tenantColumnOf } from "../ch/tenant"
 import { custom, type ColumnDefs, type InferTS } from "../ch/types"
 import { PgNumber } from "../pg/types"
-import { raw } from "../sql/sql-fragment"
+import { fail } from "../ch/failure"
+import { known, raw } from "../sql/sql-fragment"
 import { Database } from "./database"
 import type { DatabaseError } from "./errors"
 
@@ -182,6 +183,25 @@ const countType = custom("Int64", PgNumber)
 const countAll = (): Expr<number> => makeExpr(aggregate.lazy(() => "count(*)", "count"), countType.schema)
 const always = (): Condition => makeCond(raw("1 = 1"))
 
+/**
+ * The filters of a relation on an accessor whose columns are not qualified, as
+ * an update's or a delete's. The correlation would name an inner column, so
+ * each filter fails the compile instead.
+ */
+const unqualified = (key: string, name: string): RelationFilter<any, any, any> => {
+	const failure = (placeholder: string) =>
+		known(() =>
+			fail(
+				new QueryBuilderDefect({
+					message: `related(${key}).${name}: $ must be the accessor of a select over ${key}; an update or delete has no alias to correlate on`,
+				}),
+				placeholder,
+			),
+		)
+	const condition = () => makeCond(failure("FALSE"))
+	return { some: condition, none: condition, every: condition, count: () => makeExpr(failure("0"), countType.schema) as any }
+}
+
 const relatedOf = (
 	tables: RelationTables,
 	relations: Record<string, Record<string, Relation> | undefined>,
@@ -196,6 +216,7 @@ const relatedOf = (
 			// `$` is qualified (`alias.column`): the subquery's alias extends it, so
 			// it never hides the outer source, even for a table related to itself.
 			const outerName: string = outerFrom.columnName
+			if (!outerName.endsWith(`.${relation.from}`)) return [name, unqualified(key, name)]
 			const alias = `${outerName.slice(0, outerName.length - relation.from.length - 1)}__${name}`
 			const outerTenant =
 				parent.tenantColumn !== undefined && target.tenantColumn !== undefined ? $[parent.tenantColumn] : undefined

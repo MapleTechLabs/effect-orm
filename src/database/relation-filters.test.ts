@@ -196,6 +196,11 @@ layer(live(false), { excludeTestServices: true })("relation filters on PGlite", 
 })
 
 describe("relation filters and the subquery alias", () => {
+	plain("a filter on an update's or a delete's unqualified $ is refused, not correlated to itself", () => {
+		const query = PG.deleteFrom(Users).where(($) => [Db.related(schema.users, $ as any).posts.none()])
+		expect(() => PG.compileUnsafe(query, {})).toThrow(/an update or delete has no alias/)
+	})
+
 	const Nodes = PG.table("nodes", {
 		columns: { id: PG.int4, parentId: PG.column(PG.nullable(PG.int4), { name: "parent_id" }) },
 		primaryKey: ["id"],
