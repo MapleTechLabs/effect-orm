@@ -24,9 +24,65 @@ export const compiled = SQLite.compileUnsafe(byOrg, { orgId: "org_1" })
 // compiled.parameters is ["org_1"]; compiled.tenantScope is "single-tenant".
 ```
 
-`table` describes the query schema. Manage its actual DDL and migrations outside this package.
-Unlike the ClickHouse and Postgres entries, SQLite has no schema diff, introspection, migration
-ledger or kit dialect yet. A `table` value here cannot be passed to the DDL generators.
+`table(name, columns, options?)` is a query schema only: it carries no DDL.
+
+## Declare a table with its DDL
+
+Pass `{ columns, primaryKey, indexes }` to `table` to declare the table's DDL too. The value is
+still a query `Table`. `sqliteEntitiesOf` from `/schema` checks a set of tables as one schema,
+and `renderSqliteSchema` writes their `CREATE TABLE` and `CREATE INDEX` statements:
+
+```ts title="sqlite-ddl.ts"
+import { Effect } from "effect"
+import * as S from "@maple-dev/effect-orm/schema"
+import * as SQLite from "@maple-dev/effect-orm/sqlite"
+
+export const ShortLinks = SQLite.table("short_link", {
+	columns: {
+		id: SQLite.text,
+		code: SQLite.text,
+		orgId: SQLite.column(SQLite.nullable(SQLite.text), { name: "org_id" }),
+		clickCount: SQLite.column(SQLite.integer, { name: "click_count", default: 0 }),
+		createdAt: SQLite.column(SQLite.text, { name: "created_at", defaultExpr: "(CURRENT_TIMESTAMP)" }),
+	},
+	primaryKey: ["id"],
+	indexes: [SQLite.uniqueIndex("short_link_code", ["code"]), SQLite.index("short_link_org", ["orgId"])],
+	tenantColumn: "orgId",
+})
+
+export const statements = S.sqliteEntitiesOf([ShortLinks]).pipe(Effect.map(S.renderSqliteSchema))
+// CREATE TABLE IF NOT EXISTS "short_link" (
+// 	"id" text PRIMARY KEY NOT NULL,
+// 	"code" text NOT NULL,
+// 	"org_id" text,
+// 	"click_count" integer NOT NULL DEFAULT 0,
+// 	"created_at" text NOT NULL DEFAULT (CURRENT_TIMESTAMP)
+// )
+// CREATE UNIQUE INDEX IF NOT EXISTS "short_link_code" ON "short_link" ("code")
+// CREATE INDEX IF NOT EXISTS "short_link_org" ON "short_link" ("org_id")
+```
+
+- A column is `NOT NULL` unless its type is `nullable(...)`. A primary key column cannot be
+  nullable: SQLite would accept NULL keys in it.
+- One primary key column is written inline (`PRIMARY KEY`); several become a table constraint
+  `PRIMARY KEY ("a", "b")`. SQLite stores no constraint name, so there is none to give.
+- `default` takes a literal of the column type. `defaultExpr` takes SQL as written, so add the
+  parentheses SQLite requires around an expression, or a DSL callback, which is parenthesized
+  for you. Either lets an insert leave the column out.
+- `unique: true` adds a unique index `<table>_<column>_unique`, as drizzle-kit does for
+  `.unique()`. A string names the index.
+- Column types declare their SQLite type: `text`, `timestamp` and `json` are `text`; `integer`
+  and `boolean` are `integer`; `real` is `real`; `blob` is `blob`. A `custom(sql, schema)` type
+  declares `sql`, for example `numeric`.
+- `table(name, { external: true, columns })` declares a table another tool owns: no DDL.
+
+The tests apply this DDL and drizzle-kit's SQL for the same tables to real SQLite, and compare
+`PRAGMA table_info`, `index_list` and `index_xinfo`.
+
+There is no SQLite schema diff, introspection, migration ledger or kit dialect yet. Run the
+rendered statements yourself, or keep migrating with your current tool. `WITHOUT ROWID`,
+`STRICT`, `AUTOINCREMENT`, partial indexes, foreign keys and `CHECK` constraints are not
+declared yet.
 
 The entry exports `text`, `integer` (a safe JavaScript integer), `real` (finite numbers),
 `boolean` (0/1), `blob`, `timestamp` (ISO text), `json(schema)`, `nullable`, `custom` and `brand`.

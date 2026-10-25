@@ -52,3 +52,8 @@ import * as SQLite from "@maple-dev/effect-orm/sqlite"
 export const SqliteItems = SQLite.table("sqlite_items", { id: SQLite.integer, label: SQLite.text })
 export const sqliteById = SQLite.from(SqliteItems).select().where(($) => [$.id.eq(SQLite.param.int("id"))])
 export const sqliteCompile = () => SQLite.compile(sqliteById, { id: 1 })
+export const SqliteLinks = SQLite.table("sqlite_links", {
+	columns: { id: SQLite.text, hits: SQLite.column(SQLite.integer, { default: 0 }) },
+	primaryKey: ["id"],
+	indexes: [SQLite.uniqueIndex("sqlite_links_hits", ["hits"])],
+})

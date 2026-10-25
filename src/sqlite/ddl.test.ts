@@ -3,7 +3,7 @@ import { Effect, Schema } from "effect"
 import * as SqlClient from "effect/sql/SqlClient"
 import { expect, it } from "vitest"
 import * as Db from "../database"
-import { renderSqliteSchema, sqliteEntitiesOf } from "../schema"
+import { canonicalJson, renderSqliteSchema, SqliteSchemaEntity, sqliteEntitiesOf } from "../schema"
 import * as SQLite from "../sqlite"
 
 // drizzle-kit 0.31.11 (drizzle-orm 0.45.4) `generate` output for the same table.
@@ -177,4 +177,13 @@ it("records every definition problem, and sqliteEntitiesOf fails with all of the
 	for (const expected of ["starts with sqlite_", "cannot be nullable", "missing is not a column", "one of default, defaultExpr", "nope is not a column", "one namespace"]) {
 		expect(messages).toContain(expected)
 	}
+})
+
+it("keeps entities as plain data that survive a JSON round trip, sorted the same every time", async () => {
+	const entities = await Effect.runPromise(sqliteEntitiesOf([Membership, ShortLink]))
+	const again = await Effect.runPromise(sqliteEntitiesOf([ShortLink, Membership]))
+	expect(canonicalJson(again)).toBe(canonicalJson(entities))
+	const decoded = Schema.decodeUnknownSync(Schema.Array(SqliteSchemaEntity))(JSON.parse(canonicalJson(entities)))
+	expect(renderSqliteSchema(decoded)).toEqual(renderSqliteSchema(entities))
+	expect(entities.map((e) => e.kind).filter((k, i, all) => all.indexOf(k) === i)).toEqual(["table", "column", "index"])
 })
