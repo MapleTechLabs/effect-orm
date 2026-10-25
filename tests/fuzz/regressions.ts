@@ -28,6 +28,21 @@ export const pinned: Record<string, ReadonlyArray<unknown>> = {
 		}),
 		// fromquery-select-all.
 		{ ...rows({ k: "rows", select: [["id", { k: "col", col: "Id" }]], distinct: false, orderBy: [] }), wrap: "all" },
+		// The same server bug in a shape the old matcher missed (ClickHouse 26.2): `(a OR 0 OR a) AND (a OR 0)`.
+		{
+			...rows({ k: "rows", select: [["id", { k: "col", col: "Id" }]], distinct: false, orderBy: [] }),
+			orgId: "org_3",
+			where: [
+				{
+					k: "and",
+					style: "method",
+					cs: [
+						{ k: "or", style: "method", cs: [{ k: "null", op: "isNotNull", e: { k: "col", col: "Note" } }, { k: "const", v: false }, { k: "null", op: "isNotNull", e: { k: "col", col: "Note" } }] },
+						{ k: "or", style: "method", cs: [{ k: "null", op: "isNotNull", e: { k: "col", col: "Note" } }, { k: "in", neg: false, e: { k: "str", v: "" }, values: [] }] },
+					],
+				},
+			],
+		},
 		// A ClickHouse server bug (a one-argument and()): run again without the rewrite, rows still checked (dialects/clickhouse.ts).
 		{
 			...rows({ k: "rows", select: [["id", { k: "col", col: "Id" }]], distinct: false, orderBy: [] }),
