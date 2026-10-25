@@ -324,6 +324,10 @@ const writesMatchModel = async (dialect: FuzzDialect, input: WritesInput) => {
 			if (result._tag === "Threw") throw new FuzzFailure("the builder threw instead of failing", context)
 			if (missing !== undefined) {
 				if (result._tag === "Compiled") throw new FuzzFailure(`${missing} compiled for ${dialect.name}, which does not support it`, context)
+				// A clause the dialect lacks fails with a typed error, or dies with a QueryBuilderDefect (src/ch/errors.ts); nothing else.
+				if (result._tag !== "Refused" && !(result._tag === "Defect" && result.error.includes("QueryBuilderDefect"))) {
+					throw new FuzzFailure(`${missing} was not refused with a QueryBuilderError or QueryBuilderDefect`, context)
+				}
 				continue
 			}
 			if (result._tag !== "Compiled") throw new FuzzFailure(`a supported write was not compiled (${result._tag})`, context)

@@ -30,11 +30,13 @@ Unions compile with **`compileUnion`**, not `compile`.
 
 > **Numeric branch types.** ClickHouse has no common type for some numeric pairs (`UInt64` and
 > `Int64`, `Int64` and `Float64`): it makes the column a `Variant`, which ORDER BY refuses, or,
-> with `use_variant_as_common_type = 0`, rejects the union. So on ClickHouse a numeric column whose
-> branches may differ in type (different declared types, or different arithmetic: `Id + 1` is
-> `UInt64`, `Id - 1` is `Int64`) is selected as `toFloat64(…)` in every branch. Numbers decode to
-> JS numbers either way, so this loses nothing the decode keeps. Identical columns and identical
-> expressions are left as they are. Cast other types explicitly when the branches differ.
+> with `use_variant_as_common_type = 0`, rejects the union. So on ClickHouse the union's `orderBy`
+> sorts a numeric column whose branches may differ in type (different declared types, or different
+> arithmetic: `Id + 1` is `UInt64`, `Id - 1` is `Int64`) by `CAST(x AS Nullable(Float64))` and then
+> `accurateCastOrNull(x, 'Int128')`, which keeps integers past 2^53 in exact order. The values
+> themselves are not converted, so an `INSERT ... SELECT` or an `IN` over the union keeps them
+> exact. A query over the union (`fromUnion`) that orders by such a column, or any other use that
+> needs one type, should cast it in each branch.
 
 _(Backed by `docs/unions-and-ctes.md > unionAll with an outer ORDER BY`.)_
 
