@@ -189,3 +189,84 @@ describe("undecoded", () => {
 		expect(Exit.isFailure(await Effect.runPromiseExit(strict.decodeRows([{ id: "a", body: { old: "shape" } }])))).toBe(true)
 	})
 })
+
+describe("casing", () => {
+	const Accounts = PG.table("accounts", {
+		casing: "snake_case",
+		columns: {
+			orgId: PG.text,
+			accountId: PG.column(PG.int4, { identity: "always" }),
+			displayName: PG.column(PG.text, { name: "label" }),
+			HTTPStatus: PG.column(PG.int4, { default: 200 }),
+			createdAt: PG.column(PG.timestamptz, { defaultExpr: "now()" }),
+		},
+		primaryKey: ["orgId", "accountId"],
+		indexes: [PG.uniqueIndex("accounts_label_unq", ["orgId", "displayName"])],
+		tenantColumn: "orgId",
+	})
+	const Grants = PG.table("grants", {
+		casing: "snake_case",
+		columns: { orgId: PG.text, accountId: PG.int4, grantedAt: PG.nullable(PG.timestamptz) },
+		primaryKey: ["orgId", "accountId"],
+		foreignKeys: [
+			PG.foreignKey({ columns: ["orgId", "accountId"], references: Accounts, foreignColumns: ["orgId", "accountId"] }),
+		],
+	})
+
+	it("names every column without a name from its key, the way drizzle's casing does", () =>
+		Effect.runPromise(
+			Effect.gen(function* () {
+				const ddl = S.renderPgSchema(yield* S.pgEntitiesOf([Accounts, Grants])).join("\n")
+				expect(ddl).toContain(`"org_id" text NOT NULL`)
+				expect(ddl).toContain(`"account_id" integer NOT NULL GENERATED ALWAYS AS IDENTITY`)
+				expect(ddl).toContain(`"label" text NOT NULL`)
+				expect(ddl).toContain(`"http_status" integer NOT NULL DEFAULT 200`)
+				expect(ddl).toContain(`PRIMARY KEY ("org_id", "account_id")`)
+				expect(ddl).toContain(`USING btree ("org_id", "label")`)
+				expect(ddl).toContain(`FOREIGN KEY ("org_id", "account_id") REFERENCES "accounts" ("org_id", "account_id")`)
+				expect(ddl).not.toMatch(/"(orgId|accountId|displayName|HTTPStatus|createdAt|grantedAt)"/)
+			}),
+		))
+
+	it("writes camelCase names from snake_case keys", () => {
+		const Legacy = PG.table("legacy", {
+			casing: "camelCase",
+			columns: { org_id: PG.text, created_at: PG.timestamptz },
+			primaryKey: ["org_id"],
+		})
+		const { sql } = PG.compileUnsafe(PG.from(Legacy).select("org_id", "created_at"))
+		expect(sql).toContain(`"legacy"."orgId" AS "org_id"`)
+		expect(sql).toContain(`"legacy"."createdAt" AS "created_at"`)
+	})
+
+	it("applies to an external table", () => {
+		const View = PG.table("account_view", { external: true, casing: "snake_case", columns: { orgId: PG.text } })
+		expect(PG.compileUnsafe(PG.from(View).select("orgId")).sql).toContain(`"account_view"."org_id" AS "orgId"`)
+	})
+
+	layer(Live)((it) => {
+		it.effect("reads, writes and scopes under the keys", () =>
+			Effect.gen(function* () {
+				for (const statement of S.renderPgSchema(yield* S.pgEntitiesOf([Accounts, Grants]))) {
+					yield* Db.execute({ sql: statement })
+				}
+				const inserted = yield* Db.run(
+					PG.insertInto(Accounts).values({ orgId: "o1", displayName: "Core" }).returning(),
+				)
+				expect(inserted.map((row) => [row.orgId, row.displayName, row.HTTPStatus])).toEqual([["o1", "Core", 200]])
+				const upserted = yield* Db.run(
+					PG.insertInto(Accounts)
+						.values({ orgId: "o1", displayName: "Core", HTTPStatus: 404 })
+						.onConflictDoUpdate({ target: ["orgId", "displayName"], set: ($, excluded) => ({ HTTPStatus: excluded.HTTPStatus }) })
+						.returning("displayName", "HTTPStatus"),
+				)
+				expect(upserted).toEqual([{ displayName: "Core", HTTPStatus: 404 }])
+				const query = PG.from(Accounts)
+					.select("displayName", "HTTPStatus")
+					.where(($) => [$.orgId.eq(PG.param.string("orgId"))])
+				expect(PG.compileUnsafe(query, { orgId: "o1" }).tenantScope).toBe("single-tenant")
+				expect(yield* Db.run(query, { orgId: "o1" })).toEqual([{ displayName: "Core", HTTPStatus: 404 }])
+			}),
+		)
+	})
+})

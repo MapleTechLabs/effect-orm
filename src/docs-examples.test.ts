@@ -18,6 +18,7 @@ import { Effect, Exit, Option, Schema } from "effect"
 import * as CH from "./ch/index"
 import * as T from "./ch/types"
 import * as CHE from "./clickhouse"
+import * as PG from "./postgres"
 import { parseStatement, renderStatement, withSettings } from "./sql/statement"
 import { compileCHUnsafe, compileUnionUnsafe } from "./ch/compile"
 import { raw as rawFragment, compile as compileFragment } from "./sql/sql-fragment"
@@ -191,6 +192,26 @@ describe("docs/tables-and-types.md", () => {
 		expect(oneLine(compileCHUnsafe(query, {}).sql)).toBe(
 			"SELECT counters.Hits AS hits FROM counters WHERE counters.OrgId = 'org_123' AND counters.Live = 1",
 		)
+	})
+
+	it("Column names", () => {
+		const Members = PG.table("members", {
+			casing: "snake_case",
+			columns: {
+				orgId: PG.text,
+				displayName: PG.column(PG.text, { name: "label" }),
+				createdAt: PG.column(PG.timestamptz, { defaultExpr: "now()" }),
+			},
+			primaryKey: ["orgId", "displayName"],
+			tenantColumn: "orgId",
+		})
+		expect(Members.ddl.columns.map((column) => column.name)).toEqual(["org_id", "label", "created_at"])
+		const compiled = PG.compileUnsafe(
+			PG.from(Members).select("displayName").where(($) => [$.orgId.eq(PG.param.string("orgId"))]),
+			{ orgId: "o1" },
+		)
+		expect(oneLine(compiled.sql)).toBe(`SELECT "members"."label" AS "displayName" FROM "members" WHERE "members"."org_id" = $1`)
+		expect(compiled.tenantScope).toBe("single-tenant")
 	})
 })
 

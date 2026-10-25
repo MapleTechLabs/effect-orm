@@ -284,10 +284,15 @@ const Events = CH.table("events", {
 
 **`TableDefinition`** — `columns` (required), `engine` (required), `orderBy` (required for the
 MergeTree family; `[]` for `ORDER BY tuple()`), `partitionBy`, `primaryKey`, `ttl`, `settings`,
-`indexes`, `comment`, `tenantColumn`. Key and expression options are `DdlKey` / `DdlExpr`: SQL
+`indexes`, `comment`, `tenantColumn`, `casing`. Key and expression options are `DdlKey` / `DdlExpr`: SQL
 text, or a callback building it from the column accessor.
 
-**`ExternalTableDefinition`** — `{ external: true, columns, tenantColumn? }`. A table the schema
+**`Casing`** — `"snake_case"` or `"camelCase"`, the `casing` table option: the database name of
+each column that gives no `name`, derived from its key by drizzle-orm's rule (`orgId` and
+`HTTPStatus` become `org_id` and `http_status`). See
+[Column names](./tables-and-types.md#column-names).
+
+**`ExternalTableDefinition`** — `{ external: true, columns, tenantColumn?, casing? }`. A table the schema
 does not own: a system table, a table function, a subquery, a CTE name, a table another tool
 migrates. No DDL, so `generate` never sees it; the name is written verbatim as the FROM target;
 `columns` may be empty.
@@ -298,7 +303,8 @@ const Numbers = CH.table("numbers(10)", { external: true, columns: { number: CH.
 ```
 
 **`ColumnOptions`** — at most one of `default` (a literal, encoded through the column's type),
-`defaultExpr`, `materialized`, `alias`; plus `codec` and `comment`. They type inserts: a column
+`defaultExpr`, `materialized`, `alias`; plus `name` (the column's name in SQL), `codec` and
+`comment`. They type inserts: a column
 with `default` or `defaultExpr` may be left out (`DefaultedColumnsOf`), a `materialized` or
 `alias` column may not be written (`ComputedColumnsOf`).
 
@@ -447,9 +453,10 @@ const Users = PG.table("users", {
 | `defaultForeignKeyName` | `(table, columns, foreignTable, foreignColumns) => string`: the name drizzle-kit gives, shortened past 63 characters as drizzle-kit does |
 
 **`TableDefinition`** — `columns` (required), `primaryKey` (column names, or
-`{ columns, name? }`), `indexes`, `uniqueConstraints`, `foreignKeys`, `tenantColumn`.
+`{ columns, name? }`), `indexes`, `uniqueConstraints`, `foreignKeys`, `tenantColumn`, `casing`
+(a `Casing`, as on `/clickhouse`).
 
-**`ExternalTableDefinition`** — `{ external: true, columns, tenantColumn? }`, as on
+**`ExternalTableDefinition`** — `{ external: true, columns, tenantColumn?, casing? }`, as on
 `/clickhouse`: a view, a catalog table, one another tool migrates. No DDL.
 
 **`ColumnOptions`** — one of `default`, `defaultExpr`, `identity` (`"always"` or

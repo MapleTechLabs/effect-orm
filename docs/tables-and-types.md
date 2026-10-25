@@ -56,14 +56,49 @@ const Users = PG.table("users", {
 })
 ```
 
-A column's key is its name in SQL unless `PG.column` gives it another: `orgId: PG.column(PG.text,
-{ name: "org_id" })` is stored as `org_id` and read, written, filtered and indexed as `orgId`
-everywhere else, as drizzle's `text("org_id")` is. Rows decode under the key.
+A column's key is its name in SQL unless the column or the table gives it another; see
+[Column names](#column-names).
 
 A Postgres column is `NOT NULL` unless its type is `PG.nullable(...)`. An enum column's type is
 a `PG.enumType("status", ["open", "closed"])`, which `generate` creates as a type of its own. See
 [Postgres](./postgres.md) for its types and enums, and [migrations](./migrations.md#postgres) for
 its indexes, unique constraints and foreign keys.
+
+## Column names
+
+A table's first argument is its name in the database, and the variable that holds it is its name in
+TypeScript, so a Prisma `@@map("users")` model is `const User = PG.table("users", …)`. A column's
+key is its name in SQL unless the column or the table gives it another:
+
+- `name` on `column` sets one column's database name, as Prisma's `@map` and drizzle's
+  `text("org_id")` do. `orgId: PG.column(PG.text, { name: "org_id" })` (or `CH.column(CH.string,
+  { name: "org_id" })`) is stored as `org_id`, and read, written, filtered and indexed as `orgId`.
+- `casing` on the table names every column that gives no `name`. `"snake_case"` stores `orgId` as
+  `org_id` and `HTTPStatus` as `http_status`, by drizzle-orm's rule, so a schema drizzle-kit made
+  with `casing: "snake_case"` keeps its names. `"camelCase"` goes the other way.
+
+```ts
+const Members = PG.table("members", {
+	casing: "snake_case",
+	columns: {
+		orgId: PG.text, // "org_id"
+		displayName: PG.column(PG.text, { name: "label" }), // "label": `name` wins
+		createdAt: PG.column(PG.timestamptz, { defaultExpr: "now()" }), // "created_at"
+	},
+	primaryKey: ["orgId", "displayName"],
+	tenantColumn: "orgId",
+})
+```
+
+Every definition option (keys, indexes, foreign keys, `tenantColumn`) and every query, insert,
+update, upsert target and `returning` takes the key; the SQL, the DDL and the migrations
+`generate` writes use the database name. Rows decode under the key: a select writes
+`"org_id" AS "orgId"`, so decoding reads the alias it wrote. The names are fixed where the table
+is defined, so there is no global casing; a project that wants one wraps `table` in its own
+function. A ClickHouse materialized view fills its target by database name, so its target table
+cannot rename a column: the view records a problem if it does.
+
+_(Backed by `docs/tables-and-types.md > Column names`.)_
 
 ## Keys, defaults, and tenancy
 
@@ -77,6 +112,7 @@ decide the insert row type, so it is derived from the DDL rather than declared t
 | `materialized: "…"`       | `MATERIALIZED …`       | not writable                 |
 | `alias: "…"`              | `ALIAS …`              | not writable                 |
 | `codec`, `comment`        | `CODEC(…)`, `COMMENT`  | unchanged                    |
+| `name: "org_id"`          | the column's name      | unchanged                    |
 
 Postgres columns take `default`, `defaultExpr`, and `identity` (`"always"` or `"by default"`);
 each makes the column optional on insert. They also take `unique` (`true`, a constraint name, or

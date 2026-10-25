@@ -17,7 +17,8 @@ import type { Table } from "../ch/table"
 import { columnSqlName, type CHType, type ColumnDefs, type InferTS } from "../ch/types"
 import type { PgType } from "../pg/types"
 import { postgresDialect } from "../pg/dialect"
-import { externalTable, type DdlExpr, type DdlKey } from "./define"
+import type { Casing } from "./casing"
+import { externalTable, namedColumnType, type DdlExpr, type DdlKey } from "./define"
 import { withRenderProblems, type DefinitionProblem, type ProblemSink } from "./problems"
 import {
 	canonicalPgType,
@@ -121,11 +122,9 @@ export type DefaultedColumnsOf<I extends Record<string, ColumnInput>> = {
 const isColumnSpec = (input: ColumnInput): input is ColumnSpec<CHType<string, any, any>, any> =>
 	"_tag" in input && input._tag === "PgColumnSpec"
 
-/** The query-side type of a column input, carrying its `name` as `sqlName`. */
-export const columnTypeOfInput = (input: ColumnInput): CHType<string, any, any> => {
-	if (!isColumnSpec(input)) return input
-	return input.options.name === undefined ? input.type : { ...input.type, sqlName: input.options.name }
-}
+/** The query-side type of a column input, carrying its database name as `sqlName`. */
+const columnTypeOfInput = (key: string, input: ColumnInput, casing: Casing | undefined): CHType<string, any, any> =>
+	isColumnSpec(input) ? namedColumnType(key, input.type, input.options.name, casing) : namedColumnType(key, input, undefined, casing)
 
 // Indexes and foreign keys
 
@@ -319,6 +318,8 @@ export interface TableDefinition<Columns extends Record<string, ColumnInput>> {
 	readonly foreignKeys?: ReadonlyArray<ForeignKeySpec<keyof Columns & string>>
 	/** The column carrying row-level tenancy; see docs/tenant-scoping.md. */
 	readonly tenantColumn?: keyof Columns & string
+	/** Database names for the columns that give no `name`: `"snake_case"` stores `orgId` as `org_id`. */
+	readonly casing?: Casing
 }
 
 /** A table this schema does not own: a view, a catalog table, one another tool migrates. No DDL. */
@@ -326,6 +327,7 @@ export interface ExternalTableDefinition<Columns extends Record<string, ColumnIn
 	readonly external: true
 	readonly columns: Columns
 	readonly tenantColumn?: keyof Columns & string
+	readonly casing?: Casing
 }
 
 /** The DDL a Postgres table carries, as entities. */
@@ -439,7 +441,6 @@ export function table<const Name extends string, const Columns extends Record<st
 			definition,
 			(input): input is ColumnSpec<CHType<string, any, any>> => isColumnSpec(input as ColumnInput),
 			[],
-			(spec) => columnTypeOfInput(spec as ColumnSpec<CHType<string, any, any>>),
 		)
 	}
 	return withRenderProblems(name, () => buildTable(name, definition))
@@ -453,7 +454,9 @@ function buildTable<const Name extends string, const Columns extends Record<stri
 	checkIdentifier(problems, name, name)
 	const inputs = Object.entries(definition.columns)
 	if (inputs.length === 0) problems.push({ object: name, message: "a table needs columns" })
-	const types = Object.fromEntries(inputs.map(([column, input]) => [column, columnTypeOfInput(input)])) as ColumnsOf<Columns>
+	const types = Object.fromEntries(
+		inputs.map(([column, input]) => [column, columnTypeOfInput(column, input, definition.casing)]),
+	) as ColumnsOf<Columns>
 	const sqlName = (column: string) => columnSqlName(types, column)
 	const has = (column: string) => Object.hasOwn(types, column)
 
