@@ -513,6 +513,7 @@ placeholders, double-quoted identifiers.
 | `run`, `status`, `verify`, `baseline`, `MigrationDriver` and the migrate errors                  | `/migrate`        |
 | `Database`, `run`, `sql`, `query`, `execute`, `transaction`, `requireTransaction`, `retryContention`, `Transaction` | `/database` |
 | `DatabaseError`, `TransactionCommitFailed`, `TransactionRollbackFailed` and the other transaction errors | `/database` |
+| `defineRelations`, `findMany`, `Relation`, `RelationBuilder`, `RelationsConfig`, `RelationTables`, `RelationalSchema`, `RelationalTable`, `RelationOptions`, `FindManyOptions`, `FindManyRow`, `WithOf`, `KeyColumn` — relational reads, one statement per level ([Relational reads](./relations.md)) | `/database` |
 | `withQuerySummary`, `QuerySummary` — the `db.query.summary` of the statements an effect runs, for spans | `/database` |
 | `ClickhouseHttpClient`, `layer`, `make`, `ClickhouseHttpClientConfig` — a ClickHouse `SqlClient` over `fetch`, for Workers | `/clickhouse-http` |
 | `defineConfig`, `generate`, `check`, `pull`, `loadSchema`, `readMigrations`, `analyze`, `KitError` | `/kit`            |
