@@ -33,7 +33,7 @@ const sorted = (rows: Array<unknown>) => rows.map((r) => JSON.stringify(r)).sort
 const matchesModel = (dialect: FuzzDialect, target: FuzzTarget, input: Plan) => {
 	const known = knownPlanIssue({ target: target.name, plan: input })
 	if (known !== undefined) skipKnown(known)
-	return checkRows(target, input.orgId, evaluate(input, target.semantics), compilePlan(dialect, dialect.context, input), compilePlan(dialect, scopeContext(dialect), input))
+	return checkRows(target, input.orgId, evaluate(input, target.semantics), compilePlan(dialect, dialect.context, input), compilePlan(dialect, scopeContext(dialect), input), input.where)
 }
 
 const unionMatchesModel = (dialect: FuzzDialect, target: FuzzTarget, input: UnionPlan) => {
@@ -49,11 +49,12 @@ const unionMatchesModel = (dialect: FuzzDialect, target: FuzzTarget, input: Unio
 		evaluateUnion(input, target.semantics),
 		compileUnionPlan(dialect, dialect.context, input),
 		compileUnionPlan(dialect, scopeContext(dialect), input),
+		input.branches.map((branch) => branch.where),
 	)
 }
 
 /** Run what compiled and compare its rows with the model's; `scoped` is the same input over the plain tables. */
-const checkRows = async (target: FuzzTarget, orgId: string, expected: ModelResult, result: Compiled, scoped: Compiled) => {
+const checkRows = async (target: FuzzTarget, orgId: string, expected: ModelResult, result: Compiled, scoped: Compiled, where: unknown) => {
 	if (result._tag !== "Compiled") throw new FuzzFailure(`a valid plan was not compiled (${result._tag})`, { error: result.error })
 	const { compiled } = result
 	// The scope a real application would get: the same plan over the plain tables.
@@ -67,7 +68,10 @@ const checkRows = async (target: FuzzTarget, orgId: string, expected: ModelResul
 		if (expected.ordered) expect(actual).toEqual(want)
 		else expect(sorted(actual)).toEqual(sorted(want))
 		if (tenantScope === "single-tenant") {
-			const foreign = [...expected.orgs].filter((org) => org !== orgId)
+			// The tenant is the `orgId` param, unless the plan also constrains OrgId itself (`OrgId IN ('org_2')`
+			// pins the query to org_2): then it is single-tenant by that, and any one org is right.
+			const pinnedElsewhere = /"col":"OrgId"/.test(JSON.stringify(where))
+			const foreign = pinnedElsewhere ? [...expected.orgs].slice(1) : [...expected.orgs].filter((org) => org !== orgId)
 			expect(foreign, "a single-tenant query read another org's rows").toEqual([])
 		}
 	})
