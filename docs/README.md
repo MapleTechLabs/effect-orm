@@ -65,6 +65,7 @@ Roughly in reading order.
 | [Postgres](./postgres.md)                             | The Postgres dialect, its column types and functions                                |
 | [Schema and migrations](./migrations.md)              | DDL from `CH.table` / `PG.table`, `materializedView`, `effect-orm generate`, applying migrations, adopting drizzle-kit |
 | [Statements and transactions](./database.md)          | `Database` over your `SqlClient`: `run`, `execute`, `transaction`, retry            |
+| [Seeding](./seeding.md)                               | Deterministic test and demo rows from the column Schemas: `rows`, `insert`, `arbitrary` |
 
 ## Reference
 
@@ -89,6 +90,7 @@ Roughly in reading order.
 | `@maple-dev/effect-orm/kit`                   | `generate` and `check` over a migrations folder, `defineConfig`, and `runCli` for the bundled `effect-orm` command. Node or Bun                          |
 | `@maple-dev/effect-orm/migrate`               | `run`, `status`, `verify`, `baseline`, and `MigrationDriver`: applies ClickHouse or Postgres migrations through a driver you provide                     |
 | `@maple-dev/effect-orm/database`              | `Database` over your `SqlClient`: `run` compiled queries, `execute` statements, `transaction` with settings and contention retry                           |
+| `@maple-dev/effect-orm/seed`                  | `rows`, `insert`, `arbitrary` and `pick`: deterministic rows from each column's Schema through `Schema` → `Arbitrary`, inserted in batches. See [Seeding](./seeding.md) |
 
 There is no root import: pick the dialect entry. [The reference](./reference.md) lists every
 export of both.

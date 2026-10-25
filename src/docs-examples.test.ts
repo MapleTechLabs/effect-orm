@@ -18,6 +18,8 @@ import { Effect, Exit, Option, Schema } from "effect"
 import * as CH from "./ch/index"
 import * as T from "./ch/types"
 import * as CHE from "./clickhouse"
+import * as PG from "./postgres"
+import * as Seed from "./seed"
 import { parseStatement, renderStatement, withSettings } from "./sql/statement"
 import { compileCHUnsafe, compileUnionUnsafe } from "./ch/compile"
 import { raw as rawFragment, compile as compileFragment } from "./sql/sql-fragment"
@@ -947,4 +949,42 @@ describe("docs/running-queries.md", () => {
 		// Total: a statement with no terminal clauses round-trips unchanged.
 		expect(renderStatement(parseStatement("SELECT 1")).trim()).toBe("SELECT 1")
 	})
+})
+
+describe("docs/seeding.md", () => {
+	const Orgs = PG.table("orgs", { columns: { id: PG.text, name: PG.text }, primaryKey: ["id"] })
+	const Members = PG.table("members", {
+		columns: {
+			id: PG.int4,
+			org_id: PG.text,
+			email: PG.column(PG.text, { unique: true }),
+			age: PG.int2,
+			joined: PG.column(PG.timestamptz, { defaultExpr: "now()" }),
+		},
+		primaryKey: ["id"],
+		tenantColumn: "org_id",
+	})
+
+	it.effect("Seed rows from the column Schemas", () =>
+		Effect.gen(function* () {
+			const seedMembers = Seed.rows(Members, {
+				count: 3,
+				seed: 42,
+				tenant: "org_1",
+				columns: { email: (i) => `member${i}@example.com`, age: Seed.pick([30, 40]) },
+			})
+			const rows = yield* seedMembers
+			// The same seed gives the same rows.
+			expect(yield* seedMembers).toEqual(rows)
+			expect(rows.map((row) => row.email)).toEqual(["member0@example.com", "member1@example.com", "member2@example.com"])
+			for (const row of rows) {
+				expect(row.org_id).toBe("org_1")
+				expect([30, 40]).toContain(row.age)
+				expect(row).not.toHaveProperty("joined")
+			}
+			expect(new Set(rows.map((row) => row.id)).size).toBe(3)
+			const orgs = yield* Seed.rows(Orgs, { count: 2 })
+			expect(orgs).toHaveLength(2)
+		}),
+	)
 })
