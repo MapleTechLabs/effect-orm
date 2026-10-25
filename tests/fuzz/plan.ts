@@ -203,10 +203,10 @@ const fixturePattern = fc
 		[...value]
 			.map((ch, i) => {
 				const edit = edits[i % edits.length]
-				if (edit === "upper") return ch.toUpperCase()
 				if (edit === "under") return "_"
 				if (edit === "pct") return "%"
-				return ch === "_" || ch === "%" || ch === "\\" ? `\\${ch}` : ch
+				const kept = edit === "upper" ? ch.toUpperCase() : ch
+				return kept === "_" || kept === "%" || kept === "\\" ? `\\${kept}` : kept
 			})
 			.join(""),
 	)
