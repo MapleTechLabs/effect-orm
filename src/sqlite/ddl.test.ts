@@ -132,3 +132,49 @@ it("lets an insert leave out defaulted columns, and SQLite fills them", async ()
 	}).pipe(Effect.provide(SqliteClient.layer({ filename: ":memory:" }))))
 	expect(rows).toEqual([{ role: "member", weight: 1.5, active: true }])
 })
+
+it("renders DSL defaults and expression index keys that SQLite accepts", async () => {
+	const Codes = SQLite.table("codes", {
+		columns: {
+			id: SQLite.integer,
+			code: SQLite.text,
+			hits: SQLite.column(SQLite.integer, { defaultExpr: () => SQLite.lit(1) }),
+		},
+		primaryKey: ["id"],
+		indexes: [SQLite.uniqueIndex("codes_code_lower", ($) => [SQLite.lower($.code)])],
+	})
+	const statements = await ddlOf([Codes])
+	expect(statements).toEqual([
+		'CREATE TABLE IF NOT EXISTS "codes" (\n\t"id" integer PRIMARY KEY NOT NULL,\n\t"code" text NOT NULL,\n\t"hits" integer NOT NULL DEFAULT (1)\n)',
+		'CREATE UNIQUE INDEX IF NOT EXISTS "codes_code_lower" ON "codes" (lower("code"))',
+	])
+	const shape = (await shapeAfter(statements)) as { codes: { indexes: Array<{ keys: Array<{ cid: number }> }> } }
+	expect(shape.codes.indexes[0]?.keys[0]?.cid).toBe(-2)
+})
+
+it("keeps the query-only forms free of DDL", async () => {
+	const External = SQLite.table("ext", { external: true, columns: { id: SQLite.integer, orgId: named(SQLite.text, "org_id") }, tenantColumn: "orgId" })
+	const Legacy = SQLite.table("legacy", { id: SQLite.integer, note: SQLite.text }, { defaults: ["note"] })
+	expect("ddl" in External || "ddl" in Legacy).toBe(false)
+	expect(SQLite.compileUnsafe(SQLite.from(External).select("orgId").where(($) => [$.orgId.eq("o")])).sql).toContain('"ext"."org_id" AS "orgId"')
+	const exit = await Effect.runPromiseExit(sqliteEntitiesOf([External as never]))
+	expect(exit._tag).toBe("Failure")
+})
+
+it("records every definition problem, and sqliteEntitiesOf fails with all of them", async () => {
+	const Bad = SQLite.table("sqlite_bad", {
+		columns: {
+			id: SQLite.nullable(SQLite.text),
+			both: SQLite.column(SQLite.text, { default: "a", defaultExpr: "('b')" }),
+		},
+		primaryKey: ["id", "missing" as "id"],
+		indexes: [SQLite.index("bad_none", ["nope" as "id"])],
+	})
+	const Clash = SQLite.table("clash", { columns: { id: SQLite.text }, indexes: [SQLite.index("short_link", ["id"])] })
+	const exit = await Effect.runPromiseExit(sqliteEntitiesOf([Bad, Clash, ShortLink]))
+	if (exit._tag !== "Failure") throw new Error("a broken schema was accepted")
+	const messages = JSON.stringify(exit.cause)
+	for (const expected of ["starts with sqlite_", "cannot be nullable", "missing is not a column", "one of default, defaultExpr", "nope is not a column", "one namespace"]) {
+		expect(messages).toContain(expected)
+	}
+})
