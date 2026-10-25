@@ -148,6 +148,8 @@ export {
 	CompiledQueryEncodeError,
 } from "./ch/compile"
 
+export { formatDecodeError, type DecodeIssue, type FormatDecodeErrorOptions } from "./ch/decode-error"
+
 export {
 	type Dialect,
 	type DialectClauses,

@@ -11,7 +11,8 @@ import { Cause, Context, Effect, Exit, Layer, Option, Schedule, Schema } from "e
 import { dual } from "effect/Function"
 import * as SqlClient from "effect/sql/SqlClient"
 import { isSqlError } from "effect/sql/SqlError"
-import { compileCH, compileUnion, CompiledQueryDecodeError, type CompiledQuery } from "../ch/compile"
+import { compileCH, compileUnion, type CompiledQueryDecodeError, type CompiledQuery } from "../ch/compile"
+import { decodeErrorFromCause } from "../ch/decode-error"
 import { noTransactions, type Dialect, type IsolationLevel, type TransactionSettings } from "../ch/dialect"
 import type { QueryBuilderError } from "../ch/errors"
 import type { AnyInsert } from "../ch/insert"
@@ -263,7 +264,13 @@ export const fromSqlClient = (sql: SqlClient.SqlClient, options: FromSqlClientOp
 			return Effect.forEach(wire, (row, rowIndex) =>
 				decode(row).pipe(
 					Effect.mapError(
-						(cause) => new CompiledQueryDecodeError({ message: `row ${rowIndex} did not match the schema`, rowIndex, cause }),
+						(cause) =>
+							decodeErrorFromCause({
+								prefix: `row ${rowIndex} did not match the schema`,
+								rowIndex,
+								cause,
+								dialect: dialect.name,
+							}),
 					),
 				),
 			)
