@@ -93,6 +93,7 @@ export {
 	SqliteIndexEntity,
 	SqliteSchemaEntity,
 	SqliteTableEntity,
+	SqliteUniqueEntity,
 	canonicalSqliteType,
 } from "./schema/sqlite-entities"
 export {

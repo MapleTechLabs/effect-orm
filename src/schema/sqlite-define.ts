@@ -15,7 +15,6 @@ import { sqliteDialect } from "../sqlite/dialect"
 import { ddlRenderer } from "./ddl-expr"
 import { externalTable, type DdlExpr, type DdlKey } from "./define"
 import { sortEntities } from "./entities"
-import { sqliteIdent } from "./sqlite-render"
 import { checkIdentifier, definitionError, withRenderProblems, type DefinitionProblem, type ProblemSink, type SchemaDefinitionError } from "./problems"
 import {
 	canonicalSqliteType,
@@ -23,6 +22,7 @@ import {
 	type SqliteIndexEntity,
 	type SqliteSchemaEntity,
 	type SqliteTableEntity,
+	type SqliteUniqueEntity,
 } from "./sqlite-entities"
 
 const ddl = ddlRenderer(sqliteDialect)
@@ -45,8 +45,9 @@ export interface ColumnOptions<T extends CHType<string, any, any>> {
 	 */
 	readonly defaultExpr?: DdlExpr<ColumnDefs>
 	/**
-	 * A one-column unique index, which is what drizzle-kit writes for
-	 * `.unique()`. `true` names it `<table>_<column>_unique`; a string names it.
+	 * A one-column `UNIQUE` constraint, written inline as drizzle-kit 1.0 writes
+	 * `.unique()`. `true` names it `<table>_<column>_unique`, drizzle's name; a
+	 * string names it. SQLite keeps no constraint name; the snapshot does.
 	 */
 	readonly unique?: true | string
 }
@@ -164,6 +165,7 @@ export interface TableDdl {
 	readonly table: SqliteTableEntity
 	readonly columns: ReadonlyArray<SqliteColumnEntity>
 	readonly indexes: ReadonlyArray<SqliteIndexEntity>
+	readonly uniques: ReadonlyArray<SqliteUniqueEntity>
 }
 
 export interface SqliteSchemaTable<Name extends string, Cols extends ColumnDefs, Defaulted extends string = string>
@@ -245,7 +247,7 @@ function buildTable<const Name extends string, const Columns extends Record<stri
 		}
 	}
 
-	const indexEntities: Array<SqliteIndexEntity> = (definition.indexes ?? []).map((spec): SqliteIndexEntity => {
+	const indexEntities: ReadonlyArray<SqliteIndexEntity> = (definition.indexes ?? []).map((spec): SqliteIndexEntity => {
 		checkName(problems, `${name} index`, spec.name)
 		if (Array.isArray(spec.on)) {
 			for (const column of spec.on) {
@@ -257,12 +259,13 @@ function buildTable<const Name extends string, const Columns extends Record<stri
 		return { kind: "index", table: name, name: spec.name, unique: spec.unique, columns }
 	})
 
+	const uniqueEntities: Array<SqliteUniqueEntity> = []
 	for (const [column, input] of inputs) {
 		const option = isColumnSpec(input) ? input.options.unique : undefined
 		if (option === undefined) continue
 		const uniqueName = option === true ? `${name}_${sqlName(column)}_unique` : option
-		checkName(problems, `${name}.${column} unique`, uniqueName)
-		indexEntities.push({ kind: "index", table: name, name: uniqueName, unique: true, columns: [sqliteIdent(sqlName(column))] })
+		checkIdentifier(problems, `${name}.${column} unique`, uniqueName)
+		uniqueEntities.push({ kind: "unique", table: name, name: uniqueName, columns: [sqlName(column)] })
 	}
 
 	const tableEntity: SqliteTableEntity = {
@@ -277,7 +280,7 @@ function buildTable<const Name extends string, const Columns extends Record<stri
 		columns: types,
 		...(definition.tenantColumn !== undefined ? { tenantColumn: definition.tenantColumn } : undefined),
 		...(defaults.length > 0 ? { defaults: defaults as unknown as Array<DefaultedColumnsOf<Columns>> } : undefined),
-		ddl: { dialect: "sqlite", table: tableEntity, columns: columnEntities, indexes: indexEntities },
+		ddl: { dialect: "sqlite", table: tableEntity, columns: columnEntities, indexes: indexEntities, uniques: uniqueEntities },
 		problems,
 	}
 }
@@ -309,7 +312,12 @@ export const sqliteEntitiesOf = (
 		const { ddl } = table
 		claim(ddl.table.name, `table ${ddl.table.name}`)
 		for (const index of ddl.indexes) claim(index.name, `an index on ${ddl.table.name}`)
-		entities.push(ddl.table, ...ddl.columns, ...ddl.indexes)
+		const constraints = new Set<string>()
+		for (const unique of ddl.uniques) {
+			if (constraints.has(unique.name)) problems.push({ object: `${ddl.table.name}.${unique.name}`, message: "defined twice" })
+			constraints.add(unique.name)
+		}
+		entities.push(ddl.table, ...ddl.columns, ...ddl.indexes, ...ddl.uniques)
 	}
 	return problems.length > 0 ? Effect.fail(definitionError(problems)) : Effect.succeed(sortEntities(entities))
 }

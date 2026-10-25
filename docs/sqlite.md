@@ -69,15 +69,18 @@ export const statements = S.sqliteEntitiesOf([ShortLinks]).pipe(Effect.map(S.ren
 - `default` takes a literal of the column type. `defaultExpr` takes SQL as written, so add the
   parentheses SQLite requires around an expression, or a DSL callback, which is parenthesized
   for you. Either lets an insert leave the column out.
-- `unique: true` adds a unique index `<table>_<column>_unique`, as drizzle-kit does for
-  `.unique()`. A string names the index.
+- `unique: true` writes an inline `UNIQUE` constraint, as drizzle-kit 1.0 does for `.unique()`.
+  Its name, `<table>_<column>_unique` or the string you give, is kept in the schema entities;
+  SQLite itself names the backing index `sqlite_autoindex_...`.
 - Column types declare their SQLite type: `text`, `timestamp` and `json` are `text`; `integer`
   and `boolean` are `integer`; `real` is `real`; `blob` is `blob`. A `custom(sql, schema)` type
   declares `sql`, for example `numeric`.
 - `table(name, { external: true, columns })` declares a table another tool owns: no DDL.
 
 The tests apply this DDL and drizzle-kit's SQL for the same tables to real SQLite, and compare
-`PRAGMA table_info`, `index_list` and `index_xinfo`.
+`PRAGMA table_info`, `index_list` and `index_xinfo`. One difference is deliberate: drizzle-kit
+1.0 drops `NOT NULL` from a primary key column, so SQLite then accepts a NULL key in a `text`
+key column. This entry keeps `NOT NULL`.
 
 There is no SQLite schema diff, introspection, migration ledger or kit dialect yet. Run the
 rendered statements yourself, or keep migrating with your current tool. `WITHOUT ROWID`,

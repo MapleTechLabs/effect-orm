@@ -32,7 +32,7 @@ export const SqliteColumnEntity = Schema.Struct({
 })
 export type SqliteColumnEntity = typeof SqliteColumnEntity.Type
 
-/** An index, `CREATE [UNIQUE] INDEX`. A column's `unique` option is a unique index too, as drizzle-kit writes it. */
+/** An index, `CREATE [UNIQUE] INDEX`. */
 export const SqliteIndexEntity = Schema.Struct({
 	kind: Schema.Literal("index"),
 	table: Schema.String,
@@ -43,7 +43,20 @@ export const SqliteIndexEntity = Schema.Struct({
 })
 export type SqliteIndexEntity = typeof SqliteIndexEntity.Type
 
-export const SqliteSchemaEntity = Schema.Union([SqliteTableEntity, SqliteColumnEntity, SqliteIndexEntity])
+/**
+ * A `UNIQUE` constraint, written in `CREATE TABLE` as drizzle-kit 1.0 writes
+ * `.unique()`. SQLite backs it with an automatic index and keeps no name for
+ * it, so `name` lives only here. Changing one rebuilds the table.
+ */
+export const SqliteUniqueEntity = Schema.Struct({
+	kind: Schema.Literal("unique"),
+	table: Schema.String,
+	name: Schema.String,
+	columns: Schema.Array(Schema.String),
+})
+export type SqliteUniqueEntity = typeof SqliteUniqueEntity.Type
+
+export const SqliteSchemaEntity = Schema.Union([SqliteTableEntity, SqliteColumnEntity, SqliteIndexEntity, SqliteUniqueEntity])
 export type SqliteSchemaEntity = typeof SqliteSchemaEntity.Type
 
 /** The declared type of a column, as `PRAGMA table_info` reports it back. */

@@ -510,7 +510,7 @@ placeholders, double-quoted identifiers.
 | `SqlQuery`, `compileQuery`                                                                       | `/sql`            |
 | `ClickHouseStatement`, `parseStatement`, `renderStatement`, `withSettings`, `withFormat`         | `/sql`            |
 | `ClickHouseStatementFromString`, `splitTerminalClauses`, `maskLiteralsAndComments`               | `/sql`            |
-| Schema tooling: `isSchemaObject`, `makeSnapshot`, `renderSchema`, `diffSchemas`, `diffPgSchemas`, `fromDrizzleSnapshot`, snapshot and entity schemas (`PgEnumEntity`, `PgUniqueEntity`, …), `Hint`; for SQLite, `sqliteEntitiesOf`, `renderSqliteSchema`, `renderSqliteCreateTable`, `renderSqliteCreateIndex` and the `SqliteTableEntity`, `SqliteColumnEntity`, `SqliteIndexEntity` schemas | `/schema`         |
+| Schema tooling: `isSchemaObject`, `makeSnapshot`, `renderSchema`, `diffSchemas`, `diffPgSchemas`, `fromDrizzleSnapshot`, snapshot and entity schemas (`PgEnumEntity`, `PgUniqueEntity`, …), `Hint`; for SQLite, `sqliteEntitiesOf`, `renderSqliteSchema`, `renderSqliteCreateTable`, `renderSqliteCreateIndex` and the `SqliteTableEntity`, `SqliteColumnEntity`, `SqliteIndexEntity`, `SqliteUniqueEntity` schemas | `/schema`         |
 | `run`, `status`, `verify`, `baseline`, `MigrationDriver` and the migrate errors                  | `/migrate`        |
 | `Database`, `run`, `sql`, `query`, `execute`, `transaction`, `requireTransaction`, `retryContention`, `Transaction` | `/database` |
 | `DatabaseError`, `TransactionCommitFailed`, `TransactionRollbackFailed` and the other transaction errors | `/database` |
@@ -585,9 +585,9 @@ the bare-columns form.
 **`ColumnOptions`** — one of `default` (a literal, encoded through the column type; a boolean
 is written `true` / `false`) or `defaultExpr` (SQL as written, so add SQLite's parentheses, or a
 DSL callback, parenthesized for you); either lets an insert leave the column out
-(`DefaultedColumnsOf`). Also `name` (the column's name in SQL) and `unique` (`true` or an index
-name), a one-column unique index named `<table>_<column>_unique` by default, as drizzle-kit
-names it.
+(`DefaultedColumnsOf`). Also `name` (the column's name in SQL) and `unique` (`true` or a
+constraint name), an inline `UNIQUE` constraint named `<table>_<column>_unique` by default, as
+drizzle-kit 1.0 writes and names it.
 
 **Types** — `ColumnInput`, `ColumnSpec`, `ColumnsOf`, `IndexSpec`, `TableDdl`, `SqliteSchemaTable`,
 `DdlExpr`, `DdlKey`, `DefinitionProblem`. A definition that cannot render records a problem;

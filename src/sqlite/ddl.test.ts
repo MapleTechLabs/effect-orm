@@ -84,8 +84,9 @@ it("creates short_link exactly as drizzle-kit's SQL does, by PRAGMA table_info a
 	expect(Object.keys(ours)).toEqual(["short_link"])
 })
 
-// drizzle-kit 0.31.11 for: composite primaryKey, .default(...) literals, sql`(CURRENT_TIMESTAMP)`,
-// text("email").unique(), real, blob, numeric, a two-column index.
+// drizzle-kit 1.0.0-rc.5 for: composite primaryKey, .default(...) literals, sql`(CURRENT_TIMESTAMP)`,
+// text("email").unique(), real, blob, numeric, a two-column index. drizzle-kit 1.0 writes
+// .unique() inline, as a UNIQUE constraint; 0.31 wrote a separate unique index.
 const drizzleMembership = `CREATE TABLE \`membership\` (
 	\`org_id\` text NOT NULL,
 	\`user_id\` text NOT NULL,
@@ -94,13 +95,18 @@ const drizzleMembership = `CREATE TABLE \`membership\` (
 	\`active\` integer DEFAULT true NOT NULL,
 	\`avatar\` blob,
 	\`amount\` numeric,
-	\`email\` text,
+	\`email\` text UNIQUE,
 	\`created_at\` text DEFAULT (CURRENT_TIMESTAMP) NOT NULL,
-	PRIMARY KEY(\`org_id\`, \`user_id\`)
+	CONSTRAINT \`membership_pk\` PRIMARY KEY(\`org_id\`, \`user_id\`)
 );
 --> statement-breakpoint
-CREATE UNIQUE INDEX \`membership_email_unique\` ON \`membership\` (\`email\`);--> statement-breakpoint
 CREATE INDEX \`membership_user_role\` ON \`membership\` (\`user_id\`,\`role\`);`
+
+// drizzle-kit 1.0.0-rc.5 for short_link. It drops NOT NULL from a primary key column even when
+// the column says .notNull(), so SQLite accepts a NULL id. We keep NOT NULL.
+const drizzleV1ShortLinkTable = drizzleShortLink
+	.replace("`id` text PRIMARY KEY NOT NULL", "`id` text PRIMARY KEY")
+	.split("--> statement-breakpoint")[0]!
 
 const Membership = SQLite.table("membership", {
 	columns: {
@@ -119,7 +125,16 @@ const Membership = SQLite.table("membership", {
 	tenantColumn: "orgId",
 })
 
-it("creates composite keys, defaults, unique columns and every storage class as drizzle-kit does", async () => {
+it("matches drizzle-kit 1.0 for short_link, except that the primary key column stays NOT NULL", async () => {
+	const ours = (await shapeAfter(await ddlOf([ShortLink]))) as { short_link: { columns: Array<{ name: string; notnull: number }> } }
+	const theirs = (await shapeAfter([drizzleV1ShortLinkTable, ...drizzleStatements(drizzleShortLink).slice(1)])) as typeof ours
+	expect(ours.short_link.columns.find((c) => c.name === "id")?.notnull).toBe(1)
+	expect(theirs.short_link.columns.find((c) => c.name === "id")?.notnull).toBe(0)
+	const withoutKeyNull = (shape: typeof ours) => ({ ...shape, short_link: { ...shape.short_link, columns: shape.short_link.columns.map((c) => (c.name === "id" ? { ...c, notnull: 1 } : c)) } })
+	expect(withoutKeyNull(ours)).toEqual(withoutKeyNull(theirs))
+})
+
+it("creates composite keys, defaults, unique columns and every storage class as drizzle-kit 1.0 does", async () => {
 	expect(await shapeAfter(await ddlOf([Membership]))).toEqual(await shapeAfter(drizzleStatements(drizzleMembership)))
 })
 
@@ -185,5 +200,5 @@ it("keeps entities as plain data that survive a JSON round trip, sorted the same
 	expect(canonicalJson(again)).toBe(canonicalJson(entities))
 	const decoded = Schema.decodeUnknownSync(Schema.Array(SqliteSchemaEntity))(JSON.parse(canonicalJson(entities)))
 	expect(renderSqliteSchema(decoded)).toEqual(renderSqliteSchema(entities))
-	expect(entities.map((e) => e.kind).filter((k, i, all) => all.indexOf(k) === i)).toEqual(["table", "column", "index"])
+	expect(entities.map((e) => e.kind).filter((k, i, all) => all.indexOf(k) === i)).toEqual(["table", "column", "index", "unique"])
 })
