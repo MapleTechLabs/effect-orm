@@ -44,8 +44,8 @@ builder; **P1** commonly used; **P2** niche.
   function names, which Postgres does not have); `select *`.
 - ClickHouse: FINAL, PREWHERE, LIMIT BY, SETTINGS on SELECT, the ARRAY JOIN clause.
 - Writes: UPDATE ... FROM with a typed VALUES source; ClickHouse `ALTER TABLE ... UPDATE/DELETE`
-  and lightweight DELETE; JSONEachRow bulk insert (`encodeInsertRows`); a set-all-from-`excluded`
-  helper; client-side default hooks like `$defaultFn` / `$onUpdate`.
+  and lightweight DELETE; JSONEachRow bulk insert (`encodeInsertRows`); ~~a set-all-from-`excluded`
+  helper~~ (built: `excluded` / `excludedAll`); client-side default hooks like `$defaultFn` / `$onUpdate`.
 - Runtime: `runFirst` / `runSingle` / `stream`; `observe` with duration, rows and error; replica
   routing for `route()`; a `SET LOCAL` helper for RLS; a mock `Database` for users' tests.
 - Types: select, insert and update row types and Schemas per table.
