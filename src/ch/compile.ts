@@ -718,8 +718,6 @@ function compileInner<
 	params: Params,
 	options?: {
 		selectKeys?: ReadonlyArray<string>
-		/** Union columns cast with the dialect's `unionNumberCast`; see `unionNumberCasts`. */
-		castNumbers?: ReadonlySet<string>
 		skipFormat?: boolean
 		rowSchema?: CompiledQueryRowSchema<Decoded>
 		/** Leave `__PARAM_…__` placeholders in the SQL instead of resolving them.
@@ -924,8 +922,7 @@ function compileInner<
 				}
 				const fragment = expr.toFragment()
 				const [sql, found] = track(() => compileSqlFragment(fragment))
-				const numberCast = options?.castNumbers?.has(alias) === true ? currentDialect().unionNumberCast : undefined
-				return { alias, sql: numberCast !== undefined ? numberCast(castSelectedParam(expr, sql)) : castSelectedParam(expr, sql), found, column: plainColumn(fragment) }
+				return { alias, sql: castSelectedParam(expr, sql), found, column: plainColumn(fragment) }
 			})
 			const where = presentWhere.map((c) => raw(rowFilter("WHERE", c)))
 			const having = (state.havingFn ? state.havingFn($) : [])
@@ -1407,14 +1404,14 @@ const isNumberSchema = (schema: unknown): boolean => {
 }
 
 /**
- * The union columns to cast to one numeric type, on a dialect with a
- * `unionNumberCast`: every branch selects a number there, and their types may
- * differ, because the branches declare different column types, or compute it
- * differently (arithmetic has no declared type: `Id + 1` is UInt64, `Id - 1` Int64).
+ * The union columns a dialect with `unionNumberOrderKeys` orders through those
+ * keys: every branch selects a number, and their types may differ, because the
+ * branches declare different column types or compute it differently
+ * (arithmetic has no declared type: `Id + 1` is UInt64, `Id - 1` Int64).
  */
-function unionNumberCasts(queries: ReadonlyArray<CHQuery<any, any, any, any>>, selectKeys: ReadonlyArray<string>): ReadonlySet<string> {
+function mixedNumberColumns(queries: ReadonlyArray<CHQuery<any, any, any, any>>, selectKeys: ReadonlyArray<string>): ReadonlySet<string> {
 	const casts = new Set<string>()
-	if (currentDialect().unionNumberCast === undefined || queries.length < 2) return casts
+	if (currentDialect().unionNumberOrderKeys === undefined || queries.length < 2) return casts
 	for (const alias of selectKeys) {
 		const exprs = queries.map((q) => (selectExprsOf(q) as Record<string, unknown> | undefined)?.[alias])
 		const kinds = exprs.map((expr) => {
@@ -1456,10 +1453,10 @@ function compileUnionInner<Output extends Record<string, any>, Params extends Re
 	if (state.queries.some((q) => q._state.lock !== undefined)) {
 		return fail(new QueryBuilderDefect({ message: "unionAll: a branch cannot take a row lock; lock in a query over the union instead" }),failedQuery<Output, undefined>())
 	}
-	const castNumbers = unionNumberCasts(state.queries, selectKeys)
 	const subQueries = state.queries.map((q) =>
-		compileInner(q, params, { skipFormat: true, deferParams, nested: true, selectKeys, enclosingCtes, castNumbers }),
+		compileInner(q, params, { skipFormat: true, deferParams, nested: true, selectKeys, enclosingCtes }),
 	)
+	const mixedNumbers = mixedNumberColumns(state.queries, selectKeys)
 	const bounds = new Set(
 		subQueries.flatMap((q) => {
 			const bound = tenantBoundOf(q)
@@ -1494,7 +1491,14 @@ function compileUnionInner<Output extends Record<string, any>, Params extends Re
 	if (hasOuter) {
 		sql = `SELECT * FROM (\n${sql}\n)${currentDialect().clauses.derivedTableAlias ? ` AS ${quoteIdent("__union")}` : ""}`
 		if (state.outerOrderBySpecs.length > 0) {
-			sql += `\nORDER BY ${orderByClause(state.outerOrderBySpecs).join(", ")}`
+			const orderKeys = currentDialect().unionNumberOrderKeys
+			const clause = orderByClause(state.outerOrderBySpecs).map((rendered, i) => {
+				const [column, direction] = state.outerOrderBySpecs[i]!
+				return orderKeys !== undefined && mixedNumbers.has(column)
+					? orderKeys(quoteIdent(column)).map((key) => `${key} ${direction.toUpperCase()}`).join(", ")
+					: rendered
+			})
+			sql += `\nORDER BY ${clause.join(", ")}`
 		}
 		if (state.outerLimitValue != null) {
 			sql += `\nLIMIT ${compileSqlFragment(rowCount("limit", state.outerLimitValue)!)}`
