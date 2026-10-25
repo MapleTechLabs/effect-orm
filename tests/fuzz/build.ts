@@ -1,13 +1,13 @@
-// A plan as builder calls, for either dialect.
+// A plan as builder calls, for any dialect.
 //
 // The builder is driven through its public, typed surface exactly as an
 // application would; `any` here only erases the static types a random plan
 // cannot have. Params are named up front from the plan's structure so that
 // compiling the same plan twice resolves the same names to the same values.
 import { DateTime, Effect, Exit } from "effect"
-import * as CH from "@maple-dev/effect-orm/clickhouse"
-import * as PG from "@maple-dev/effect-orm/postgres"
+import type * as CH from "@maple-dev/effect-orm/clickhouse"
 import type { CoreContext } from "../core-cases"
+import type { FuzzDialect } from "./dialects/types"
 import type { Agg, Cond, Expr, Operand, Plan } from "./plan"
 
 const pad = (n: number, width = 2) => String(n).padStart(width, "0")
@@ -74,7 +74,8 @@ export interface Built {
 	readonly params: Record<string, unknown>
 }
 
-export const buildPlan = (ctx: CoreContext, plan: Plan): Built => {
+export const buildPlan = (dialect: FuzzDialect, ctx: CoreContext, plan: Plan): Built => {
+	const { lit, param, and, or, not, rawCond, fromQuery } = dialect.module
 	const { names, params } = nameParams(plan)
 
 	const expr = ($: any, e: Expr): any => {
@@ -85,7 +86,7 @@ export const buildPlan = (ctx: CoreContext, plan: Plan): Built => {
 				return $.c[e.col]
 			case "num":
 			case "str":
-				return CH.lit(e.v as never)
+				return lit(e.v as never)
 			case "arith":
 				return expr($, e.l)[e.op](typeof e.r === "number" ? e.r : expr($, e.r))
 			case "coalesce":
@@ -99,7 +100,7 @@ export const buildPlan = (ctx: CoreContext, plan: Plan): Built => {
 			case "time":
 				return op.form === "DateTime" ? DateTime.makeUnsafe(op.ms) : op.form === "Date" ? new Date(op.ms) : timeString(op.ms)
 			case "param":
-				return (CH.param as any)[op.kind](names.get(op)!)
+				return (param as any)[op.kind](names.get(op)!)
 			case "expr":
 				return expr($, op.e)
 		}
@@ -119,15 +120,15 @@ export const buildPlan = (ctx: CoreContext, plan: Plan): Built => {
 			case "and":
 			case "or": {
 				const parts = c.cs.map((x) => cond($, x))
-				if (c.style === "fn") return (c.k === "and" ? CH.and : CH.or)(...parts)
+				if (c.style === "fn") return (c.k === "and" ? and : or)(...parts)
 				return parts.slice(1).reduce((acc, part) => acc[c.k](part), parts[0])
 			}
 			case "not":
-				return CH.not(cond($, c.c))
+				return not(cond($, c.c))
 			case "const":
-				return CH.rawCond(c.v ? "1 = 1" : "1 = 0")
+				return rawCond(c.v ? "1 = 1" : "1 = 0")
 			case "tenant":
-				return (c.side === "orders" ? $ : $.c).OrgId.eq(CH.param.string("orgId"))
+				return (c.side === "orders" ? $ : $.c).OrgId.eq(param.string("orgId"))
 		}
 	}
 	const agg = ($: any, a: Agg): any => {
@@ -166,13 +167,23 @@ export const buildPlan = (ctx: CoreContext, plan: Plan): Built => {
 	if (shape.limit !== undefined) q = q.limit(shape.limit)
 	if (shape.offset !== undefined) q = q.offset(shape.offset)
 	if (plan.crossTenant) q = q.crossTenant()
-	if (plan.wrap === "all") q = CH.fromQuery(q, "w").select()
+	if (plan.wrap === "all") q = fromQuery(q, "w").select()
 	if (plan.wrap === "names") {
 		const names = shape.k === "rows" ? shape.select.map(([alias]) => alias) : [...shape.keys, ...shape.aggs].map(([alias]) => alias)
-		q = CH.fromQuery(q, "w").select(...names)
+		q = fromQuery(q, "w").select(...names)
 	}
 	return { query: q, params }
 }
+
+/**
+ * The dialect's context over the plain tables, with no fixture CTEs.
+ *
+ * The fixture CTEs are bare SQL the builder cannot see into, and a CTE named
+ * `orders` shadows the `orders` table, so a query compiled against them never
+ * reports a meaningful tenant scope. Compiled here, the scope the builder
+ * reports is the one a real application gets.
+ */
+export const scopeContext = (dialect: FuzzDialect): CoreContext => ({ ...dialect.context, from: (table) => dialect.module.from(table) as any })
 
 export type Compiled =
 	| { readonly _tag: "Compiled"; readonly compiled: CH.CompiledQuery<any> }
@@ -185,11 +196,10 @@ export type Compiled =
  * `QueryBuilderError` is `Refused`; a die is a `Defect`; an exception that
  * escapes `compile` — or the builder calls before it — is `Threw`.
  */
-export const compilePlan = (ctx: CoreContext, plan: Plan): Compiled => {
+export const compilePlan = (dialect: FuzzDialect, ctx: CoreContext, plan: Plan): Compiled => {
 	try {
-		const { query, params } = buildPlan(ctx, plan)
-		const compile = ctx.dialect === "clickhouse" ? CH.compile : PG.compile
-		const exit = Effect.runSyncExit((compile as any)(query, params) as Effect.Effect<CH.CompiledQuery<any>, unknown>)
+		const { query, params } = buildPlan(dialect, ctx, plan)
+		const exit = Effect.runSyncExit(dialect.module.compile(query, params))
 		if (Exit.isSuccess(exit)) return { _tag: "Compiled", compiled: exit.value }
 		const failure = exit.cause.reasons.find((reason) => reason._tag === "Fail")
 		return failure !== undefined

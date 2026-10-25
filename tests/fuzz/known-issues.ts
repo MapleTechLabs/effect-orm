@@ -24,10 +24,7 @@ export interface LiteralInput {
 	readonly path: LiteralPath
 }
 
-const literalIssues: ReadonlyArray<KnownIssue<LiteralInput>> = [
-
-
-]
+const literalIssues: ReadonlyArray<KnownIssue<LiteralInput>> = []
 
 /** The id of the open issue this input would hit, if any. */
 export const knownLiteralIssue = (input: LiteralInput): string | undefined =>
@@ -37,23 +34,18 @@ export const knownLiteralIssue = (input: LiteralInput): string | undefined =>
 
 import type { HostileInput } from "./compile.fuzz.test"
 
-const hostileIssues: ReadonlyArray<KnownIssue<HostileInput>> = [
-
-
-
-
-]
+const hostileIssues: ReadonlyArray<KnownIssue<HostileInput>> = []
 
 export const knownHostileIssue = (input: HostileInput): string | undefined =>
 	firstMatch(hostileIssues, input)
 
 // Query plans (queries.fuzz.test.ts)
 
-import type { Target } from "./db"
 import type { Plan } from "./plan"
 
 export interface PlanInput {
-	readonly target: Target
+	/** The target name (`dialects/*.ts`), or the dialect name for compile-only properties. */
+	readonly target: string
 	readonly plan: Plan
 }
 
@@ -79,7 +71,7 @@ const planIssues: ReadonlyArray<KnownIssue<PlanInput>> = [
 			"`Number of arguments for function \"and\" should be at least 2` — the common-expression rewrite leaves a " +
 			"one-argument and(). `SETTINGS optimize_extract_common_expressions = 0` avoids it.",
 		matches: ({ target, plan }) => {
-			if (target === "postgres") return false
+			if (!target.startsWith("clickhouse")) return false
 			const top = conjuncts(plan.where)
 			const disjuncts = (c: any): Array<any> => (c?.k === "or" ? c.cs.flatMap(disjuncts) : [c])
 			// Fails when every disjunct of a nested OR contains a top-level conjunct `w` (as `w`, or inside an AND):
