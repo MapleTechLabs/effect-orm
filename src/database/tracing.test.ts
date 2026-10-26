@@ -17,12 +17,18 @@ const recording = Tracer.make({
 	},
 })
 
-const Live = Layer.effect(
-	Db.Database,
-	Effect.gen(function* () {
-		return Db.fromSqlClient(yield* SqlClient.SqlClient, { dialect: postgresDialect })
-	}),
-).pipe(Layer.provideMerge(PgliteClient.layer({ postgresqlconf: "timezone = 'UTC'" })))
+const liveWith = (options: Omit<Db.FromSqlClientOptions, "dialect"> = {}) =>
+	Layer.effect(
+		Db.Database,
+		Effect.gen(function* () {
+			return Db.fromSqlClient(yield* SqlClient.SqlClient, { dialect: postgresDialect, ...options })
+		}),
+	).pipe(Layer.provideMerge(PgliteClient.layer({ postgresqlconf: "timezone = 'UTC'" })))
+
+const Live = liveWith({
+	// What a consumer adds to every statement span from `observe`.
+	observe: () => Effect.annotateCurrentSpan("peer.service", "test-postgres"),
+})
 
 const Items = PG.table("traced_items", { columns: { id: PG.int4, name: PG.text }, primaryKey: ["id"] })
 
@@ -60,11 +66,12 @@ layer(Live)("Database statement spans", (it) => {
 				"db.collection.name": "traced_items",
 				"db.query.summary": "SELECT traced_items",
 				"db.response.returned_rows": 0,
+				"peer.service": "test-postgres",
 			})
-			// Effect's own span runs inside it, carrying the query text.
-			const execute = spans.find((s) => s.attributes.has("effect.sql.method"))
-			assert(execute !== undefined)
-			expect(Option.getOrUndefined(execute.parent)).toBe(span)
+			// The parameterized text, not the values bound to it.
+			expect(span.attributes.get("db.query.text")).toMatch(/^SELECT[\s\S]+"traced_items"[\s\S]+\$1/)
+			// The statement span is the only one: the driver's runs untraced.
+			expect(spans.filter((s) => s.attributes.has("effect.sql.method"))).toEqual([])
 		}),
 	)
 
@@ -109,7 +116,21 @@ layer(Live)("Database statement spans", (it) => {
 			assert(Exit.isFailure(exit))
 			const span = dbSpan(spans)
 			expect(span.attributes.get("error.type")).toBe("SqlSyntaxError")
+			expect(span.attributes.get("db.response.status_code")).toBe("42601")
 			expect(span.status._tag).toBe("Ended")
+		}),
+	)
+})
+
+layer(liveWith({ driverSpans: true }))("Database statement spans with driverSpans", (it) => {
+	it.effect("keeps the driver's span inside the statement span", () =>
+		Effect.gen(function* () {
+			const { exit, spans } = yield* traced(Db.execute(Db.sql`SELECT 1`))
+			assert(Exit.isSuccess(exit))
+			const span = dbSpan(spans)
+			const driver = spans.find((s) => s.attributes.has("effect.sql.method"))
+			assert(driver !== undefined)
+			expect(Option.getOrUndefined(driver.parent)).toBe(span)
 		}),
 	)
 })

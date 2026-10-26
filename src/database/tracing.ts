@@ -2,9 +2,9 @@
 // database semantic conventions describe:
 // https://opentelemetry.io/docs/specs/semconv/database/database-spans/
 //
-// Effect's own span still runs inside it with the query text, but it cannot
-// carry these: it is named after the database, not the operation, and only a
-// compiled query knows its table.
+// It is the only span a statement gets: it carries the query text, so the SQL
+// driver's own span (named after the database, not the operation, and blind to
+// the table) runs untraced unless `driverSpans` asks for it.
 import { Context, Effect } from "effect"
 import type { CompiledQuery } from "../ch/compile"
 import type { Dialect } from "../ch/dialect"
@@ -57,7 +57,7 @@ export const traceStatement = <A, E, R>(
 		const operation = statement.kind === undefined ? undefined : OPERATIONS[statement.kind]
 		const summary =
 			configured ?? (operation === undefined ? undefined : statement.collection === undefined ? operation : `${operation} ${statement.collection}`)
-		const attributes: Record<string, unknown> = { "db.system.name": system }
+		const attributes: Record<string, unknown> = { "db.system.name": system, "db.query.text": statement.sql }
 		if (operation !== undefined) attributes["db.operation.name"] = operation
 		if (statement.collection !== undefined) attributes["db.collection.name"] = statement.collection
 		if (summary !== undefined) attributes["db.query.summary"] = summary
@@ -66,7 +66,12 @@ export const traceStatement = <A, E, R>(
 				rowsOf === undefined ? Effect.void : Effect.annotateCurrentSpan("db.response.returned_rows", rowsOf(result)),
 			),
 			// `error.type` is the failure's class: a DatabaseError's reason, else its tag.
+			// `db.response.status_code` is the SQLSTATE, when the server sent one.
 			Effect.tapError((error) => {
+				const sqlState =
+					typeof error === "object" && error !== null && "sqlState" in error && typeof error.sqlState === "string"
+						? error.sqlState
+						: undefined
 				const reason =
 					typeof error === "object" && error !== null
 						? "reason" in error && typeof error.reason === "string"
@@ -75,7 +80,10 @@ export const traceStatement = <A, E, R>(
 								? error._tag
 								: undefined
 						: undefined
-				return reason === undefined ? Effect.void : Effect.annotateCurrentSpan("error.type", reason)
+				const failure: Record<string, unknown> = {}
+				if (reason !== undefined) failure["error.type"] = reason
+				if (sqlState !== undefined) failure["db.response.status_code"] = sqlState
+				return Effect.annotateCurrentSpan(failure)
 			}),
 			Effect.withSpan(summary ?? system, { kind: "client", attributes }),
 		)
