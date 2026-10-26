@@ -187,10 +187,10 @@ describe("insertInto", () => {
 			expect(compiled.parameters).toEqual(["o", "k", 1, false, true, false])
 		})
 
-		it("a SET that writes another tenant makes the insert cross-tenant", () => {
+		it("a SET that writes another tenant makes a tenant-keyed upsert cross-tenant", () => {
 			const insert = CH.insertInto(Counters).values(row)
 			const scope = (org: string) =>
-				PG.compileUnsafe(insert.onConflictDoUpdate({ target: ["key"], set: { org } })).tenantScope
+				PG.compileUnsafe(insert.onConflictDoUpdate({ target: ["org", "key"], set: { org } })).tenantScope
 			expect(scope("o")).toBe("single-tenant")
 			expect(scope("p")).toBe("cross-tenant")
 		})
