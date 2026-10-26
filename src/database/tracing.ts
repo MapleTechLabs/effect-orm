@@ -2,9 +2,9 @@
 // database semantic conventions describe:
 // https://opentelemetry.io/docs/specs/semconv/database/database-spans/
 //
-// Effect's own span still runs inside it with the query text, but it cannot
-// carry these: it is named after the database, not the operation, and only a
-// compiled query knows its table.
+// It is the only span a statement gets: it carries the query text, so the SQL
+// driver's own span (named after the database, not the operation, and blind to
+// the table) runs untraced unless `driverSpans` asks for it.
 import { Context, Effect } from "effect"
 import type { CompiledQuery } from "../ch/compile"
 import type { Dialect } from "../ch/dialect"
@@ -40,6 +40,20 @@ const OPERATIONS: Record<NonNullable<TracedStatement["kind"]>, string> = {
 	delete: "DELETE",
 }
 
+// Plain SQL has no compiled operation or table, so they are read off its text,
+// as the conventions allow: the first operation and the first collection named.
+const LEADING_WORD = /^\s*(\w+)/
+const FIRST_TABLE = /(?:from|into|update|join|table)\s+\W?([\w.]+)/i
+
+/** The operation and table a statement names: compiled, or read off plain SQL. */
+const describeStatement = (statement: TracedStatement): { operation?: string; collection?: string } => {
+	if (statement.kind !== undefined) return { operation: OPERATIONS[statement.kind], collection: statement.collection }
+	return {
+		operation: LEADING_WORD.exec(statement.sql)?.[1]?.toUpperCase(),
+		collection: FIRST_TABLE.exec(statement.sql)?.[1],
+	}
+}
+
 /**
  * Runs `effect`, which sends `statement`, in its client span. The span name is
  * the summary when there is one, then `{operation} {table}`, then the system.
@@ -54,19 +68,24 @@ export const traceStatement = <A, E, R>(
 	Effect.withFiber((fiber) => {
 		const configured = fiber.getRef(QuerySummary)
 		const system = SYSTEM_NAMES[dialect.name] ?? dialect.name
-		const operation = statement.kind === undefined ? undefined : OPERATIONS[statement.kind]
+		const { operation, collection } = describeStatement(statement)
 		const summary =
-			configured ?? (operation === undefined ? undefined : statement.collection === undefined ? operation : `${operation} ${statement.collection}`)
-		const attributes: Record<string, unknown> = { "db.system.name": system }
+			configured ?? (operation === undefined ? undefined : collection === undefined ? operation : `${operation} ${collection}`)
+		const attributes: Record<string, unknown> = { "db.system.name": system, "db.query.text": statement.sql }
 		if (operation !== undefined) attributes["db.operation.name"] = operation
-		if (statement.collection !== undefined) attributes["db.collection.name"] = statement.collection
+		if (collection !== undefined) attributes["db.collection.name"] = collection
 		if (summary !== undefined) attributes["db.query.summary"] = summary
 		return effect.pipe(
 			Effect.tap((result) =>
 				rowsOf === undefined ? Effect.void : Effect.annotateCurrentSpan("db.response.returned_rows", rowsOf(result)),
 			),
 			// `error.type` is the failure's class: a DatabaseError's reason, else its tag.
+			// `db.response.status_code` is the SQLSTATE, when the server sent one.
 			Effect.tapError((error) => {
+				const sqlState =
+					typeof error === "object" && error !== null && "sqlState" in error && typeof error.sqlState === "string"
+						? error.sqlState
+						: undefined
 				const reason =
 					typeof error === "object" && error !== null
 						? "reason" in error && typeof error.reason === "string"
@@ -75,7 +94,10 @@ export const traceStatement = <A, E, R>(
 								? error._tag
 								: undefined
 						: undefined
-				return reason === undefined ? Effect.void : Effect.annotateCurrentSpan("error.type", reason)
+				const failure: Record<string, unknown> = {}
+				if (reason !== undefined) failure["error.type"] = reason
+				if (sqlState !== undefined) failure["db.response.status_code"] = sqlState
+				return Effect.annotateCurrentSpan(failure)
 			}),
 			Effect.withSpan(summary ?? system, { kind: "client", attributes }),
 		)
