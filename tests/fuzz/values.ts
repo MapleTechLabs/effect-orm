@@ -2,7 +2,7 @@
 // (`dialects/*.ts`): strings that break SQL writers, times, and normalising
 // decoded values for comparison.
 import fc from "fast-check"
-import { DateTime } from "effect"
+import { Arbitrary, DateTime, Schema } from "effect"
 import type * as CH from "@maple-dev/effect-orm/clickhouse"
 import type { StringRules } from "./dialects/types"
 
@@ -111,12 +111,14 @@ export interface LiteralType {
 	/** `<dialect>:<type>`; appears in property names, `regressions.ts` and `known-issues.ts`. */
 	readonly id: string
 	readonly type: CH.CHType<string, any, any>
-	readonly value: fc.Arbitrary<unknown>
+	readonly value: fc.Arbitrary<unknown> | Arbitrary.Arbitrary<unknown>
 	/** The value as the JSON the database parses. */
 	readonly wire: (value: unknown) => unknown
 	readonly source: (json: string, value: unknown) => string
 	/** Whether `$.v.eq(value)` is meaningful for this type. */
 	readonly comparable: boolean
+	/** Canonicalize a driver representation with a coarser textual precision (e.g. float4). */
+	readonly normalizeValue?: (value: unknown) => unknown
 }
 
 export const finite = fc.double({ noNaN: true, noDefaultInfinity: true })
@@ -124,3 +126,14 @@ export const int32 = fc.integer({ min: -(2 ** 31), max: 2 ** 31 - 1 })
 export const nullOr = <A>(arb: fc.Arbitrary<A>) => fc.option(arb, { nil: null, freq: 4 })
 export const dateTimeWire = (fraction: boolean) => (value: unknown) =>
 	wireDateTime(DateTime.toEpochMillis(value as DateTime.Utc), fraction)
+
+/** One schema supplies nested JSON payloads and their native shrinking. */
+export const jsonPayloadSchema = Schema.Struct({
+	message: Schema.String.check(Schema.isMaxLength(40)),
+	values: Schema.Array(Schema.NullOr(Schema.Finite)).check(Schema.isMaxLength(4)),
+	meta: Schema.Struct({ active: Schema.Boolean, tags: Schema.Array(Schema.String.check(Schema.isMaxLength(16))).check(Schema.isMaxLength(3)) }),
+})
+export const jsonPayload = (rules: StringRules) => Arbitrary.schema(jsonPayloadSchema).pipe(
+	Arbitrary.filter((value) => wellFormed(value) && [value.message, ...value.meta.tags].every((s) =>
+		(rules.nul || !s.includes("\0")) && (rules.leadingBom || !s.startsWith("\ufeff")))),
+)

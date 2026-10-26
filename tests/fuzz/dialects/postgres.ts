@@ -1,10 +1,10 @@
 // Postgres: an in-process PGlite, so it always runs.
 import fc from "fast-check"
-import { DateTime } from "effect"
+import { Arbitrary, DateTime, Schema } from "effect"
 import { PGlite } from "@electric-sql/pglite"
 import * as PG from "@maple-dev/effect-orm/postgres"
 import { postgresContext } from "../../core-cases"
-import { finite, int32, nastyString, nullOr, utc, type LiteralType } from "../values"
+import { finite, int32, jsonPayload, jsonPayloadSchema, nastyString, nullOr, utc, type LiteralType } from "../values"
 import { runWith, type FuzzDialect, type StringRules } from "./types"
 
 let pglite: PGlite | undefined
@@ -29,26 +29,43 @@ const arraySource = (sqlType: string) => (text: string) =>
 const literal = (
 	id: string,
 	type: PG.PgType<string, any, any>,
-	value: fc.Arbitrary<unknown>,
-	options: { wire?: (value: unknown) => unknown; array?: boolean } = {},
+	value: LiteralType["value"],
+	options: { wire?: (value: unknown) => unknown; array?: boolean; source?: (json: string) => string; normalizeValue?: (value: unknown) => unknown } = {},
 ): LiteralType => ({
 	id: `postgres:${id}`,
 	type,
 	value,
 	wire: options.wire ?? ((v) => v),
-	source: options.array ? arraySource(type.sql.replace(/\[\]$/, "")) : scalarSource(type.sql),
+	source: options.source ?? (options.array ? arraySource(type.sql.replace(/\[\]$/, "")) : scalarSource(type.sql)),
 	comparable: true,
+	normalizeValue: options.normalizeValue,
 })
 
 const nasty = nastyString(strings)
 const literals: ReadonlyArray<LiteralType> = [
 	literal("text", PG.text, nasty),
+	literal("brand(text)", PG.brand(PG.text, Schema.String.pipe(Schema.brand("FuzzText"))), nasty),
+	literal("custom(int4)", PG.custom("int4", PG.int4.schema), int32),
+	literal("uuid", PG.uuid, Arbitrary.schema(Schema.String.check(Schema.isUUID())).pipe(Arbitrary.map((value) => value.toLowerCase()))),
+	literal("int2", PG.int2, fc.integer({ min: -(2 ** 15), max: 2 ** 15 - 1 })),
 	literal("int4", PG.int4, int32),
 	literal("int8", PG.int8, fc.maxSafeInteger()),
+	// Postgres prints float4's shortest round-trippable decimal, which a JS driver
+	// parses as float64. Compare in float32 precision, including subnormal/extreme values.
+	literal("float4", PG.float4, fc.float({ noNaN: true, noDefaultInfinity: true }), {
+		normalizeValue: (value) => Math.fround(value as number),
+	}),
 	literal("float8", PG.float8, finite),
-	literal("boolean", PG.bool, fc.boolean()),
+	literal("numeric", PG.numeric, finite),
+	literal("boolean", PG.bool, Arbitrary.schema(PG.bool.schema)),
 	literal("timestamptz", PG.timestamptz, fc.integer({ min: MIN_TS, max: MAX_TS }).map(utc), {
 		wire: (value) => new Date(DateTime.toEpochMillis(value as DateTime.Utc)).toISOString(),
+	}),
+	literal("timestamptzMillis", PG.timestamptzMillis, fc.integer({ min: MIN_TS, max: MAX_TS }), {
+		wire: (value) => new Date(value as number).toISOString(),
+	}),
+	literal("jsonb", PG.jsonb(jsonPayloadSchema), jsonPayload(strings), {
+		source: (text) => `SELECT ${json(text)}->'v' AS "v"`,
 	}),
 	literal("nullable(text)", PG.nullable(PG.text), nullOr(nasty)),
 	literal("nullable(int8)", PG.nullable(PG.int8), nullOr(fc.maxSafeInteger())),

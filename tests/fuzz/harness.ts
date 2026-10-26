@@ -12,19 +12,22 @@
 //   - `known` issues are skipped by name (see `known-issues.ts`);
 //     `FUZZ_STRICT=1` turns them all back on, `FUZZ_STRICT=<id>,<id>` just those.
 import fc from "fast-check"
+import { Arbitrary, Effect } from "effect"
 import { pinnedFor } from "./regressions"
 
 const int = (name: string): number | undefined => {
 	const raw = process.env[name]
-	return raw === undefined || raw === "" ? undefined : Number.parseInt(raw, 10)
+	return raw === undefined || raw === "" ? undefined : Number(raw)
 }
 
 export const config = {
 	/** Multiplies every property's own default run count. */
-	scale: Number.parseFloat(process.env.FUZZ_SCALE ?? "1"),
+	scale: Number(process.env.FUZZ_SCALE ?? "1"),
 	runs: int("FUZZ_RUNS"),
 	seed: int("FUZZ_SEED"),
 	path: process.env.FUZZ_PATH || undefined,
+	/** Native Effect Arbitrary replay token; separate from fast-check shrink paths. */
+	replay: process.env.FUZZ_REPLAY || undefined,
 	/** `1`: ignore every known issue. A comma list of ids: ignore just those (to verify one fix). */
 	strict: new Set((process.env.FUZZ_STRICT ?? "").split(",").filter(Boolean)),
 	verbose: process.env.FUZZ_VERBOSE === "1",
@@ -86,6 +89,15 @@ export interface PropertyOptions<T> {
 	readonly timeoutMs?: number
 }
 
+const runCount = (runs: number): number => {
+	if (config.runs === undefined && (!Number.isFinite(config.scale) || config.scale <= 0)) {
+		throw new Error("FUZZ_SCALE must be a positive finite number")
+	}
+	const count = config.runs ?? Math.max(1, Math.round(runs * config.scale))
+	if (!Number.isSafeInteger(count) || count < 1) throw new Error("FUZZ_RUNS must be a positive safe integer")
+	return count
+}
+
 /**
  * Check `predicate` over `arb`, throwing a report a person can act on.
  *
@@ -94,12 +106,13 @@ export interface PropertyOptions<T> {
  */
 export const property = async <T>(
 	name: string,
-	arb: fc.Arbitrary<T>,
+	arb: fc.Arbitrary<T> | Arbitrary.Arbitrary<T>,
 	predicate: (input: T) => void | Promise<void>,
 	options: PropertyOptions<T>,
 ): Promise<void> => {
+	if (Arbitrary.isArbitrary(arb)) return nativeProperty(name, arb, predicate, options)
+	if (config.replay !== undefined) throw new Error("FUZZ_REPLAY is for Effect properties; select one with -t")
 	const skips = new Map<string, number>()
-	const knownSkips = new Set<string>()
 	let checked = 0
 	const details = await fc.check(
 		fc.asyncProperty(arb, async (input) => {
@@ -109,18 +122,18 @@ export const property = async <T>(
 			} catch (error) {
 				if (error instanceof Skip) {
 					skips.set(error.reason, (skips.get(error.reason) ?? 0) + 1)
-					if (error.known) knownSkips.add(error.reason)
 					fc.pre(false)
 				}
 				throw error
 			}
 		}),
 		{
-			numRuns: config.runs ?? Math.max(1, Math.round(options.runs * config.scale)),
+			numRuns: runCount(options.runs),
 			...(config.seed !== undefined ? { seed: config.seed } : {}),
 			...(config.path !== undefined ? { path: config.path } : {}),
 			examples: pinnedFor(name).map((input) => [input as T]),
 			interruptAfterTimeLimit: options.timeoutMs,
+			markInterruptAsFailure: true,
 			maxSkipsPerRun: 1000,
 			endOnFailure: false,
 		},
@@ -129,13 +142,7 @@ export const property = async <T>(
 		const skipped = [...skips].map(([reason, count]) => `${count}× ${reason}`).join(", ")
 		report(`[fuzz] ${name}: ${checked} checked${skipped ? `, skipped ${skipped}` : ""}`)
 	}
-	// fast-check fails a run whose every input was discarded; say why instead.
 	if (checked === 0 && details.numSkips > 0 && details.counterexample === null) {
-		// A property an open bug covers entirely is the backlog doing its job, not a broken generator.
-		if (knownSkips.size > 0) {
-			report(`[fuzz] ${name}: every input hits a known issue (${[...knownSkips].join(", ")})`)
-			return
-		}
 		throw new Error(`[fuzz] ${name}: every input was skipped (${[...skips.keys()].join(", ")})`)
 	}
 	if (!details.failed) return
@@ -157,4 +164,38 @@ export const property = async <T>(
 			`--- pin it: add the input above to tests/fuzz/regressions.ts under a key matching ${JSON.stringify(name)}`,
 		].join("\n"),
 	)
+}
+
+/** Shared budgets and replay for native properties, including TestSchema assertions. */
+export const effectOptions = (runs: number): Arbitrary.CheckOptions => ({
+	runs: runCount(runs),
+	...(config.seed !== undefined ? { seed: config.seed } : {}),
+	...(config.replay !== undefined ? { replay: config.replay } : {}),
+})
+
+/** Native Effect generation retains its own shrinking and opaque replay token. */
+const nativeProperty = async <T>(
+	name: string,
+	arb: Arbitrary.Arbitrary<T>,
+	predicate: (input: T) => void | Promise<void>,
+	options: PropertyOptions<T>,
+): Promise<void> => {
+	if (config.path !== undefined) throw new Error("FUZZ_PATH is for fast-check properties; select one with -t")
+	// Pinned examples are independent of the generator and must keep working after changes to it.
+	for (const input of pinnedFor(name)) await predicate(input as T)
+	const check = Arbitrary.checkEffect(arb, (input) => Effect.tryPromise({
+		try: async () => { await predicate(input); return true },
+		catch: (error) => error,
+	}), effectOptions(options.runs))
+	const result = await Effect.runPromise(options.timeoutMs === undefined ? check : check.pipe(Effect.timeout(options.timeoutMs)))
+	if (config.verbose) report(`[fuzz] ${name}: ${"runs" in result ? result.runs : 0} checked (Effect Arbitrary)`)
+	if (result._tag === "Passed") return
+	const failure = Arbitrary.formatCheckFailure(result)
+	const context = result._tag === "Falsified" && result.failure._tag === "PropertyError" && result.failure.error instanceof FuzzFailure
+		? describeContext(result.failure.error.context) : ""
+	const pattern = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+	const replay = result._tag === "Falsified"
+		? `FUZZ_REPLAY='${result.replay}' bun run fuzz -t '${pattern}'`
+		: ""
+	throw new Error(`[fuzz] ${name}\n${failure}\n${context}\n${replay}`)
 }

@@ -109,6 +109,8 @@ export interface GenOptions {
 	readonly strings: fc.Arbitrary<string>
 	/** Whether the dialect has ILIKE (`FuzzDialect.ilike`). */
 	readonly ilike: boolean
+	/** Maximum recursive expression/condition depth; smoke plans default to two. */
+	readonly depth?: number
 }
 
 /** Mostly the fixture's own numbers (Id 1–5, Amount 5/7/10/20/99), so comparisons split the rows. */
@@ -297,11 +299,11 @@ const ordering = (aliases: ReadonlyArray<string>, unique: ReadonlyArray<string>)
 
 const rowsShape = (joined: boolean, options: GenOptions): fc.Arbitrary<RowsShape> =>
 	fc
-		.array(fc.constantFrom<Sort>("num", "str", "nstr", "time").chain((sort) => expr(sort, joined, 2, options)), { minLength: 0, maxLength: 4 })
+		.array(fc.constantFrom<Sort>("num", "str", "nstr", "time").chain((sort) => expr(sort, joined, options.depth ?? 2, options)), { minLength: 0, maxLength: 4 })
 		.chain((exprs) => {
-			// `id` is always selected: the unique key that makes an ordering total.
+			// `id` identifies orders; joined rows also order by every selected alias to break duplicate-key ties.
 			const select: Array<readonly [string, Expr]> = [["id", { k: "col", col: "Id" }], ...exprs.map((e, i) => [`e${i}`, e] as const)]
-			return fc.record({ distinct: fc.boolean(), order: ordering(select.map(([a]) => a), ["id"]) }).map(
+			return fc.record({ distinct: fc.boolean(), order: ordering(select.map(([a]) => a), joined ? select.map(([a]) => a) : ["id"]) }).map(
 				({ distinct, order }): RowsShape => ({ k: "rows", select, distinct, ...order }),
 			)
 		})
@@ -346,7 +348,7 @@ const joinArb = fc.option(fc.constantFrom("inner" as const, "left" as const), { 
 const whereArb = (joined: boolean, options: GenOptions): fc.Arbitrary<ReadonlyArray<Cond>> =>
 	fc.oneof(
 		fc.constant([]),
-		fc.array(fc.oneof({ weight: 1, arbitrary: fc.constant<Cond>({ k: "tenant", side: "orders" }) }, { weight: 3, arbitrary: cond(joined, 2, options) }), { minLength: 1, maxLength: 2 }),
+		fc.array(fc.oneof({ weight: 1, arbitrary: fc.constant<Cond>({ k: "tenant", side: "orders" }) }, { weight: 3, arbitrary: cond(joined, options.depth ?? 2, options) }), { minLength: 1, maxLength: 2 }),
 	)
 
 /**
@@ -367,9 +369,9 @@ export interface UnionPlan {
 const branch = (orgId: string, sorts: ReadonlyArray<Sort>, options: GenOptions): fc.Arbitrary<Plan> =>
 	joinArb.chain((join) => {
 		const joined = join !== undefined
-		return fc.tuple(...sorts.map((sort) => expr(sort, joined, 2, options))).chain((exprs) => {
+		return fc.tuple(...sorts.map((sort) => expr(sort, joined, options.depth ?? 2, options))).chain((exprs) => {
 			const select: Array<readonly [string, Expr]> = [["id", { k: "col", col: "Id" }], ...exprs.map((e, i) => [`e${i}`, e] as const)]
-			return fc.record({ where: whereArb(joined, options), distinct: fc.boolean(), order: ordering(select.map(([a]) => a), ["id"]) }).map(
+			return fc.record({ where: whereArb(joined, options), distinct: fc.boolean(), order: ordering(select.map(([a]) => a), joined ? select.map(([a]) => a) : ["id"]) }).map(
 				({ where, distinct, order }): Plan => ({ orgId, join, where, shape: { k: "rows", select, distinct, ...order }, wrap: false, crossTenant: false }),
 			)
 		})

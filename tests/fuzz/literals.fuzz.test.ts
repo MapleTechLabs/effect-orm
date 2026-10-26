@@ -16,7 +16,7 @@
 import { afterAll, describe, expect, it } from "vitest"
 import { Effect, Exit } from "effect"
 import type * as CH from "@maple-dev/effect-orm/clickhouse"
-import { closeAll, dialects, type FuzzDialect } from "./dialects"
+import { closeAll, dialects, type FuzzDialect, type FuzzTarget } from "./dialects"
 import { FuzzFailure, property, skip, skipKnown, withContext } from "./harness"
 import { knownLiteralIssue, type LiteralPath } from "./known-issues"
 import { normalize, referenceJson, wellFormed, type LiteralType } from "./values"
@@ -31,7 +31,7 @@ const build = (dialect: FuzzDialect, literal: LiteralType, value: unknown, path:
 	return base.select(($: any) => ({ v: $.v })).where(($: any) => [value === null ? $.v.isNull() : $.v.eq(value)])
 }
 
-const roundTrip = async (dialect: FuzzDialect, literal: LiteralType, value: unknown, path: LiteralPath): Promise<void> => {
+const roundTrip = async (dialect: FuzzDialect, target: FuzzTarget, literal: LiteralType, value: unknown, path: LiteralPath): Promise<void> => {
 	// The reference row goes through JSON, which cannot carry a lone surrogate the way SQL text does.
 	if (!wellFormed(value)) skip("lone surrogate")
 	const known = knownLiteralIssue({ literal, value, path })
@@ -39,22 +39,26 @@ const roundTrip = async (dialect: FuzzDialect, literal: LiteralType, value: unkn
 	const exit = Effect.runSyncExit(dialect.module.compile(build(dialect, literal, value, path), { p: value }))
 	if (Exit.isFailure(exit)) throw new FuzzFailure("the builder refused a valid value", { value, cause: String(exit.cause) })
 	const compiled = exit.value as CH.CompiledQuery<any>
-	const outcome = await dialect.targets[0]!.run(compiled)
+	const outcome = await target.run(compiled)
 	await withContext({ sql: compiled.sql, parameters: compiled.parameters, outcome }, () => {
 		expect(outcome._tag).toBe("Rows")
 		if (outcome._tag !== "Rows") return
 		const expected = path === "select" ? { v: value, p: value } : { v: value }
-		expect(normalize(outcome.rows)).toEqual([normalize(expected)])
+		const canonical = (row: unknown) => normalize(literal.normalizeValue === undefined ? row :
+			Object.fromEntries(Object.entries(row as Record<string, unknown>).map(([key, value]) => [key, literal.normalizeValue!(value)])))
+		expect(outcome.rows.map(canonical)).toEqual([canonical(expected)])
 	})
 }
 
 describe("literal round-trip", () => {
 	for (const dialect of dialects) {
-		for (const literal of dialect.literals) {
-			for (const path of ["compare", "select"] as const) {
-				if (path === "compare" && !literal.comparable) continue
-				const name = `${literal.id} ${path}`
-				it.skipIf(!dialect.targets[0]!.available)(name, () => property(name, literal.value, (value) => roundTrip(dialect, literal, value, path), { runs: 40 }), 120_000)
+		for (const target of dialect.targets) {
+			for (const literal of dialect.literals) {
+				for (const path of ["compare", "select"] as const) {
+					if (path === "compare" && !literal.comparable) continue
+					const name = `${literal.id} ${path} (${target.name})`
+					it.skipIf(!target.available)(name, () => property(name, literal.value, (value) => roundTrip(dialect, target, literal, value, path), { runs: 40 }), 120_000)
+				}
 			}
 		}
 	}

@@ -21,6 +21,7 @@ import * as SQLite from "@maple-dev/effect-orm/sqlite"
 import { diffSqliteSchemas, fromDrizzleSqliteSnapshot, renderSqliteOp, renderSqliteSchema, sqliteEntitiesOf, type SqliteSchemaEntity } from "@maple-dev/effect-orm/schema"
 import { retryTransport } from "../sqlite-support"
 import { FuzzFailure, property, skip, withContext } from "./harness"
+import { nastyString, portableStrings, wellFormed } from "./values"
 
 // Schema plans
 
@@ -120,12 +121,37 @@ const entitiesOf = (plan: SchemaPlan): ReadonlyArray<SqliteSchemaEntity> => {
 
 // Rows
 
-/** A value for row `i` of a column: distinct per row, so UNIQUE and key constraints in either schema hold. */
-const seedValue = (column: ColumnPlan, i: number): string | number =>
-	column.type === "integer" ? i + 1 : column.type === "real" ? i + 0.5 : `v${i}`
+interface Payload {
+	readonly text: string
+	readonly integer: number
+	readonly real: number
+	readonly bytes: Uint8Array
+}
+
+const payload = fc.record({
+	text: nastyString(portableStrings).filter(wellFormed),
+	integer: fc.oneof(fc.integer({ min: -(2 ** 31), max: 2 ** 31 - 4 }), fc.constantFrom(-Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER - 3)),
+	// Dyadic fractions remain exact through SQLite's SQL parser and uniqueness offsets.
+	real: fc.integer({ min: -1_000_000, max: 1_000_000 }).map((n) => n / 8),
+	bytes: fc.uint8Array({ maxLength: 16 }),
+})
+
+/** Keep each row unique even when its generated payload shrinks to an empty/zero value. */
+const seedValue = (column: ColumnPlan, i: number, next: ColumnPlan | undefined, data: Payload | undefined): unknown => {
+	// Type-changing migrations have affinity conversions; their independent oracle below compares text.
+	if (data === undefined || (next !== undefined && next.type !== column.type)) {
+		return column.type === "integer" ? i + 1 : column.type === "real" ? i + 0.5 : `v${i}`
+	}
+	switch (column.type) {
+		case "text": return `${i}:${data.text}`
+		case "integer": return data.integer + i
+		case "real": return data.real + i
+		case "blob": return new Uint8Array([i, ...data.bytes])
+	}
+}
 
 const sqlValue = (value: unknown): string =>
-	value === null ? "NULL" : typeof value === "number" ? String(value) : `'${String(value).replaceAll("'", "''")}'`
+	value === null ? "NULL" : value instanceof Uint8Array ? `X'${Buffer.from(value).toString("hex")}'` : typeof value === "number" ? String(value) : `'${String(value).replaceAll("'", "''")}'`
 
 /**
  * Whether rows can exist in both schemas. A new NOT NULL column without a
@@ -156,7 +182,7 @@ interface Seed {
 }
 
 /** Rows for `before` that `after` accepts: NULL only where the new column allows it or fills it with a default. */
-const seedRows = (before: SchemaPlan, after: SchemaPlan, count: number, nulls: ReadonlyArray<boolean>): ReadonlyArray<Seed> =>
+const seedRows = (before: SchemaPlan, after: SchemaPlan, count: number, nulls: ReadonlyArray<boolean>, data?: Payload): ReadonlyArray<Seed> =>
 	before.map((table) => {
 		const next = after.find((t) => t.name === table.name)
 		const n = next === undefined || rowsFit(table, next) ? count : 0
@@ -175,7 +201,7 @@ const seedRows = (before: SchemaPlan, after: SchemaPlan, count: number, nulls: R
 						column.nullable &&
 						!keyed.has(column.name) &&
 						(later === undefined || later.nullable || (later.default !== undefined && later.default.k !== "now" && !uniqueLater(column.name)))
-					return [column.name, nullable && nulls[(i * 7 + j) % nulls.length] ? null : seedValue(column, i)]
+					return [column.name, nullable && nulls[(i * 7 + j) % nulls.length] ? null : seedValue(column, i, later, data)]
 				}),
 			),
 		)
@@ -326,9 +352,9 @@ const withRenames = (before: SchemaPlan, after: SchemaPlan, plan: RenamePlan | u
 
 // The property
 
-type Input = readonly [SchemaPlan, SchemaPlan, number, ReadonlyArray<boolean>, RenamePlan?]
+type Input = readonly [SchemaPlan, SchemaPlan, number, ReadonlyArray<boolean>, RenamePlan?, Payload?]
 
-const migrates = async ([before, after, count, nulls, renamePlan]: Input, engines: () => Promise<readonly [Engine, Engine]>) => {
+const migrates = async ([before, after, count, nulls, renamePlan, data]: Input, engines: () => Promise<readonly [Engine, Engine]>) => {
 	const { renamed, hints: renameHints, table, column } = withRenames(before, after, renamePlan)
 	const from = entitiesOf(before)
 	const to = entitiesOf(renamed)
@@ -351,7 +377,7 @@ const migrates = async ([before, after, count, nulls, renamePlan]: Input, engine
 		throw new FuzzFailure("the diff needs more than every drop and rename confirmed", { renamed, missingHints: diff.missingHints, unsupported: diff.unsupported })
 	}
 	const migration = diff.ops.flatMap(renderSqliteOp)
-	const seeds = seedRows(before, after, count, nulls)
+	const seeds = seedRows(before, after, count, nulls, data)
 
 	const [fresh, migrated] = await engines()
 	await fresh.exec(renderSqliteSchema(to))
@@ -373,7 +399,7 @@ const migrates = async ([before, after, count, nulls, renamePlan]: Input, engine
 		expect(migratedShape).toEqual(freshShape)
 		for (const { name, want, rows, next } of tables) {
 			// A type change may convert a value (`'1'` to `1`); compared as text, it is the same value.
-			const text = (v: unknown) => (v === null || v === undefined ? null : String(v))
+			const text = (v: unknown): unknown => v === null || v === undefined ? null : v instanceof Uint8Array ? [...v] : v instanceof ArrayBuffer ? [...new Uint8Array(v)] : Array.isArray(v) ? v : String(v)
 			const expected = want.map((row) =>
 				Object.fromEntries(Object.entries(row).filter(([, v]) => v !== undefined).map(([k, v]) => [column(next.name, k), text(v)])),
 			)
@@ -393,6 +419,7 @@ const input = fc.tuple(
 	fc.integer({ min: 0, max: 3 }),
 	fc.array(fc.boolean(), { minLength: 1, maxLength: 5 }),
 	fc.record({ table: fc.boolean(), column: fc.option(fc.nat(), { nil: null }), caseOnly: fc.boolean() }),
+	payload,
 )
 
 describe("SQLite migrations", () => {

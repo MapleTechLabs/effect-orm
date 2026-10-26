@@ -2,11 +2,11 @@
 // Miniflare). D1 executes SQLite's SQL, so both share semantics and literals;
 // they differ in the dialect they compile with and the database they run on.
 import fc from "fast-check"
-import { DateTime, Schema } from "effect"
+import { Arbitrary, DateTime, Schema } from "effect"
 import * as SQLite from "@maple-dev/effect-orm/sqlite"
 import { d1Context, sqliteContext } from "../../core-cases"
 import { d1Database, sqliteDatabase } from "../../sqlite-support"
-import { finite, nastyString, nullOr, utc, type LiteralType } from "../values"
+import { finite, jsonPayload, jsonPayloadSchema, nastyString, nullOr, utc, type LiteralType } from "../values"
 import { runWith, type DialectModule, type FuzzDialect, type Semantics, type StringRules, type WriteSupport } from "./types"
 
 const semantics: Semantics = {
@@ -25,7 +25,7 @@ const semantics: Semantics = {
 // SQLite stores U+0000, but its drivers end text there, so the dialect refuses it.
 const strings: StringRules = { nul: false, leadingBom: true }
 // The years SQLite's text timestamps and date functions cover.
-const MIN_TS = Date.UTC(0, 0, 1)
+const MIN_TS = Date.parse("0000-01-01T00:00:00.000Z")
 const MAX_TS = Date.UTC(9999, 11, 31, 23, 59, 59, 999)
 
 const hex = (bytes: Uint8Array) => Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("")
@@ -64,7 +64,7 @@ const literals = (dialect: string): ReadonlyArray<LiteralType> => {
 	const literal = (
 		id: string,
 		type: SQLite.SqliteType<string, any, any>,
-		value: fc.Arbitrary<unknown>,
+		value: LiteralType["value"],
 		options: { wire?: (value: unknown) => unknown; read?: (value: string) => string; source?: (value: unknown) => string; comparable?: boolean } = {},
 	): LiteralType => ({
 		id: `${dialect}:${id}`,
@@ -76,19 +76,21 @@ const literals = (dialect: string): ReadonlyArray<LiteralType> => {
 	})
 	return [
 		literal("text", SQLite.text, nasty),
+		literal("brand(text)", SQLite.brand(SQLite.text, Schema.String.pipe(Schema.brand("FuzzText"))), nasty),
+		literal("custom(text)", SQLite.custom("text", Schema.String), nasty),
 		literal("integer", SQLite.integer, fc.maxSafeInteger()),
 		literal("real", SQLite.real, finite, { source: (v) => exactReal(v as number) }),
-		literal("boolean", SQLite.boolean, fc.boolean()),
+		literal("boolean", SQLite.boolean, Arbitrary.schema(SQLite.boolean.schema)),
 		// The reference row is SQLite's own text: datetime() writes the date and time, so a builder
 		// value compares equal to what the database itself writes, not just to itself.
-		literal("timestamp", SQLite.timestamp, fc.integer({ min: MIN_TS, max: MAX_TS }).map(utc), {
+		literal("timestamp", SQLite.timestamp, fc.oneof(fc.constant(MIN_TS), fc.constant(Date.parse("0099-12-31T23:59:59.999Z")), fc.integer({ min: MIN_TS, max: MAX_TS })).map(utc), {
 			source: (value) => {
 				const ms = DateTime.toEpochMillis(value as DateTime.Utc)
 				return `SELECT datetime(${Math.floor(ms / 1000)}, 'unixepoch') || '.' || printf('%03d', ${((ms % 1000) + 1000) % 1000}) AS "v"`
 			},
 		}),
 		literal("blob", SQLite.blob, fc.uint8Array({ maxLength: 8 }), { wire: (value) => hex(value as Uint8Array), read: (v) => `unhex(${v})` }),
-		literal("json", SQLite.json(Schema.Struct({ message: Schema.String })), fc.record({ message: nasty }), {
+		literal("json", SQLite.json(jsonPayloadSchema), jsonPayload(strings), {
 			wire: (value) => JSON.stringify(value),
 			comparable: false,
 		}),

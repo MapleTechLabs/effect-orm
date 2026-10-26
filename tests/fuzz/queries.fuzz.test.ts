@@ -10,14 +10,16 @@
 //
 // Every target in the registry (dialects/index.ts) runs; one whose database is
 // not reachable here is skipped, not dropped, so the run says so.
+import fc from "fast-check"
 import { afterAll, describe, expect, it } from "vitest"
 import { compilePlan, compileUnionPlan, scopeContext, type Compiled } from "./build"
 import { closeAll, targets, type FuzzDialect, type FuzzTarget } from "./dialects"
-import { FuzzFailure, property, skipKnown, withContext } from "./harness"
+import { FuzzFailure, property, Skip, skipKnown, withContext } from "./harness"
 import { knownPlanIssue, knownUnionIssue } from "./known-issues"
 import { evaluate, evaluateUnion, type ModelResult } from "./model"
 import { nastyOptions, plainOptions, plan, unionPlan, type Plan, type UnionPlan } from "./plan"
 import { normalize } from "./values"
+import { fixture, fixtureContext, type Fixture } from "./fixtures"
 
 afterAll(closeAll)
 
@@ -30,13 +32,13 @@ const canonical = (rows: ReadonlyArray<unknown>): Array<unknown> =>
 	)
 const sorted = (rows: Array<unknown>) => rows.map((r) => JSON.stringify(r)).sort()
 
-const matchesModel = (dialect: FuzzDialect, target: FuzzTarget, input: Plan) => {
+const matchesModel = (dialect: FuzzDialect, target: FuzzTarget, input: Plan, data?: Fixture) => {
 	const known = knownPlanIssue({ target: target.name, plan: input })
 	if (known !== undefined) skipKnown(known)
-	return checkRows(target, input.orgId, evaluate(input, target.semantics), compilePlan(dialect, dialect.context, input), compilePlan(dialect, scopeContext(dialect), input), input.where)
+	return checkRows(target, input.orgId, evaluate(input, target.semantics, data), compilePlan(dialect, data === undefined ? dialect.context : fixtureContext(dialect, data), input), compilePlan(dialect, scopeContext(dialect), input), input.where)
 }
 
-const unionMatchesModel = (dialect: FuzzDialect, target: FuzzTarget, input: UnionPlan) => {
+const unionMatchesModel = (dialect: FuzzDialect, target: FuzzTarget, input: UnionPlan, data?: Fixture) => {
 	const knownUnion = knownUnionIssue({ target: target.name, plan: input })
 	if (knownUnion !== undefined) skipKnown(knownUnion)
 	for (const branch of input.branches) {
@@ -46,8 +48,8 @@ const unionMatchesModel = (dialect: FuzzDialect, target: FuzzTarget, input: Unio
 	return checkRows(
 		target,
 		input.orgId,
-		evaluateUnion(input, target.semantics),
-		compileUnionPlan(dialect, dialect.context, input),
+		evaluateUnion(input, target.semantics, data),
+		compileUnionPlan(dialect, data === undefined ? dialect.context : fixtureContext(dialect, data), input),
 		compileUnionPlan(dialect, scopeContext(dialect), input),
 		input.branches.map((branch) => branch.where),
 	)
@@ -58,7 +60,8 @@ const checkRows = async (target: FuzzTarget, orgId: string, expected: ModelResul
 	if (result._tag !== "Compiled") throw new FuzzFailure(`a valid plan was not compiled (${result._tag})`, { error: result.error })
 	const { compiled } = result
 	// The scope a real application would get: the same plan over the plain tables.
-	const tenantScope = scoped._tag === "Compiled" ? scoped.compiled.tenantScope : undefined
+	if (scoped._tag !== "Compiled") throw new FuzzFailure(`a valid plan over tenant tables was not compiled (${scoped._tag})`, { error: scoped.error })
+	const tenantScope = scoped.compiled.tenantScope
 	const outcome = await target.run(compiled)
 	await withContext({ sql: compiled.sql, parameters: compiled.parameters, tenantScope, outcome, expected: expected.rows }, () => {
 		expect(outcome._tag).toBe("Rows")
@@ -98,5 +101,41 @@ describe("unions match the model", () => {
 			const name = `unions match the model (${target.name}, ${label})`
 			it.skipIf(!target.available)(name, () => property(name, unionPlan(options), (input) => unionMatchesModel(dialect, target, input), { runs: 60 }), 300_000)
 		}
+	}
+})
+
+// Keep the original fixed-data properties and pinned inputs; these inputs shrink data and plans together.
+describe("generated fixture queries", () => {
+	for (const { dialect, target } of targets) {
+		for (const [label, data, join] of [
+			["empty orders", { orders: [], customers: [] }, undefined],
+			["empty inner join", { orders: [{ OrgId: "org_1", Id: 1, Customer: "acme", Amount: 0, Status: "paid", Note: null, Created: Date.UTC(2026, 0, 1) }], customers: [] }, "inner"],
+		] as const) {
+			it(`constant division is excluded over ${label} (${target.name})`, () => {
+				const input: Plan = {
+					orgId: "org_1", join, where: [], wrap: false, crossTenant: false,
+					shape: { k: "rows", select: [["id", { k: "col", col: "Id" }], ["bad", { k: "arith", op: "div", l: { k: "num", v: 1 }, r: 0 }]], distinct: false, orderBy: [] },
+				}
+				expect(() => evaluate(input, target.semantics, data)).toThrow(Skip)
+				expect(() => evaluate(input, target.semantics, data)).toThrow("division by zero")
+			})
+		}
+		it.skipIf(!target.available)(`empty generated tables (${target.name})`, () => matchesModel(dialect, target, {
+			orgId: "org_1", where: [], shape: { k: "rows", select: [["id", { k: "col", col: "Id" }]], distinct: false, orderBy: [] }, wrap: false, crossTenant: false,
+		}, { orders: [], customers: [] }))
+		it.skipIf(!target.available)(`duplicate generated join keys page deterministically (${target.name})`, () => matchesModel(dialect, target, {
+			orgId: "org_1", join: "left", where: [], shape: { k: "rows", select: [["id", { k: "col", col: "Id" }], ["tier", { k: "jcol", col: "Tier" }]], distinct: false,
+				orderBy: [["id", "asc"], ["tier", "asc"]], offset: 1, limit: 2 }, wrap: false, crossTenant: false,
+		}, {
+			orders: [{ OrgId: "org_1", Id: 1, Customer: "acme", Amount: 0, Status: "paid", Note: null, Created: Date.UTC(2026, 0, 1) }],
+			customers: ["silver", "bronze", "gold"].map((Tier) => ({ OrgId: "org_1", Name: "acme", Tier })),
+		}))
+		const options = { ...plainOptions(dialect), depth: 3 }
+		const plansName = `generated fixtures: query results agree (${target.name})`
+		it.skipIf(!target.available)(plansName, () => property(plansName, fc.record({ fixture, plan: plan(options) }),
+			(input) => matchesModel(dialect, target, input.plan, input.fixture), { runs: 100 }), 300_000)
+		const unionsName = `generated fixtures: union results agree (${target.name})`
+		it.skipIf(!target.available)(unionsName, () => property(unionsName, fc.record({ fixture, plan: unionPlan(options) }),
+			(input) => unionMatchesModel(dialect, target, input.plan, input.fixture), { runs: 60 }), 300_000)
 	}
 })
