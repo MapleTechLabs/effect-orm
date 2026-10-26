@@ -40,6 +40,20 @@ const OPERATIONS: Record<NonNullable<TracedStatement["kind"]>, string> = {
 	delete: "DELETE",
 }
 
+// Plain SQL has no compiled operation or table, so they are read off its text,
+// as the conventions allow: the first operation and the first collection named.
+const LEADING_WORD = /^\s*(\w+)/
+const FIRST_TABLE = /(?:from|into|update|join|table)\s+\W?([\w.]+)/i
+
+/** The operation and table a statement names: compiled, or read off plain SQL. */
+const describeStatement = (statement: TracedStatement): { operation?: string; collection?: string } => {
+	if (statement.kind !== undefined) return { operation: OPERATIONS[statement.kind], collection: statement.collection }
+	return {
+		operation: LEADING_WORD.exec(statement.sql)?.[1]?.toUpperCase(),
+		collection: FIRST_TABLE.exec(statement.sql)?.[1],
+	}
+}
+
 /**
  * Runs `effect`, which sends `statement`, in its client span. The span name is
  * the summary when there is one, then `{operation} {table}`, then the system.
@@ -54,12 +68,12 @@ export const traceStatement = <A, E, R>(
 	Effect.withFiber((fiber) => {
 		const configured = fiber.getRef(QuerySummary)
 		const system = SYSTEM_NAMES[dialect.name] ?? dialect.name
-		const operation = statement.kind === undefined ? undefined : OPERATIONS[statement.kind]
+		const { operation, collection } = describeStatement(statement)
 		const summary =
-			configured ?? (operation === undefined ? undefined : statement.collection === undefined ? operation : `${operation} ${statement.collection}`)
+			configured ?? (operation === undefined ? undefined : collection === undefined ? operation : `${operation} ${collection}`)
 		const attributes: Record<string, unknown> = { "db.system.name": system, "db.query.text": statement.sql }
 		if (operation !== undefined) attributes["db.operation.name"] = operation
-		if (statement.collection !== undefined) attributes["db.collection.name"] = statement.collection
+		if (collection !== undefined) attributes["db.collection.name"] = collection
 		if (summary !== undefined) attributes["db.query.summary"] = summary
 		return effect.pipe(
 			Effect.tap((result) =>

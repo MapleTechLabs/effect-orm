@@ -98,6 +98,29 @@ layer(Live)("Database statement spans", (it) => {
 		}),
 	)
 
+	it.effect("names plain SQL after its leading operation and first table", () =>
+		Effect.gen(function* () {
+			const { exit, spans } = yield* traced(Db.execute(Db.sql`UPDATE traced_items SET name = ${"x"} WHERE id = ${2}`))
+			assert(Exit.isSuccess(exit))
+			const span = dbSpan(spans)
+			expect(span.name).toBe("UPDATE traced_items")
+			expect(Object.fromEntries(span.attributes)).toMatchObject({
+				"db.operation.name": "UPDATE",
+				"db.collection.name": "traced_items",
+				"db.query.summary": "UPDATE traced_items",
+			})
+		}),
+	)
+
+	it.effect("names plain SQL without a table after its operation alone", () =>
+		Effect.gen(function* () {
+			const { spans } = yield* traced(Db.execute(Db.sql`SELECT pg_advisory_xact_lock(${1})`))
+			const span = dbSpan(spans)
+			expect(span.name).toBe("SELECT")
+			expect(span.attributes.has("db.collection.name")).toBe(false)
+		}),
+	)
+
 	it.effect("takes the summary from withQuerySummary", () =>
 		Effect.gen(function* () {
 			const { spans } = yield* traced(

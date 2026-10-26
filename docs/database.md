@@ -305,7 +305,8 @@ fails at BEGIN today: through the query path with a syntax error, and through `a
 
 Each statement `Database` runs is one client span, named and attributed the way the
 [OpenTelemetry database conventions](https://opentelemetry.io/docs/specs/semconv/database/database-spans/)
-describe. A compiled query knows its operation and table, so the span needs no SQL parsing:
+describe. A compiled query knows its operation and table; for plain SQL (`Db.sql`) they are the
+leading word and the first table the text names, as the conventions allow:
 
 | Attribute                   | Value                                                                |
 | --------------------------- | -------------------------------------------------------------------- |
