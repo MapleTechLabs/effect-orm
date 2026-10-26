@@ -72,6 +72,42 @@ it("refuses an unscoped query, too many bindings and interactive transactions be
 	expect(seen.statements).toEqual([])
 }, 30_000)
 
+it("refuses a cross-org UPSERT before dispatch, while an explicit tenant predicate preserves the other org", async () => {
+	const seen = await withD1((db, statements) => Effect.gen(function* () {
+		yield* db.run(SQLite.insertInto(Ack).values(first))
+		const insert = SQLite.insertInto(Ack).values({ ...first, org_id: "org_2" })
+		statements.length = 0
+		const refused = yield* Effect.exit(db.run(insert.onConflictDoUpdate({ target: ["id"], set: { entry_id: "changed" } })))
+		const dispatched = [...statements]
+		const safe = yield* db.run(insert.onConflictDoUpdate({
+			target: ["id"], set: { entry_id: "changed" }, where: (existing, excluded) => existing.org_id.eq(excluded.org_id),
+		}).returning())
+		const kept = yield* db.run(SQLite.from(Ack).select().where(($) => [$.org_id.eq("org_1")]))
+		const own = yield* db.run(SQLite.insertInto(Ack).values(first).onConflictDoUpdate({
+			target: ["id"], set: { entry_id: "same_org" }, where: (existing, excluded) => existing.org_id.eq(excluded.org_id),
+		}).returning("entry_id"))
+		const declared = yield* db.run(insert.onConflictDoUpdate({ target: ["id"], set: { entry_id: "explicit_cross_org" } }).crossTenant().returning("entry_id"))
+		const Excluded = SQLite.table("Excluded", { id: SQLite.text, org: SQLite.text, value: SQLite.text }, { tenantColumn: "org" })
+		yield* db.execute({ sql: "CREATE TABLE Excluded (id TEXT PRIMARY KEY, org TEXT, value TEXT)" })
+		yield* db.run(SQLite.insertInto(Excluded).values({ id: "same", org: "b", value: "original" }))
+		const ambiguous = yield* Effect.exit(db.run(SQLite.insertInto(Excluded).values({ id: "same", org: "a", value: "new" }).onConflictDoUpdate({
+			target: ["id"], set: { value: "changed" }, where: (existing, excluded) => existing.org.eq(excluded.org),
+		})))
+		const ambiguousKept = yield* db.run(SQLite.from(Excluded).select().where(($) => [$.org.eq("b")]))
+		return { refused, dispatched, safe, kept, own, declared, ambiguous, ambiguousKept }
+	}))
+	if (!Exit.isFailure(seen.refused)) throw new Error("a cross-org UPSERT was accepted")
+	expect(Cause.findDefect(seen.refused.cause)).toMatchObject({ success: { _tag: "@maple-dev/effect-orm/TenantScopeViolation" } })
+	expect(seen.dispatched).toEqual([])
+	expect(seen.safe).toEqual([])
+	expect(seen.kept).toEqual([first])
+	expect(seen.own).toEqual([{ entry_id: "same_org" }])
+	expect(seen.declared).toEqual([{ entry_id: "explicit_cross_org" }])
+	if (!Exit.isFailure(seen.ambiguous)) throw new Error("an ambiguous excluded reference was accepted")
+	expect(Cause.findDefect(seen.ambiguous.cause)).toMatchObject({ success: { _tag: "@maple-dev/effect-orm/TenantScopeViolation" } })
+	expect(seen.ambiguousKept).toEqual([{ id: "same", org: "b", value: "original" }])
+}, 30_000)
+
 it("decodes D1 JSON and blob wire values and returns typed errors for malformed rows", async () => {
 	const Payloads = SQLite.table("payloads", { id: SQLite.integer, payload: SQLite.json(Schema.Struct({ ok: Schema.Boolean })), bytes: SQLite.blob })
 	const seen = await withD1((db) => Effect.gen(function* () {

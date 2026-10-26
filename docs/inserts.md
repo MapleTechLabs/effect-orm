@@ -219,7 +219,12 @@ Calling it again replaces them. Postgres has no insert settings, so compiling on
 An insert has a `tenantScope` like a query, worked out the same way. On a table with a
 `tenantColumn`, it is `"single-tenant"` when every row gives that column the same value or the
 same param, and `"cross-tenant"` when rows differ or a row uses another expression. An
-`onConflictDoUpdate` that sets the tenant column counts as one more row.
+`onConflictDoUpdate` that sets the tenant column counts as one more row. It must also prove
+that the existing conflict row has that tenant: include the tenant column in the conflict
+target, or pin it in the update's `where`, for example
+`where: (existing, excluded) => existing.orgId.eq(excluded.orgId)`. A constraint name alone
+does not prove its columns. Without this evidence the upsert is `"cross-tenant"`, even if
+the inserted values name one tenant. OR conditions do not supply tenant evidence.
 
 An `INSERT ... SELECT` into a tenant table is `"single-tenant"` when the SELECT is, and each row
 takes its tenant from a tenant column of the source or from the same param that pins the SELECT.
