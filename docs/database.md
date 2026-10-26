@@ -313,12 +313,26 @@ describe. A compiled query knows its operation and table, so the span needs no S
 | `db.operation.name`         | `SELECT`, `INSERT`, `UPDATE` or `DELETE`                              |
 | `db.collection.name`        | The `FROM` or written table; absent over a subquery, union or CTE    |
 | `db.query.summary`          | `SELECT events`, or the name given with `withQuerySummary`           |
+| `db.query.text`             | The statement as sent: Postgres keeps `$n`; ClickHouse inlines values |
 | `db.response.returned_rows` | The rows it returned                                                 |
 | `error.type`                | On failure: the `DatabaseError` reason, such as `SqlSyntaxError`     |
+| `db.response.status_code`   | On failure: the SQLSTATE, when the server sent one                   |
 
-The span is named after the summary, so a trace reads `SELECT events` rather than `sql.execute`.
-Effect's own `sql.execute` span runs inside it and carries the query text. To give a group of
-statements a stable name of your own, wrap them:
+The span is named after the summary, so a trace reads `SELECT events` rather than the database
+name. It is the only span a statement gets: the SQL driver's own span would repeat the query text,
+so the driver runs untraced. Pass `driverSpans: true` to `fromSqlClient` to keep it as a child, for
+what only the driver records (`server.address`, connection waits).
+
+Attributes of your own go on the same span from `observe`, which runs inside it:
+
+```ts
+Db.fromSqlClient(sql, {
+  dialect: postgresDialect,
+  observe: () => Effect.annotateCurrentSpan("peer.service", "orders-postgres"),
+})
+```
+
+To give a group of statements a stable name of your own, wrap them:
 
 ```ts
 Db.run(query, params).pipe(Db.withQuerySummary("dashboard.revenue_by_day"))
