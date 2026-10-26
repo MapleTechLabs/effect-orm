@@ -35,6 +35,12 @@ checks compositional encode/decode behavior. The shared harness accepts native
 Effect arbitraries directly, preserving shrinking and replay; do not sample them
 into fast-check constants, which loses their shrink tree.
 
+Native properties discard inputs during generation with `Arbitrary.filter` (or
+schema checks). Effect's checker has no predicate-level discard result: throwing
+`skip()` or `skipKnown()` inside a native predicate fails with a diagnostic. Keep
+oracle limitations in native generator filters; rejected candidates do not consume
+the run budget, and exhausting generation fails instead of passing with no checks.
+
 Keep fast-check's constrained generators for SQL domains, adversarial strings and
 well-typed query/migration plans. A descriptor's wire codec can be broader than
 its storage type: `UInt8.schema` accepts finite numbers, while valid SQL inputs

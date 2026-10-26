@@ -94,7 +94,7 @@ describe("Effect generated compiled row codecs", () => {
 describe("Effect generated numeric wire representations", () => {
 	for (const [name, type] of [["clickhouse", CH.float64], ["postgres", PG.float8]] as const) {
 		const table = CH.table("numeric_rows", { external: true, columns: { value: type } })
-		const compiled = CH.compileUnsafe(CH.from(table).select())
+		const compiled = (name === "postgres" ? PG.compileUnsafe : CH.compileUnsafe)(CH.from(table).select())
 		const label = `quoted and unquoted numeric wire agree (${name})`
 		it(label, () => property(label, Arbitrary.schema(Schema.Finite), async (value) => {
 			const decoded = await Effect.runPromise(compiled.decodeRows([{ value }, { value: String(value) }]))

@@ -181,10 +181,17 @@ const nativeProperty = async <T>(
 	options: PropertyOptions<T>,
 ): Promise<void> => {
 	if (config.path !== undefined) throw new Error("FUZZ_PATH is for fast-check properties; select one with -t")
+	const evaluate = async (input: T): Promise<void> => {
+		try { await predicate(input) } catch (error) {
+			// Effect only discards during generation; a property failure is always falsified.
+			if (error instanceof Skip) throw new FuzzFailure("Native properties must use Arbitrary.filter to discard inputs; skip()/skipKnown() cannot discard after evaluation", { reason: error.reason })
+			throw error
+		}
+	}
 	// Pinned examples are independent of the generator and must keep working after changes to it.
-	for (const input of pinnedFor(name)) await predicate(input as T)
+	for (const input of pinnedFor(name)) await evaluate(input as T)
 	const check = Arbitrary.checkEffect(arb, (input) => Effect.tryPromise({
-		try: async () => { await predicate(input); return true },
+		try: async () => { await evaluate(input); return true },
 		catch: (error) => error,
 	}), effectOptions(options.runs))
 	const result = await Effect.runPromise(options.timeoutMs === undefined ? check : check.pipe(Effect.timeout(options.timeoutMs)))
