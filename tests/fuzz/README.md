@@ -1,6 +1,7 @@
 # The fuzzer
 
-Property-based tests for the query builder, run on real databases. They catch
+Property-based tests for the query builder and codecs, run with Effect Arbitrary
+and fast-check. Database properties run on real engines. They catch
 what hand-written cases miss: SQL that runs but returns the wrong rows, escaping
 bugs, and values the builder throws on instead of refusing.
 
@@ -17,12 +18,46 @@ and are skipped otherwise. Postgres runs in-process on PGlite.
 
 | File | Property | Oracle |
 | --- | --- | --- |
-| `queries.fuzz.test.ts` | random plans, and `unionAll`s of them (branch and union ORDER BY / LIMIT / OFFSET), return the rows `model.ts` computes | a JS model of SQL, per target |
+| `queries.fuzz.test.ts` | random plans and `unionAll`s, over both the core fixture and generated empty/duplicate/nullable/multi-tenant data, return the rows `model.ts` computes | a JS model of SQL, per target |
 | `writes.fuzz.test.ts` | random sequences of inserts (multi-row, defaulted cells, INSERT … SELECT, ON CONFLICT), updates and deletes, with RETURNING, leave a scratch table as the model says; unsupported writes are refused | a JS model of the table's rows |
 | `literals.fuzz.test.ts` | every column type's values survive as a literal and as a param | the database's own JSON parser |
 | `compile.fuzz.test.ts` | plans compile deterministically, with no leaked JS or misaligned placeholders; hostile values are refused with a typed error | invariants |
-| `migrations.fuzz.test.ts` | a SQLite migration between two random schemas (with table and column renames), run on seeded rows on node:sqlite and on D1 (one batch per migration), gives a fresh create's PRAGMA shape and keeps the rows; a drizzle-kit snapshot of any schema imports with nothing to generate | a fresh create, the seeded rows, and our own entities |
-| `registry.fuzz.test.ts` | every `Dialect` in `src/` is registered here | — |
+| `migrations.fuzz.test.ts` | a SQLite migration between two random schemas (with table and column renames), run on seeded rows on node:sqlite and on D1 (one batch per migration), gives a fresh create's PRAGMA shape and keeps varied text, numeric and binary payloads; a drizzle-kit snapshot of any schema imports with nothing to generate | a fresh create, the seeded rows, and our own entities |
+| `migrations.postgres.fuzz.test.ts` | random Postgres table/column/default/nullability/index transitions reach a fresh create's shape and preserve scalar, JSON and array rows | PGlite catalogs and independent seed values |
+| `codecs.fuzz.test.ts` | schema-derived values round-trip through composed codecs and compiled row codecs; malformed wire rows fail with a typed decode error | Effect `TestSchema`, schema equivalence and explicit wire corruptions |
+| `registry.fuzz.test.ts` | every dialect and public type export has fuzz coverage or an explicit reason | public exports and the literal catalog |
+
+## Choosing a generator
+
+Use Effect's native `Arbitrary.schema` for schema-shaped values: nested JSON,
+UUIDs, booleans, brands and codec properties. `TestSchema.Asserts.verifyRoundTrip`
+checks compositional encode/decode behavior. The shared harness accepts native
+Effect arbitraries directly, preserving shrinking and replay; do not sample them
+into fast-check constants, which loses their shrink tree.
+
+Native properties discard inputs during generation with `Arbitrary.filter` (or
+schema checks). Effect's checker has no predicate-level discard result: throwing
+`skip()` or `skipKnown()` inside a native predicate fails with a diagnostic. Keep
+oracle limitations in native generator filters; rejected candidates do not consume
+the run budget, and exhausting generation fails instead of passing with no checks.
+
+Keep fast-check's constrained generators for SQL domains, adversarial strings and
+well-typed query/migration plans. A descriptor's wire codec can be broader than
+its storage type: `UInt8.schema` accepts finite numbers, while valid SQL inputs
+must be integers from 0 to 255. Schema-derived tests complement the independent
+database/model oracles rather than replacing them.
+
+Both engines use `FUZZ_RUNS`, `FUZZ_SCALE` and `FUZZ_SEED`. Effect failures print an
+opaque replay token; select the failing property and replay with:
+
+```sh
+FUZZ_REPLAY='…' bun run fuzz -t 'compiled row codec rejects malformed wire \(postgres\)'
+```
+
+`FUZZ_PATH` belongs to fast-check; `FUZZ_REPLAY` belongs to Effect. Replay tokens
+are version-specific. Pin important inputs in `regressions.ts` as well. A property
+whose every input is discarded now fails, including known-issue skips; hitting a
+configured time budget also fails rather than reporting partial coverage as success.
 
 ## Adding a dialect
 

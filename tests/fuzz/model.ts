@@ -9,44 +9,13 @@
 // `Semantics` (dialects/types.ts) rather than its name, so a new dialect states
 // its rules instead of patching this file.
 // Inputs the model cannot judge raise `skip` with a reason.
-import { fixtureRows } from "../core-cases"
+import { coreFixture, type Fixture, type Order, type Customer } from "./fixtures"
 import type { Semantics } from "./dialects/types"
 import { skip } from "./harness"
 import type { Agg, ArithOp, Cond, Expr, Operand, Plan, UnionPlan } from "./plan"
 
 type V = number | string | null
 type Bool = boolean | null
-
-interface Order {
-	readonly OrgId: string
-	readonly Id: number
-	readonly Customer: string
-	readonly Amount: number
-	readonly Status: string
-	readonly Note: string | null
-	/** Epoch milliseconds. */
-	readonly Created: number
-}
-interface Customer {
-	readonly OrgId: string
-	readonly Name: string
-	readonly Tier: string
-}
-
-const orders: ReadonlyArray<Order> = fixtureRows.orders.map(([OrgId, Id, Customer, Amount, Status, Note, Created]) => ({
-	OrgId: OrgId as string,
-	Id: Id as number,
-	Customer: Customer as string,
-	Amount: Amount as number,
-	Status: Status as string,
-	Note: Note as string | null,
-	Created: Date.parse(`${(Created as string).replace(" ", "T")}Z`),
-}))
-const customers: ReadonlyArray<Customer> = fixtureRows.customers.map(([OrgId, Name, Tier]) => ({
-	OrgId: OrgId as string,
-	Name: Name as string,
-	Tier: Tier as string,
-}))
 
 interface Row {
 	readonly o: Order
@@ -282,10 +251,10 @@ const evalCond = (env: Env, row: Row, c: Cond): Bool => {
 
 // Queries
 
-const sourceRows = (env: Env): ReadonlyArray<Row> =>
-	orders.flatMap((o): Array<Row> => {
+const sourceRows = (env: Env, fixture: Fixture): ReadonlyArray<Row> =>
+	fixture.orders.flatMap((o): Array<Row> => {
 		if (env.plan.join === undefined) return [{ o }]
-		const matches = customers.filter((c) => c.OrgId === o.OrgId && c.Name === o.Customer)
+		const matches = fixture.customers.filter((c) => c.OrgId === o.OrgId && c.Name === o.Customer)
 		if (matches.length > 0) return matches.map((c) => ({ o, c }))
 		return env.plan.join === "left" ? [{ o }] : []
 	})
@@ -348,13 +317,28 @@ const ariths = (value: unknown): Array<Expr> => {
 	return [...own, ...Object.values(value).flatMap(ariths)]
 }
 
-export const evaluate = (plan: Plan, sem: Semantics): ModelResult => {
+/** Constant folding is independent of relation cardinality, including an empty join. */
+const constant = (expr: Expr): boolean => {
+	switch (expr.k) {
+		case "num":
+		case "str": return true
+		case "arith": return constant(expr.l) && (typeof expr.r === "number" || constant(expr.r))
+		case "coalesce": return constant(expr.e) && constant(expr.fallback)
+		default: return false
+	}
+}
+
+export const evaluate = (plan: Plan, sem: Semantics, fixture: Fixture = coreFixture): ModelResult => {
 	const env: Env = { sem, plan, joined: plan.join !== undefined }
 	// A database may evaluate any expression on any row — or fold a constant one at plan time — before
 	// filtering decides it was not needed. So a division by zero anywhere is a division by zero.
 	const all = ariths(plan)
-	for (const row of sourceRows(env)) for (const e of all) evalExpr(env, row, e)
-	const filtered = sourceRows(env).filter((row) => and3(plan.where.map((c) => evalCond(env, row, c))) === true)
+	// A constant expression never reads this row. Reuse a real fixture row so the evaluator
+	// can check folded subexpressions even when the input fixture or its inner join is empty.
+	const constantRow: Row = { o: coreFixture.orders[0]! }
+	for (const e of all) if (constant(e)) evalExpr(env, constantRow, e)
+	for (const row of sourceRows(env, fixture)) for (const e of all) evalExpr(env, row, e)
+	const filtered = sourceRows(env, fixture).filter((row) => and3(plan.where.map((c) => evalCond(env, row, c))) === true)
 	const orgs = new Set(filtered.flatMap((row) => [row.o.OrgId, ...(row.c ? [row.c.OrgId] : [])]))
 	const shape = plan.shape
 
@@ -388,7 +372,7 @@ export const evaluate = (plan: Plan, sem: Semantics): ModelResult => {
 			}))
 	}
 
-	const uniqueKeys = shape.k === "rows" ? ["id"] : shape.keys.map(([alias]) => alias)
+	const uniqueKeys = shape.k === "rows" ? (plan.join === undefined ? ["id"] : shape.select.map(([alias]) => alias)) : shape.keys.map(([alias]) => alias)
 	const total = uniqueKeys.length > 0 && uniqueKeys.every((key) => shape.orderBy.some(([alias]) => alias === key))
 	sortRows(env, rows, shape.orderBy)
 	return { rows: page(rows, shape), ordered: total && !plan.wrap, orgs }
@@ -399,8 +383,8 @@ export const evaluate = (plan: Plan, sem: Semantics): ModelResult => {
  * concatenated, then the union's ORDER BY, LIMIT and OFFSET. Rows compare as
  * a list only when the union orders by every alias.
  */
-export const evaluateUnion = (plan: UnionPlan, sem: Semantics): ModelResult => {
-	const parts = plan.branches.map((branch) => evaluate(branch, sem))
+export const evaluateUnion = (plan: UnionPlan, sem: Semantics, fixture: Fixture = coreFixture): ModelResult => {
+	const parts = plan.branches.map((branch) => evaluate(branch, sem, fixture))
 	const rows = parts.flatMap((part) => [...part.rows])
 	const first = plan.branches[0]!
 	const aliases = first.shape.k === "rows" ? first.shape.select.map(([alias]) => alias) : []

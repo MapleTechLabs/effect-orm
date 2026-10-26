@@ -1,9 +1,10 @@
 // ClickHouse: live only when EFFECT_ORM_CLICKHOUSE_URL is set. Two targets,
 // because `join_use_nulls` changes what an unmatched LEFT JOIN row holds.
 import fc from "fast-check"
+import { Arbitrary, Schema } from "effect"
 import * as CH from "@maple-dev/effect-orm/clickhouse"
 import { clickhouseContext } from "../../core-cases"
-import { dateTimeWire, finite, int32, nastyString, nullOr, utc, type LiteralType } from "../values"
+import { dateTimeWire, finite, int32, nastyString, nullOr, utc, wireDateTime, type LiteralType } from "../values"
 import { decode, type FuzzDialect, type FuzzTarget, type Outcome, type Semantics, type StringRules } from "./types"
 
 export const clickhouseEndpoint = process.env.EFFECT_ORM_CLICKHOUSE_URL
@@ -101,7 +102,7 @@ const jsonSource = (sqlType: string) => (json: string) =>
 const literal = (
 	id: string,
 	type: CH.CHType<string, any, any>,
-	value: fc.Arbitrary<unknown>,
+	value: LiteralType["value"],
 	options: { wire?: (value: unknown) => unknown; comparable?: boolean; source?: (value: unknown) => string } = {},
 ): LiteralType => ({
 	id: `clickhouse:${id}`,
@@ -115,8 +116,12 @@ const literal = (
 const nasty = nastyString(strings)
 const literals: ReadonlyArray<LiteralType> = [
 	literal("String", CH.string, nasty),
+	literal("brand(String)", CH.brand(CH.string, Schema.String.pipe(Schema.brand("FuzzText"))), nasty),
+	literal("custom(Int32)", CH.custom("Int32", CH.int32.schema), int32),
 	literal("Int32", CH.int32, int32),
 	literal("Int64", CH.int64, fc.maxSafeInteger()),
+	literal("UInt8", CH.uint8, fc.nat({ max: 255 })),
+	literal("UInt16", CH.uint16, fc.nat({ max: 65535 })),
 	literal("UInt32", CH.uint32, fc.nat({ max: 2 ** 32 - 1 })),
 	literal("UInt64", CH.uint64, fc.maxSafeNat()),
 	// ClickHouse's text float parser (JSON input, `toFloat64('…')`) can be 1 ULP off unless
@@ -128,11 +133,16 @@ const literals: ReadonlyArray<LiteralType> = [
 			return `SELECT reinterpretAsFloat64(toUInt64(${view.getBigUint64(0)})) AS v`
 		},
 	}),
-	literal("Bool", CH.bool, fc.boolean()),
+	literal("Bool", CH.bool, Arbitrary.schema(CH.bool.schema)),
 	literal("DateTime", CH.dateTime, fc.integer({ min: MIN_DT / 1000, max: MAX_DT / 1000 }).map((s) => utc(s * 1000)), {
 		wire: dateTimeWire(false),
 	}),
 	literal("DateTime64", CH.dateTime64, fc.integer({ min: MIN_DT64, max: MAX_DT64 }).map(utc), { wire: dateTimeWire(true) }),
+	literal("DateTimeString", CH.dateTimeString, fc.integer({ min: MIN_DT / 1000, max: MAX_DT / 1000 }).map((s) => wireDateTime(s * 1000, false))),
+	literal("DateTime64String", CH.dateTime64String, fc.integer({ min: MIN_DT64, max: MAX_DT64 }).map((ms) => wireDateTime(ms, true))),
+	literal("LowCardinality(String)", CH.lowCardinality(CH.string), nasty),
+	literal("SimpleAggregateFunction(max, Int64)", CH.simpleAggregateFunction("max", CH.int64), fc.maxSafeInteger()),
+	literal("DateTime64(0)", CH.precision(CH.dateTime64, 0), fc.integer({ min: MIN_DT64 / 1000, max: Math.floor(MAX_DT64 / 1000) }).map((s) => utc(s * 1000)), { wire: dateTimeWire(false) }),
 	literal("Nullable(String)", CH.nullable(CH.string), nullOr(nasty)),
 	literal("Nullable(Int64)", CH.nullable(CH.int64), nullOr(fc.maxSafeInteger())),
 	literal("Array(String)", CH.array(CH.string), fc.array(nasty, { maxLength: 4 })),

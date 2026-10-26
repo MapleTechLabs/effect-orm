@@ -72,15 +72,34 @@ export const pinned: Record<string, ReadonlyArray<unknown>> = {
 		},
 	] satisfies ReadonlyArray<Plan>,
 
+	// ClickHouse 26.2 must page a DISTINCT query over generated rows correctly.
+	"generated fixtures: query results agree": [{
+		fixture: {
+			orders: [1, 2].map((Id) => ({ OrgId: "org_1", Id, Customer: "acme", Amount: 0, Status: "paid", Note: null, Created: Date.UTC(2026, 0, 1) })),
+			customers: [],
+		},
+		plan: rows({ k: "rows", select: [["id", { k: "col", col: "Id" }]], distinct: true, orderBy: [["id", "asc"]], offset: 1 }),
+	}],
+
 	// Literals.
 	"clickhouse:Float64": [5e-324, -5e-324, 44812297868494010, 2.1722934738885276e269],
 	"clickhouse:Array(Nullable(Int64)) compare": [[0, 4294967296]],
 	"clickhouse:String": ["__PARAM_string_x__", "\\'", "\0"],
 	"postgres:boolean select": [false],
+	"postgres:float4 ": [Math.fround(0.1), 2 ** -149, -(2 ** -149), Math.fround(3.4028234663852886e38)],
 	// SQLite reads these decimals as a neighbouring double, as a literal or through json_extract.
 	":real ": [1.23456789e-95, 5.464465248610941e-277, -1.415281131826549e-267, 0, 5e-324],
 	"postgres:text[] select": [[]],
-	"postgres:timestamptz": [DateTime.makeUnsafe(Date.UTC(100, 0, 1))],
+	"postgres:timestamptz ": [DateTime.makeUnsafe(Date.UTC(100, 0, 1))],
+
+	// Timestamp years 0 and 99 must survive without Date.UTC's two-digit-year coercion.
+	"sqlite:timestamp ": [DateTime.makeUnsafe("0000-01-01T00:00:00.000Z"), DateTime.makeUnsafe("0099-12-31T23:59:59.999Z")],
+	"d1:timestamp ": [DateTime.makeUnsafe("0000-01-01T00:00:00.000Z"), DateTime.makeUnsafe("0099-12-31T23:59:59.999Z")],
+
+	// Schema-derived JSON keeps explicit SQL escaping and nested-value regressions.
+	"postgres:jsonb ": [{ message: "__PARAM_string_x__\\'", values: [null, -0, 5e-324], meta: { active: false, tags: ["it's", "😀"] } }],
+	"sqlite:json ": [{ message: "__PARAM_string_x__\\'\0", values: [null, 1], meta: { active: true, tags: ["it's", "😀"] } }],
+	"d1:json ": [{ message: "__PARAM_string_x__\\'\0", values: [null, 1], meta: { active: true, tags: ["it's", "😀"] } }],
 
 	// SQLite migrations.
 	"migrations reach": [
