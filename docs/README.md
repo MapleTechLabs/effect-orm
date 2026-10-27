@@ -36,6 +36,9 @@ executor own those responsibilities.
 4. [Benchmark a change](./benchmarking.md) with a fixed workload and saved baseline.
 5. Consult [Troubleshooting](./troubleshooting.md) if installation or results differ from expectations.
 
+Coming from another ORM? [Coming from Drizzle or Prisma](./coming-from-drizzle-prisma.md) maps
+their operations to effect-orm, with one checked program and a Cloudflare Worker sketch.
+
 The named complete examples are extracted from Markdown, typechecked, and exercised by
 [`check-doc-examples.mjs`](../scripts/check-doc-examples.mjs). Focused behavior tests also live in
 [`src/docs-examples.test.ts`](../src/docs-examples.test.ts). Client execution requires a server;
@@ -65,6 +68,7 @@ Roughly in reading order.
 | [Postgres](./postgres.md)                             | The Postgres dialect, its column types and functions                                |
 | [Schema and migrations](./migrations.md)              | DDL from `CH.table` / `PG.table`, `materializedView`, `effect-orm generate`, applying migrations, adopting drizzle-kit |
 | [Statements and transactions](./database.md)          | `Database` over your `SqlClient`: `run`, `execute`, `transaction`, retry            |
+| [Coming from Drizzle or Prisma](./coming-from-drizzle-prisma.md) | Their operations mapped to effect-orm, what differs by design, a Worker on Hyperdrive |
 
 ## Reference
 

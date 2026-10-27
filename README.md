@@ -12,7 +12,7 @@ SQLite and Cloudflare D1 use the same builder and row decoder through the new
 [`/sqlite` entry](./docs/sqlite.md), which also writes SQLite table DDL. `effect-orm generate` writes SQLite migrations; effect-orm does not apply them yet.
 
 [Read the documentation](https://effect-clickhouse.maple.dev) ·
-[Getting started](./docs/getting-started.md) · [Recipes](./docs/recipes.md)
+[Getting started](./docs/getting-started.md) · [Recipes](./docs/recipes.md) · [Coming from Drizzle or Prisma](./docs/coming-from-drizzle-prisma.md)
 
 - **Schema-first** — a column type _is_ an Effect `Schema`, so a query compiles
   to its own row schema. `decodeRows` validates without you writing one, and the
@@ -213,6 +213,7 @@ Full guides live in [`docs/`](./docs/README.md):
 | [Postgres](./docs/postgres.md)                             | The Postgres dialect, its column types and functions            |
 | [Schema and migrations](./docs/migrations.md)              | DDL from `table`, `effect-orm generate`, applying migrations    |
 | [Extending the DSL](./docs/extending.md)                   | `defineFn`, raw escape hatches, handwritten SQL                 |
+| [Coming from Drizzle or Prisma](./docs/coming-from-drizzle-prisma.md) | Their operations mapped to effect-orm, and a Worker on Hyperdrive |
 | [API reference](./docs/reference.md)                       | Full export catalog by module, plus error types                 |
 
 Named complete examples are extracted and checked by

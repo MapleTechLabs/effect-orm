@@ -119,6 +119,21 @@ await assert.rejects(() => Effect.runPromise(enums.shared.decodeRows([{ id: "c",
 assert.match(sql(enums.upsert), /ON CONFLICT \\("slug"\\) DO UPDATE SET/)
 const database = await import("./database-transaction")
 assert.deepEqual(database.balances, { from: 70, to: 30, refused: "InsufficientFunds" })
+const prisma = await import("./coming-from-prisma")
+assert.deepEqual(prisma.result, {
+  found: "ada@example.com",
+  insensitive: ["ada@example.com", "bob@example.com"],
+  counts: [{ email: "ada@example.com", posts: 2 }, { email: "bob@example.com", posts: 0 }],
+  withPublished: ["ada@example.com"],
+  cities: [{ email: "ada@example.com", city: "London" }, { email: "bob@example.com", city: "Paris" }],
+  page: ["bob@example.com"],
+  unpublished: [1, 2],
+  duplicate: "taken",
+  usersLeft: 1,
+})
+const cafe = await import("./cafe-worker-local")
+assert.deepEqual(cafe.org1, [{ id: 1, unit: "4B" }, { id: 3, unit: "2C" }])
+assert.equal(cafe.anonymous, 401)
 console.log("Markdown example behavior checks passed")
 `,
 	)
