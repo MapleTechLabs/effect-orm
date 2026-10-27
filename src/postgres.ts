@@ -19,6 +19,17 @@ export * from "./pg/functions"
 // Portable: renders the same SQL on both dialects.
 export { nullIf } from "./ch/functions"
 export { postgresDialect }
+// Typed JSON paths: the keys and decoder a jsonb path reads off the column's schema.
+export {
+	jsonPathSchema,
+	type JsonContained,
+	type JsonKey,
+	type JsonKeyOf,
+	type JsonPath,
+	type JsonPathSchema,
+	type JsonPathValue,
+	type JsonStep,
+} from "./ch/json-path"
 
 // Tables and their DDL. `table` is the only way to declare a table: it carries
 // the keys, indexes, unique constraints and foreign keys `effect-orm generate`

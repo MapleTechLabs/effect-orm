@@ -282,6 +282,25 @@ export const postgresCases: readonly PostgresCase[] = [
 		expected: [{ region: "eu", absent: null }],
 	},
 	{
+		id: "json-paths",
+		covers: pg("jsonPath", "jsonPathText", "jsonContains", "jsonSet", "jsonPathSchema"),
+		build: () => {
+			const found = PG.jsonPathSchema(Schema.Struct({ region: Schema.String }), ["region"])
+			expect(found._tag).toBe("Found")
+			return PG.compileUnsafe(
+				typedRows()
+					.select(($) => ({
+						region: PG.jsonPath($.Doc, "region"),
+						text: PG.jsonPathText($.Doc, "region"),
+						moved: PG.jsonPath(PG.jsonSet($.Doc, ["region"], "us"), "region"),
+					}))
+					.where(($) => [PG.jsonPath($.Doc, "region").eq("eu"), PG.jsonContains($.Doc, { region: "eu" })]),
+				{},
+			)
+		},
+		expected: [{ region: "eu", text: "eu", moved: "us" }],
+	},
+	{
 		id: "conditionals-and-typed-values",
 		covers: pg("greatest", "least", "caseWhen", "asBoolean", "typedValue"),
 		build: () =>

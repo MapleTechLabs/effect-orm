@@ -84,5 +84,13 @@ What we deliberately do not copy:
   decision for a later release.
 - The ClickHouse function catalog writes ClickHouse SQL whatever the dialect. Functions could
   refuse to compile under another dialect instead of producing SQL that fails at the server.
+- JSON paths split the same way. `src/ch/json-path.ts` owns what no dialect changes: the path
+  types (`JsonPath`, `JsonPathValue`, `JsonContained`) and `jsonPathSchema`, which reads the
+  decoder at a path off the column's Schema. `src/pg/functions.ts` owns only the SQL (`->`,
+  `->>`, `@>`, `jsonb_set`). A SQLite or MySQL catalog adds its own `jsonPath`, `jsonSet` and
+  friends over the same keys: `json_extract(x, '$.a[0]')` / `x ->> '$.a'` and
+  `json_set(x, '$.a', json(?))` on SQLite; `JSON_EXTRACT`, `JSON_UNQUOTE`,
+  `JSON_CONTAINS(x, CAST(? AS JSON))` and `JSON_SET` on MySQL. The one new piece is a key list
+  written as a `$.a[0]` path string, with each key quoted (`$."a b"`).
 - MySQL or SQLite would need `?` placeholders (`reuse: false` already exists) and their own
   types and functions; nothing in the core should need to change.
