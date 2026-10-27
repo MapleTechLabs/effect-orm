@@ -633,6 +633,25 @@ describe("docs/decoding-results.md", () => {
 
 			expect(result._tag).toBe("@maple-dev/effect-orm/CompiledQueryDecodeError")
 			expect(result.rowIndex).toBe(0)
+			expect(result.message).toBe(
+				'Compiled query row 0 did not match its declared output schema: at ["name"] expected string',
+			)
+			expect(result.dialect).toBe("clickhouse")
+			expect(result.collection).toBe("events")
+			expect(result.column).toBe("name")
+			expect(result.issues).toEqual([{ path: ["name"], kind: "InvalidType", expected: "string" }])
+			expect(result.schemaError?._tag).toBe("SchemaError")
+		}),
+	)
+
+	it.effect("formatDecodeError leaves row values out", () =>
+		Effect.gen(function* () {
+			const result = yield* Effect.flip(compiled().decodeRows([{ name: 42, count: 1 }]))
+
+			expect(CHE.formatDecodeError(result)).toBe(
+				'CompiledQueryDecodeError (clickhouse, events): row 0: at ["name"] expected string',
+			)
+			expect(CHE.formatDecodeError(result, { verbose: true })).toContain("Expected string")
 		}),
 	)
 

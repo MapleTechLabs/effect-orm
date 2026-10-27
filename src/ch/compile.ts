@@ -28,20 +28,14 @@ import { checkedLiteral, clickhouseDialect, currentDialect, withDialect, type Di
 import { Effect, Option, Schema } from "effect"
 import { QueryBuilderDefect, QueryBuilderError } from "./errors"
 import { withSubqueryCompiler } from "./subquery-context"
+import { decodeErrorFromCause, type CompiledQueryDecodeError } from "./decode-error"
 import { tenantBoundOf, tenantColumnOf, tenantPredicatesOf, withTenantBound, type TenantPredicate } from "./tenant"
 
 // `QueryBuilderError` moved to ./errors so `expr.ts` can raise it too; still
 // exported from here, which is where every caller imports it from.
 export { QueryBuilderError } from "./errors"
 
-export class CompiledQueryDecodeError extends Schema.TaggedError<CompiledQueryDecodeError>()(
-	"@maple-dev/effect-orm/CompiledQueryDecodeError",
-	{
-		message: Schema.String,
-		rowIndex: Schema.Number,
-		cause: Schema.optional(Schema.Unknown),
-	},
-) {}
+export { CompiledQueryDecodeError } from "./decode-error"
 
 export class CompiledQueryEncodeError extends Schema.TaggedError<CompiledQueryEncodeError>()(
 	"@maple-dev/effect-orm/CompiledQueryEncodeError",
@@ -444,10 +438,12 @@ const makeCompiledQuery = <Output, Route extends string | undefined>(
 			decode(row).pipe(
 				Effect.mapError(
 					(cause) =>
-						new CompiledQueryDecodeError({
-							message: `Compiled query row ${index} did not match its declared output schema`,
+						decodeErrorFromCause({
+							prefix: `Compiled query row ${index} did not match its declared output schema`,
 							rowIndex: index,
 							cause,
+							dialect,
+							collection,
 						}),
 				),
 			),
@@ -514,10 +510,12 @@ const makeCompiledQuery = <Output, Route extends string | undefined>(
 				Effect.map(Option.some),
 				Effect.mapError(
 					(cause) =>
-						new CompiledQueryDecodeError({
-							message: "Compiled query row 0 did not match its declared output schema",
+						decodeErrorFromCause({
+							prefix: "Compiled query row 0 did not match its declared output schema",
 							rowIndex: 0,
 							cause,
+							dialect,
+							collection,
 						}),
 				),
 			)

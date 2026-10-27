@@ -154,14 +154,44 @@ const error = await Effect.runPromise(Effect.flip(compiled.decodeRows([{ name: 4
 
 error._tag // "@maple-dev/effect-orm/CompiledQueryDecodeError"
 error.rowIndex // 0
-error.message // "Compiled query row 0 did not match its declared output schema"
-error.cause // the underlying Schema parse error
+error.message // 'Compiled query row 0 did not match its declared output schema: at ["name"] expected string'
+error.dialect // "clickhouse"
+error.collection // "events", the table the query reads
+error.column // "name", the column alias of the first issue
+error.issues // [{ path: ["name"], kind: "InvalidType", expected: "string" }]
+error.schemaError // the underlying Schema error
 ```
 
 It is an Effect `Schema.TaggedError`, so `Effect.catchTag` works on it directly. Decoding
 stops at the first bad row rather than accumulating.
 
 _(Backed by `docs/decoding-results.md > A bad row fails with CompiledQueryDecodeError`.)_
+
+### Logging a decode failure
+
+A row is user data. The error holds only what the schema says: the path of each issue, its
+kind, and the expected type from the schema AST. Its `message`, `toString()`, `JSON.stringify`
+output, `util.inspect` output and `Cause.pretty` output contain no row values.
+
+The Schema error can contain row values: a codec message such as `` `<value>` is not a
+ClickHouse DateTime ``, or a filter that builds its message from its input. So it is not the
+error's `cause`. It is the non-enumerable `schemaError` property, which logging does not print.
+
+`formatDecodeError` gives a one-line summary for a log. Set `verbose: true` to append the raw
+Schema error message, for local debugging only:
+
+```ts
+Effect.tapErrorTag("@maple-dev/effect-orm/CompiledQueryDecodeError", (error) =>
+	Effect.logError(CH.formatDecodeError(error)),
+)
+// CompiledQueryDecodeError (clickhouse, events): row 0: at ["name"] expected string
+
+CH.formatDecodeError(error, { verbose: true }) // + the Schema message, which can hold values
+```
+
+Column aliases, field names and table names are schema identifiers. They are not redacted.
+
+_(Backed by `docs/decoding-results.md > formatDecodeError leaves row values out`.)_
 
 ## Choosing schema types
 
