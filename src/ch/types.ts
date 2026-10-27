@@ -129,7 +129,7 @@ export const chDateTimeToIso = (value: string): string => {
 export const chDateTimeLiteral = (value: DateTime.Utc): string =>
 	new Date(DateTime.toEpochMillis(value)).toISOString().replace("T", " ").slice(0, 19)
 
-const chDateTime64Literal = (value: DateTime.Utc): string =>
+export const chDateTime64Literal = (value: DateTime.Utc): string =>
 	new Date(DateTime.toEpochMillis(value))
 		.toISOString()
 		.replace("T", " ")

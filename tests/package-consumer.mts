@@ -11,6 +11,7 @@ import * as SQL from "@maple-dev/effect-orm/sql"
 import * as S from "@maple-dev/effect-orm/schema"
 import * as Migrate from "@maple-dev/effect-orm/migrate"
 import * as Db from "@maple-dev/effect-orm/database"
+import * as Seed from "@maple-dev/effect-orm/seed"
 import { defineConfig } from "@maple-dev/effect-orm/kit"
 
 const events = CH.table("events", { external: true, columns: { id: CH.uint64, name: CH.string } })
@@ -90,6 +91,9 @@ assert.equal(
 assert.equal(typeof runCli, "function")
 
 assert.equal(typeof Db.fromSqlClient, "function")
+const seeded = Effect.runSync(Seed.rows(events, { count: 2, seed: 1 }))
+const seededTyped: ReadonlyArray<{ readonly id: number; readonly name: string }> = seeded
+assert.deepEqual(Effect.runSync(Seed.rows(events, { count: 2, seed: 1 })), seededTyped)
 assert.equal(Db.isContention(new Db.DatabaseError({ message: "x", sql: "", reason: "SerializationError", cause: undefined })), true)
 
 // SQLite works from the tarball without installing any SQLite driver.

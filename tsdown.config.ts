@@ -12,6 +12,7 @@ export default defineConfig({
 		tinybird: "./src/tinybird.ts",
 		migrate: "./src/migrate.ts",
 		database: "./src/database.ts",
+		seed: "./src/seed.ts",
 		kit: "./src/kit.ts",
 		"kit/bin": "./src/kit/bin.ts",
 		"benchmark/index": "./src/benchmark/index.ts",
