@@ -154,3 +154,72 @@ and [testing guide](https://clickhouse.com/docs/resources/develop-contribute/con
 are useful sources of additional edge cases. Port relevant operations into the DSL
 and retain provenance when copying fixtures. Executing upstream SQL unchanged would
 not validate the builder. The current small fixtures were written for this package.
+
+## Testing your own code: `layerTest`
+
+`Db.layerTest(options)` from `/database` is a `Database` with no server, for the unit tests of
+code that runs queries. Provide it in place of your real `Database` layer; no module mocks are
+needed. It also gives `TestDatabase`, which records what was sent and holds the replies.
+
+```ts title="database-test-layer.ts"
+import { Effect } from "effect"
+import * as Db from "@maple-dev/effect-orm/database"
+import * as PG from "@maple-dev/effect-orm/postgres"
+
+const Accounts = PG.table("accounts", { columns: { id: PG.int4, org: PG.text, balance: PG.int8 }, primaryKey: ["id"] })
+
+// The code under test: it knows only `Database`.
+const balances = (org: string) =>
+	Db.run(
+		PG.from(Accounts)
+			.select("id", "balance")
+			.where(($) => [$.org.eq(org)]),
+	)
+
+export const result = await Effect.runPromise(
+	Effect.gen(function* () {
+		const test = yield* Db.TestDatabase
+		// Rows as the server sends them: Postgres returns int8 as a string.
+		yield* test.reply([{ id: 1, balance: "70" }])
+		const rows = yield* balances("org_1")
+		const [sent] = yield* test.statements
+		return { rows, parameters: sent?.parameters }
+	}).pipe(Effect.provide(Db.layerTest({ dialect: PG.postgresDialect }))),
+)
+// { rows: [{ id: 1, balance: 70 }], parameters: ["org_1"] }
+```
+
+Only the server is replaced. The layer is `fromSqlClient` over a fake `SqlClient`, so the rest
+runs as in production:
+
+- `run` compiles for the dialect you give. `statements` holds the SQL and `parameters` exactly
+  as a server would get them.
+- Rows are decoded by the query's own row schema. A row that does not match fails with
+  `CompiledQueryDecodeError`, as it would from a server.
+- `transaction` records `BEGIN`, `COMMIT`, `ROLLBACK` and savepoints in `statements`. They
+  take no reply. On `clickhouseDialect` it fails with `TransactionUnsupported`.
+- `requireTenantScope: true` refuses an unscoped query, as on `fromSqlClient`.
+
+Each statement takes the next queued reply. With no reply queued, it gets `respond(statement)`
+from the options, or no rows. A reply is an array of rows, or a driver `SqlError` from
+`effect/sql/SqlError`. A driver error becomes the same `DatabaseError` a real driver's would,
+with its `reason` and `sqlState`:
+
+```ts
+yield* test.reply(
+	new SqlError({ reason: new UniqueViolation({ cause: { code: "23505" }, constraint: "accounts_pkey" }) }),
+)
+const error = yield* Effect.flip(insertAccount)  // DatabaseError, reason "UniqueViolation", sqlState "23505"
+```
+
+| Export | What it is |
+| --- | --- |
+| `layerTest(options)` | A `Database` and a `TestDatabase`, with no requirements |
+| `TestDatabase` | The control side: `statements`, `reply(...replies)`, `reset` |
+| `TestDatabaseOptions` | `dialect` (required), `respond`, `requireTenantScope` |
+| `TestReply` | Rows as the server sends them, or a `SqlError` |
+| `TestStatement` | `{ sql, parameters }`, as received |
+
+The fake does not run SQL. A test that needs real SQL semantics (constraints, joins over stored
+rows) needs a real database: PGlite for Postgres, as in [Database](./database.md#a-complete-example).
+A COMMIT or ROLLBACK that fails cannot be scripted yet.
