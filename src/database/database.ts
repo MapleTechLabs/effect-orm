@@ -170,7 +170,8 @@ interface OpenState {
 	open: boolean
 	readonly client: SqlClient.SqlClient
 }
-class TransactionOpen extends Context.Service<TransactionOpen, OpenState>()("@maple-dev/effect-orm/TransactionOpen") {}
+/** @internal — also read by `resolver.ts` to keep batches inside one transaction. */
+export class TransactionOpen extends Context.Service<TransactionOpen, OpenState>()("@maple-dev/effect-orm/TransactionOpen") {}
 
 // A defect from the body, carried through `withTransaction` as a failure so the
 // transaction still rolls back and any defect that comes out of it is known to
