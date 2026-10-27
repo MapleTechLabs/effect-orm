@@ -202,6 +202,39 @@ See [Unions and CTEs](./unions-and-ctes.md#ctes).
 `.route("ingest")` and `.crossTenant()` attach metadata to the compiled result rather than
 changing the SQL. Both are covered in [Tenant scoping](./tenant-scoping.md).
 
+## Pipeable, data-last queries
+
+A query is `Pipeable`, and `Query` has a data-last form of the most used methods, as `Effect`,
+`Stream` and `Schema` do. Each `Query` function is a `dual` that calls the fluent method, so
+both styles write the same SQL:
+
+```ts
+CH.Query.from(Events).pipe(
+	CH.Query.select(($) => ({ name: $.Name, ms: $.DurationMs })),
+	CH.Query.where(($) => [$.OrgId.eq("org_123")]),
+	CH.Query.orderBy(["ms", "desc"]),
+	CH.Query.limit(10),
+)
+// the same SQL as CH.from(Events).select(…).where(…).orderBy(…).limit(10)
+```
+
+`$` in a data-last callback is typed from the query that `pipe` carries, and a wrong column or
+an unselected `orderBy` key is a type error at that step. Each function also has a data-first
+form: `CH.Query.where(query, ($) => […])`.
+
+`Query` has `from`, `fromQuery`, `fromUnion`, `select`, `where`, `orderBy`, `limit`,
+`innerJoin`, `leftJoin` and `crossJoin`. Use the fluent method for the others.
+
+A reusable part is a plain function. Type its `$` with the table's columns:
+
+```ts
+const byOrg = (orgId: string) => CH.Query.where(($: CH.ColumnAccessor<typeof Events.columns>) => [$.OrgId.eq(orgId)])
+
+CH.Query.from(Events).pipe(byOrg("org_123"), CH.Query.select("Name"))
+```
+
+_(Backed by `docs/queries.md > Pipeable, data-last queries`.)_
+
 ## Compiling
 
 ```ts

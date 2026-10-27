@@ -73,6 +73,23 @@ Tables come from the dialect's `table`: [`CH.table`](#tables-and-ddl) or
 
 `CHUnionQuery` offers only `orderBy`, `limit`, `offset`, `format`.
 
+A `CHQuery` is `Pipeable`: `query.pipe(f, g)` is `g(f(query))`.
+
+### `Query` (data-last)
+
+`Query` is a namespace of `dual` functions over the `CHQuery` methods above. Each one is
+data-last (`query.pipe(Query.where(fn))`) and data-first (`Query.where(query, fn)`), calls the
+fluent method, and writes the same SQL. See [Pipeable, data-last queries](./queries.md#pipeable-data-last-queries).
+
+| Export                                                    | Same as                         |
+| --------------------------------------------------------- | ------------------------------- |
+| `Query.from` / `Query.fromQuery` / `Query.fromUnion`      | `from` / `fromQuery` / `fromUnion` |
+| `Query.select()` / `Query.select(...names)` / `Query.select(fn)` | `select`                 |
+| `Query.where(fn)`                                         | `where`                         |
+| `Query.orderBy(...[key, dir])` / `Query.orderBy(fn)`      | `orderBy`                       |
+| `Query.limit(n)`                                          | `limit`                         |
+| `Query.innerJoin` / `Query.leftJoin` / `Query.crossJoin`  | `(table, alias, on?)`           |
+
 ### Compilation
 
 Each entry exports `compile`, `compileUnsafe`, `compileUnion` and `compileUnionUnsafe`, defaulting
