@@ -88,7 +88,8 @@ to its own dialect; `options.dialect` overrides it.
 
 `Dialect`, `DialectClauses` and `ParamStyle` describe a database: how identifiers and literals
 are written, how params reach the server, and which clauses exist. Pass one as
-`options.dialect`. `DialectTransactions` (with `IsolationLevel` and `TransactionSettings`) says
+`options.dialect`, or provide it as `CurrentDialect`, a `Context.Reference<Dialect | undefined>`
+that `compile` reads when no `options.dialect` is given. `DialectTransactions` (with `IsolationLevel` and `TransactionSettings`) says
 which transactions the database supports; see [Database](./database.md). See [Params and compilation](./params-and-compilation.md#dialects) and
 [Postgres](./postgres.md).
 
@@ -406,7 +407,8 @@ Types: `WindowSpec`, `CompiledWindowSpec`, `WindowFrameBound`, `WindowRowsFrame`
 ### Dialect
 
 `compile` and the other compile functions default to `clickhouseDialect`: params written into the
-SQL as ClickHouse literals.
+SQL as ClickHouse literals. A `CurrentDialect` in context, or `options.dialect`, overrides
+the default.
 
 ---
 
@@ -497,7 +499,8 @@ unit union), `dateBin(seconds, ts)`, `now()`, `lower(x)`, `upper(x)`, `length(x)
 ### Dialect
 
 `compile` and the other compile functions default to `postgresDialect`: numbered `$n`
-placeholders, double-quoted identifiers.
+placeholders, double-quoted identifiers. A `CurrentDialect` in context, or `options.dialect`, overrides
+the default.
 
 ---
 

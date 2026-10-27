@@ -46,7 +46,10 @@ What we deliberately do not copy:
    every `Str` fragment, column literal, and inline param. `compile` installs the dialect for
    the length of the compile (`withDialect`, the same save/restore pattern as
    `withSubqueryCompiler`), because literals are written inside the query callbacks, which
-   have no dialect argument. The `__PARAM_` safety is now enforced rather than assumed: a
+   have no dialect argument. The installed values live in the compiling fiber's context
+   (`src/sql/fiber-local.ts`), not in module state, so two compiles in two fibers cannot see
+   each other's dialect. The dialect is `CurrentDialect`, a `Context.Reference` a caller can
+   also provide. The `__PARAM_` safety is now enforced rather than assumed: a
    literal that contains the marker fails with `InvalidLiteral`, so a dialect with weaker
    escaping cannot turn a value into a placeholder.
 3. **Identifier quoting (done).** Column refs are `Ident` fragments carrying their qualifier

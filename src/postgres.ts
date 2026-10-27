@@ -11,7 +11,9 @@ import {
 	compileUnion as compileUnionCH,
 	compileUnionUnsafe as compileUnionUnsafeCH,
 } from "./ch/compile"
+import { activeDialect, type Dialect } from "./ch/dialect"
 import { postgresDialect } from "./pg/dialect"
+import { Effect } from "effect"
 
 export * from "./core"
 export * from "./pg/types"
@@ -54,20 +56,27 @@ export {
 } from "./schema/pg-define"
 export { SchemaDefinitionError, type DefinitionProblem, type DdlExpr, type DdlKey } from "./schema/define"
 
-/** `compile`, for Postgres unless `options.dialect` says otherwise. */
+/** The dialect a `/postgres` compile writes for: `options.dialect`, else `CurrentDialect`, else Postgres. */
+const pgOptions = <O extends { readonly dialect?: Dialect | undefined } | undefined>(options: O) => ({
+	...options,
+	dialect: options?.dialect ?? activeDialect() ?? postgresDialect,
+})
+
+/** `compile`, for Postgres unless `options.dialect` or `CurrentDialect` says otherwise. */
 // Typed through `any` and cast: `compileCH` is overloaded (queries and inserts),
-// and an overloaded type gives an arrow's parameters no contextual type.
+// and an overloaded type gives an arrow's parameters no contextual type. The
+// dialect is read when the Effect runs, from the fiber that runs it.
 export const compile = ((query: any, params?: any, options?: any) =>
-	compileCH(query, params, { ...options, dialect: options?.dialect ?? postgresDialect })) as typeof compileCH
+	Effect.suspend(() => compileCH(query, params, pgOptions(options)))) as typeof compileCH
 
 /** `compileUnsafe` for Postgres. */
 export const compileUnsafe = ((query: any, params?: any, options?: any) =>
-	compileCHUnsafe(query, params, { ...options, dialect: options?.dialect ?? postgresDialect })) as typeof compileCHUnsafe
+	compileCHUnsafe(query, params, pgOptions(options))) as typeof compileCHUnsafe
 
 /** `compileUnion` for Postgres. */
 export const compileUnion: typeof compileUnionCH = (union, params, options) =>
-	compileUnionCH(union, params, { ...options, dialect: options?.dialect ?? postgresDialect })
+	Effect.suspend(() => compileUnionCH(union, params, pgOptions(options)))
 
 /** `compileUnionUnsafe` for Postgres. */
 export const compileUnionUnsafe: typeof compileUnionUnsafeCH = (union, params, options) =>
-	compileUnionUnsafeCH(union, params, { ...options, dialect: options?.dialect ?? postgresDialect })
+	compileUnionUnsafeCH(union, params, pgOptions(options))

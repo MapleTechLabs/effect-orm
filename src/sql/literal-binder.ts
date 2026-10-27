@@ -6,20 +6,22 @@
 // shape is one statement whatever the values. `compile` installs a binder here
 // for the duration of the compile, as it installs the dialect's syntax.
 
+import { Context } from "effect"
+import { fiberLocal } from "./fiber-local"
+
 /** Takes an encoded wire value; returns the SQL that stands for it. */
 export type LiteralBinder = (wire: unknown) => string
 
-let current: LiteralBinder | undefined
+// Kept in the compiling fiber's context; see `fiber-local.ts`.
+const current = fiberLocal(
+	Context.Reference<LiteralBinder | undefined>("@maple-dev/effect-orm/internal/LiteralBinder", {
+		defaultValue: () => undefined,
+	}),
+)
 
 export function withLiteralBinder<A>(binder: LiteralBinder | undefined, body: () => A): A {
-	const previous = current
-	current = binder
-	try {
-		return body()
-	} finally {
-		current = previous
-	}
+	return current.with(binder, body)
 }
 
 /** The binder installed by the enclosing compile, if there is one. */
-export const activeLiteralBinder = (): LiteralBinder | undefined => current
+export const activeLiteralBinder = (): LiteralBinder | undefined => current.get()

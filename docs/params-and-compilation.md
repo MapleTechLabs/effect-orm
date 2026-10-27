@@ -177,7 +177,7 @@ CH.compileUnsafe(query, params, options?)  // CompiledQuery, throws
 | `options.rowSchema`   | Effect `Schema` used by `decodeRows` / `decodeFirstRow`              |
 | `options.skipFormat`  | Omit a trailing `FORMAT` clause (used internally for subqueries)     |
 | `options.deferParams` | Leave placeholders unresolved, for SQL spliced into an outer compile |
-| `options.dialect`     | Overrides the entry's dialect (`clickhouseDialect` from `/clickhouse`, `postgresDialect` from `/postgres`) |
+| `options.dialect`     | Overrides `CurrentDialect` and the entry's dialect (`clickhouseDialect` from `/clickhouse`, `postgresDialect` from `/postgres`) |
 
 Each dialect entry exports its own `compile`, defaulting to that dialect. Unions use
 `compileUnion(union, params)`.
@@ -260,6 +260,26 @@ than `1`/`0`.
 | `clauses.groupByAlias` | Whether GROUP BY resolves select aliases; if not, keys are written by position |
 | `clauses.parenthesizeUnionBranches` | Whether each `UNION ALL` branch is wrapped in parentheses |
 | `paramCodecs` | Per-kind codec overrides for `param.*` |
+
+### The dialect in Effect context
+
+`CurrentDialect` is a `Context.Reference`. Provide it, and every `compile` in that Effect writes
+for that dialect when no `options.dialect` is given. Each fiber has its own value, so compiles
+for two dialects can run at the same time in one program:
+
+```ts
+const compiled = yield* CH.compile(query, { orgId: "org_1" }).pipe(
+	Effect.provideService(CH.CurrentDialect, numbered),
+)
+// compiled.sql:        ... WHERE OrgId = $1
+// compiled.parameters: ["org_1"]
+```
+
+The order is: `options.dialect`, then `CurrentDialect`, then the entry's dialect. The rest of a
+compile's state (its syntax, bound values and failures) is kept in the fiber's context too, not in
+module state.
+
+_(Backed by `docs/params-and-compilation.md > The dialect can come from Effect context`.)_
 
 Params are resolved by rewriting placeholders in the finished SQL, so a dialect's literals must
 never spell the param marker `__PARAM_`. ClickHouse writes it as `\x5F_PARAM_`; a literal that
