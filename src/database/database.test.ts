@@ -5,7 +5,7 @@
 
 import { PgliteClient } from "@effect/sql-pglite"
 import { assert, describe, expect, it, layer } from "@effect/vitest"
-import { Cause, DateTime, Deferred, Effect, Exit, Fiber, Layer, Ref, Schedule, Schema } from "effect"
+import { Cause, DateTime, Deferred, Effect, Exit, Fiber, Layer, Option, Ref, Schedule, Schema } from "effect"
 import * as SqlClient from "effect/sql/SqlClient"
 import * as CH from "../ch/index"
 import * as PG from "../postgres"
@@ -114,6 +114,71 @@ layer(Live, { excludeTestServices: true })("Database on PGlite", (it) => {
 			expect(defect.reason).toBe("DialectMismatch")
 		}),
 	)
+
+	describe("cardinality", () => {
+		const notes = (table: string) => {
+			const Items = CH.table(table, { id: PG.int4, note: PG.text })
+			return CH.from(Items)
+				.select("id")
+				.where(($) => [$.note.eq(CH.param.string("note"))])
+				.orderBy(["id", "asc"])
+		}
+		const seeded = Effect.gen(function* () {
+			const table = yield* freshTable
+			yield* Effect.all([insert(table, 1, "one"), insert(table, 2, "two"), insert(table, 3, "two")])
+			return notes(table)
+		})
+
+		it.effect("runOne returns the only row", () =>
+			Effect.gen(function* () {
+				const query = yield* seeded
+				expect(yield* Db.runOne(query, { note: "one" })).toEqual({ id: 1 })
+			}),
+		)
+
+		it.effect("runOne fails with ResultCardinalityError on zero rows and on more than one", () =>
+			Effect.gen(function* () {
+				const query = yield* seeded
+				const none = yield* Effect.flip(Db.runOne(query, { note: "none" }))
+				assert(none instanceof Db.ResultCardinalityError)
+				expect({ expected: none.expected, rows: none.rows }).toEqual({ expected: "one", rows: 0 })
+				const many = yield* Effect.flip(Db.runOne(query, { note: "two" }))
+				assert(many instanceof Db.ResultCardinalityError)
+				expect({ expected: many.expected, rows: many.rows }).toEqual({ expected: "one", rows: 2 })
+			}),
+		)
+
+		it.effect("runOption returns None on zero rows, Some on one, and fails on more than one", () =>
+			Effect.gen(function* () {
+				const query = yield* seeded
+				expect(yield* Db.runOption(query, { note: "none" })).toEqual(Option.none())
+				expect(yield* Db.runOption(query, { note: "one" })).toEqual(Option.some({ id: 1 }))
+				const many = yield* Effect.flip(Db.runOption(query, { note: "two" }))
+				assert(many instanceof Db.ResultCardinalityError)
+				expect({ expected: many.expected, rows: many.rows }).toEqual({ expected: "atMostOne", rows: 2 })
+			}),
+		)
+
+		it.effect("runNonEmpty returns every row and fails on zero rows", () =>
+			Effect.gen(function* () {
+				const query = yield* seeded
+				expect(yield* Db.runNonEmpty(query, { note: "two" })).toEqual([{ id: 2 }, { id: 3 }])
+				const none = yield* Effect.flip(Db.runNonEmpty(query, { note: "none" }))
+				assert(none instanceof Db.ResultCardinalityError)
+				expect({ expected: none.expected, rows: none.rows }).toEqual({ expected: "nonEmpty", rows: 0 })
+			}),
+		)
+
+		it.effect("sends the query unchanged: no LIMIT is added", () =>
+			Effect.gen(function* () {
+				const query = yield* seeded
+				statements.length = 0
+				yield* Effect.flip(Db.runOne(query, { note: "two" }))
+				expect(statements).toHaveLength(1)
+				expect(statements[0]).not.toMatch(/LIMIT/i)
+			}),
+		)
+	})
 
 	it.effect("commits on success", () =>
 		Effect.gen(function* () {

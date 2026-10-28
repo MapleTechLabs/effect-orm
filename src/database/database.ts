@@ -7,7 +7,7 @@
 // statements outliving their transaction, and contention retry. See
 // `design/transactions.md`.
 
-import { Cause, Context, Effect, ErrorReporter, Exit, Layer, Option, Schedule, Schema } from "effect"
+import { Array as Arr, Cause, Context, Effect, ErrorReporter, Exit, Layer, Option, Schedule, Schema } from "effect"
 import { dual } from "effect/Function"
 import * as SqlClient from "effect/sql/SqlClient"
 import { isSqlError } from "effect/sql/SqlError"
@@ -21,6 +21,7 @@ import type { CHUnionQuery, QueryParams } from "../ch/union"
 import type { ParamsSatisfied } from "../ch/expr"
 import {
 	DatabaseError,
+	ResultCardinalityError,
 	TransactionClosed,
 	TransactionCommitFailed,
 	TransactionOptionsRejected,
@@ -497,6 +498,55 @@ export const run = <Q extends Runnable, const Given extends object = {}>(
 	params?: Given,
 ): Effect.Effect<ReadonlyArray<RowOf<Q>>, DatabaseError | QueryBuilderError | CompiledQueryDecodeError, Database> =>
 	Effect.flatMap(Effect.service(Database), (db) => db.run(query, params))
+
+/** What `run` can fail with. */
+type RunError = DatabaseError | QueryBuilderError | CompiledQueryDecodeError
+
+const cardinalityError = (expected: ResultCardinalityError["expected"], rows: number) =>
+	new ResultCardinalityError({
+		message: `expected ${expected === "one" ? "exactly one row" : expected === "atMostOne" ? "at most one row" : "at least one row"}, got ${rows}`,
+		expected,
+		rows,
+	})
+
+/**
+ * `run`, for a query that must return exactly one row. Zero rows or more than
+ * one fail with `ResultCardinalityError`. No `LIMIT` is added, so a duplicate
+ * is found, not hidden.
+ */
+export const runOne = <Q extends Runnable, const Given extends object = {}>(
+	query: Q & RunCheck<Q> & ParamsSatisfied<QueryParams<Q>, Given>,
+	params?: Given,
+): Effect.Effect<RowOf<Q>, RunError | ResultCardinalityError, Database> =>
+	Effect.flatMap(run(query, params), (rows) =>
+		Arr.isReadonlyArrayNonEmpty(rows) && rows.length === 1 ? Effect.succeed(rows[0]) : Effect.fail(cardinalityError("one", rows.length)),
+	)
+
+/**
+ * `run`, for a query that returns at most one row: `Option.none()` for zero
+ * rows, `Option.some(row)` for one. More than one fails with
+ * `ResultCardinalityError`. No `LIMIT` is added.
+ */
+export const runOption = <Q extends Runnable, const Given extends object = {}>(
+	query: Q & RunCheck<Q> & ParamsSatisfied<QueryParams<Q>, Given>,
+	params?: Given,
+): Effect.Effect<Option.Option<RowOf<Q>>, RunError | ResultCardinalityError, Database> =>
+	Effect.flatMap(run(query, params), (rows) =>
+		rows.length > 1 ? Effect.fail(cardinalityError("atMostOne", rows.length)) : Effect.succeed(Arr.head(rows)),
+	)
+
+/**
+ * `run`, for a query that must return at least one row. Zero rows fail with
+ * `ResultCardinalityError`; otherwise every row comes back, typed as a
+ * non-empty array.
+ */
+export const runNonEmpty = <Q extends Runnable, const Given extends object = {}>(
+	query: Q & RunCheck<Q> & ParamsSatisfied<QueryParams<Q>, Given>,
+	params?: Given,
+): Effect.Effect<Arr.NonEmptyReadonlyArray<RowOf<Q>>, RunError | ResultCardinalityError, Database> =>
+	Effect.flatMap(run(query, params), (rows) =>
+		Arr.isReadonlyArrayNonEmpty(rows) ? Effect.succeed(rows) : Effect.fail(cardinalityError("nonEmpty", 0)),
+	)
 
 /** `query` on the `Database` in context. */
 export const query: {
