@@ -1,6 +1,6 @@
 // A real local Workers D1 binding; no cloud account or network database needed.
 import * as D1Client from "@effect/sql-d1/D1Client"
-import { Cause, Effect, Exit, Schema } from "effect"
+import { Cause, Effect, Exit, Schema, Stream } from "effect"
 import * as SqlClient from "effect/sql/SqlClient"
 import { Miniflare } from "miniflare"
 import { expect, it } from "vitest"
@@ -98,3 +98,14 @@ it("refuses a D1 integer past 2^53 instead of decoding a different number", asyn
 	if (!Exit.isFailure(exit)) throw new Error(`an unsafe integer decoded as ${JSON.stringify(exit.value)}`)
 	expect(Cause.findError(exit.cause)).toMatchObject({ success: { _tag: "@maple-dev/effect-orm/CompiledQueryDecodeError" } })
 }, 30_000)
+
+it("streams rows on D1, whose driver has no streaming read, and keeps the tenant guard", async () => {
+	const result = await withD1((db) => Effect.gen(function* () {
+		yield* db.run(SQLite.insertInto(Ack).values([first, second, other]).crossTenant())
+		const rows = yield* Stream.runCollect(db.stream(SQLite.from(Ack).select("id").where(($) => [$.org_id.eq("org_1")]).orderBy(["id", "asc"])))
+		const unscoped = yield* Effect.exit(Stream.runCollect(db.stream(SQLite.from(Ack).select("id"))))
+		return { rows, unscoped }
+	}))
+	expect(result.rows).toEqual([{ id: "ack_1" }, { id: "ack_2" }])
+	expect(Exit.isFailure(result.unscoped) && Cause.squash(result.unscoped.cause)).toBeInstanceOf(Db.TenantScopeViolation)
+})

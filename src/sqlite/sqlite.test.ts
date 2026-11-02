@@ -1,5 +1,5 @@
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient"
-import { Cause, DateTime, Effect, Exit, Schema } from "effect"
+import { Cause, DateTime, Effect, Exit, Schema, Stream } from "effect"
 import * as SqlClient from "effect/sql/SqlClient"
 import { expect, it } from "vitest"
 import * as Db from "../database"
@@ -215,4 +215,12 @@ it("builds an external table from its columns, not from the definition's keys", 
 	expect(Object.keys(External.columns)).toEqual(["id", "org_id"])
 	expect(External.tenantColumn).toBe("org_id")
 	expect(SQLite.compileUnsafe(SQLite.from(External).select("id").where(($) => [$.org_id.eq("o")])).sql).toContain('"ext"."org_id" = ?')
+})
+
+it("streams rows on node:sqlite, whose driver has no streaming read, decoding each row", async () => {
+	const rows = await withDatabase((db) => Effect.gen(function* () {
+		yield* db.run(SQLite.insertInto(Items).values([1, 2].map((id) => ({ id, note: `${id}`, enabled: id === 1, score: null }))))
+		return yield* Stream.runCollect(db.stream(SQLite.from(Items).select("id", "enabled").orderBy(["id", "asc"])))
+	}))
+	expect(rows).toEqual([{ id: 1, enabled: true }, { id: 2, enabled: false }])
 })

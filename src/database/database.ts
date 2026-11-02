@@ -333,14 +333,21 @@ export const fromSqlClient = (sql: SqlClient.SqlClient, options: FromSqlClientOp
 				: Effect.flatMap(rows(compiled), (wire) => compiled.decodeRows(wire)),
 		)
 
+	// Effect's SQLite drivers (node:sqlite, D1, …) have no streaming read: their
+	// `.stream` dies with "executeStream not implemented". A SQLite-family
+	// dialect reads the whole result as `run` does and emits it row by row.
+	const cursorless = dialect.functions === "sqlite"
+
 	const wireStream = (statement: Statement & TracedStatement): Stream.Stream<Record<string, unknown>, DatabaseError> =>
-		traceStream(
-			dialect,
-			statement,
-			Stream.unwrap(Effect.as(guard(statement), raw.unsafe<Record<string, unknown>>(statement.sql, statement.parameters ?? []).stream)).pipe(
-				Stream.mapError(toDatabaseError(statement.sql)),
-			),
-		)
+		cursorless
+			? Stream.fromIterableEffect(rows(statement))
+			: traceStream(
+					dialect,
+					statement,
+					Stream.unwrap(Effect.as(guard(statement), raw.unsafe<Record<string, unknown>>(statement.sql, statement.parameters ?? []).stream)).pipe(
+						Stream.mapError(toDatabaseError(statement.sql)),
+					),
+				)
 
 	// Each row through the query's row schema, as `decodeRows` does for a whole result.
 	const decodeStream = (

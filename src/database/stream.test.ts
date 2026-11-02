@@ -91,6 +91,22 @@ layer(Live, { excludeTestServices: true })("Database.stream on PGlite", (it) => 
 		}),
 	)
 
+	it.effect("an afterCommit hook queued beside a stream runs once the stream's transaction commits", () =>
+		Effect.gen(function* () {
+			const ran: Array<ReadonlyArray<number>> = []
+			const seen = yield* Db.transaction(
+				Effect.gen(function* () {
+					const ids = yield* Stream.runCollect(Db.stream(PG.from(Events).select("id").orderBy(["id", "asc"])))
+					yield* Db.afterCommit(Effect.sync(() => void ran.push(ids.map((row) => row.id))))
+					expect(ran).toEqual([])
+					return ids.length
+				}),
+			)
+			expect(seen).toBe(3)
+			expect(ran).toEqual([[1, 2, 3]])
+		}),
+	)
+
 	it.effect("fills params, and streams the RETURNING rows of a write", () =>
 		Effect.gen(function* () {
 			const byId = PG.from(Events)

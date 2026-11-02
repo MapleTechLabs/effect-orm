@@ -170,7 +170,9 @@ stream reads on the transaction's connection, so run it to the end before the bo
 
 How rows arrive is the driver's: `stream` uses the `SqlClient` statement's `.stream`. The
 ClickHouse clients read the response body as it comes. A driver with no streaming read, such as
-PGlite, reads the whole result first and then emits it row by row. A write streams its `RETURNING` rows, and one without `RETURNING` runs and emits nothing.
+PGlite, reads the whole result first and then emits it row by row. On `sqliteDialect` and
+`d1Dialect` the result is always read whole first, because Effect's SQLite and D1 drivers have no
+streaming read at all. A write streams its `RETURNING` rows, and one without `RETURNING` runs and emits nothing.
 The statement's span stays open until the stream ends and counts the rows it emitted.
 
 Build the `Database` wherever you build the client. If each request has its own pool, build a
