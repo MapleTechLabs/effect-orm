@@ -42,6 +42,7 @@ export {
 	ForeignKeyViolation,
 	NotNullViolation,
 	UniqueViolation,
+	InvalidCursor,
 	TenantScopeViolation,
 	TransactionClosed,
 	TransactionCommitFailed,
@@ -59,6 +60,14 @@ export {
 	type RepositoryOptions,
 	type TenantRepository,
 } from "./database/repository"
+export {
+	paginate,
+	type KeysetColumn,
+	type KeysetDirection,
+	type KeysetOrder,
+	type Page,
+	type PaginateOptions,
+} from "./database/paginate"
 export { QuerySummary, withQuerySummary } from "./database/tracing"
 export {
 	TestDatabase,

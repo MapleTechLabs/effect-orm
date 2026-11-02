@@ -1408,7 +1408,7 @@ export function selectedAliasesOf(query: CHQuery<any, any, any>): ReadonlyArray<
 }
 
 /** Evaluate a query's SELECT callback without compiling it. */
-function selectExprsOf(query: CHQuery<any, any, any>): Record<string, unknown> | undefined {
+export function selectExprsOf(query: CHQuery<any, any, any>): Record<string, unknown> | undefined {
 	return selectRecordOf(query._state, makeAccessor(query._state))
 }
 
@@ -1416,7 +1416,7 @@ function selectExprsOf(query: CHQuery<any, any, any>): Record<string, unknown> |
  * A query's SELECT list against accessor `$`: its callback's record, or for a
  * bare `select()` over a subquery or union, every alias that source selects.
  */
-function selectRecordOf(state: CHQueryState, $: any): Record<string, any> | undefined {
+export function selectRecordOf(state: CHQueryState, $: any): Record<string, any> | undefined {
 	const notNull = selectNotNullOf(state)
 	if (notNull !== undefined) $ = makeAccessor(state, notNull)
 	if (state.selectAll) {

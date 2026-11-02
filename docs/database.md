@@ -86,6 +86,7 @@ Calling `withdraw(1, 30)` outside `transfer` does not compile: `requireTransacti
 | `run(query, params?)` | Compile a query for the database's dialect, run it, decode its rows |
 | `runOne`, `runOption`, `runNonEmpty` | `run`, with a check on how many rows came back ([Cardinality](#cardinality)) |
 | `stream(query, params?)` | `run` as a `Stream`: each row decoded as it arrives |
+| `paginate(query, options, params?)` | One page of a query, by keyset, with a cursor for the next page ([Pagination](#pagination)) |
 | `sql\`...\`` | A statement with every `${value}` bound; `sql.identifier(name)` for a table or column name |
 | `query(statement, schema?)` | Run a statement and return its rows, decoded when a schema is given |
 | `execute(statement)` | Run a statement and discard its rows |
@@ -210,6 +211,55 @@ The statement's span stays open until the stream ends and counts the rows it emi
 Build the `Database` wherever you build the client. If each request has its own pool, build a
 `Database` per request from it: nothing request-scoped is stored in the `Database`, and the
 open transaction lives in fiber context.
+
+### Pagination
+
+`paginate` reads a query one page at a time by keyset. It adds a seek on the sort key, the
+`ORDER BY` and `LIMIT limit + 1`, then returns `limit` rows and a cursor for the next page. The
+extra row only tells if there is a next page. There is no `OFFSET`: the database goes to the
+cursor through an index on the key, and does not read and drop all earlier rows. A row added
+before the cursor does not move later pages.
+
+```ts
+const page = yield* Db.paginate(
+	PG.from(Posts)
+		.select("id", "createdAt", "title")
+		.where(($) => [$.orgId.eq(PG.param.string("orgId"))]),
+	{ orderBy: [["createdAt", "desc"], ["id", "desc"]], after: request.cursor, limit: 50 },
+	{ orgId },
+)  // { rows: ReadonlyArray<{ id; createdAt; title }>, nextCursor: Option<string> }
+```
+
+| Option | Meaning |
+| --- | --- |
+| `orderBy` | One or more selected aliases, each `"asc"` or `"desc"`. A nullable alias is a type error |
+| `after` | The `nextCursor` of the previous page; leave it out for the first page |
+| `limit` | Rows per page, a positive integer. Anything else fails with `QueryBuilderError` |
+
+The key must be unique, so end it with a unique column such as the primary key. `paginate`
+cannot check this: rows that tie on the whole key can be skipped at a page boundary.
+
+With one direction the seek is a row comparison, `("createdAt", "id") < ($2, $3)`, which
+Postgres and SQLite (D1 too) serve from an index on `(createdAt, id)` and ClickHouse compares
+as a tuple. With mixed directions it is `a >= x AND (a > x OR (a = x AND b < y))`.
+
+A NULL key has no place in the seek, and dialects disagree on where NULLs sort: ascending,
+SQLite puts them first, Postgres and ClickHouse last. So a nullable key is a type error,
+and a defect at run time when the types were bypassed.
+
+The cursor is base64url text. It holds the sort key and the last row's key values, encoded
+through the key columns' schemas, so a `DateTime.Utc` key comes back as the same instant. It
+is not encrypted or signed: do not put a value in the key that the reader must not see. A
+cursor that does not decode, or that was written for another `orderBy`, fails with
+`InvalidCursor`. It usually comes from a request, so answer it as a bad request.
+
+The query keeps its own `where`, so the tenant filter and params still apply. `paginate`
+replaces the query's `orderBy` and `limit`. A query with `offset`, `groupBy`, `having` or
+`distinctOn`, or a key that is not a selected alias, is a defect.
+
+`paginate` uses the `Database` in context; it is not a method on `DatabaseApi`. Its types are
+`PaginateOptions`, `Page`, `KeysetOrder`, `KeysetColumn` (an alias that can be a key) and
+`KeysetDirection`.
 
 ## Transactions
 

@@ -143,7 +143,8 @@ console.log(compiled.sql) // ... LIMIT 25 OFFSET 25
 Validate page sizes and indices as bounded non-negative integers before constructing a query.
 An offset is not a cursor: concurrent inserts can shift pages, and large offsets still require
 work. For a raw event feed, use a fixed time range and a cursor over a unique, stable sort key
-(such as timestamp plus event ID). The builder does not create or validate cursors for you.
+(such as timestamp plus event ID). `Db.paginate` does this for a query that is not grouped; see
+[Pagination](./database.md#pagination).
 
 ## Preserve large integer IDs
 

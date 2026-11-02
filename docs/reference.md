@@ -575,8 +575,8 @@ the default.
 | `ClickHouseStatementFromString`, `splitTerminalClauses`, `maskLiteralsAndComments`               | `/sql`            |
 | Schema tooling: `isSchemaObject`, `makeSnapshot`, `renderSchema`, `diffSchemas`, `diffPgSchemas`, `fromDrizzleSnapshot`, snapshot and entity schemas (`PgEnumEntity`, `PgUniqueEntity`, …), `Hint`; for SQLite, `sqliteEntitiesOf`, `renderSqliteSchema`, `renderSqliteCreateTable`, `renderSqliteCreateIndex`, `diffSqliteSchemas`, `fromDrizzleSqliteSnapshot`, `SqliteMigrationOp`, `renderSqliteOp`, `renderSqliteMigrationSql`, `labelOfSqlite`, `rebuildName`, the `SqliteSnapshot` schema and the `SqliteTableEntity`, `SqliteColumnEntity`, `SqliteIndexEntity`, `SqliteUniqueEntity` schemas | `/schema`         |
 | `run`, `status`, `verify`, `verifySnapshot`, `baseline`, `MigrationDriver` and the migrate errors | `/migrate`        |
-| `Database`, `run`, `runOne`, `runOption`, `runNonEmpty`, `stream`, `sql`, `query`, `execute`, `transaction`, `requireTransaction`, `afterCommit`, `retryContention`, `Transaction` | `/database` |
-| `DatabaseError`, `ResultCardinalityError`, `TransactionCommitFailed`, `TransactionRollbackFailed` and the other transaction errors | `/database` |
+| `Database`, `run`, `runOne`, `runOption`, `runNonEmpty`, `stream`, `paginate`, `sql`, `query`, `execute`, `transaction`, `requireTransaction`, `afterCommit`, `retryContention`, `Transaction` | `/database` |
+| `DatabaseError`, `ResultCardinalityError`, `InvalidCursor`, `TransactionCommitFailed`, `TransactionRollbackFailed` and the other transaction errors | `/database` |
 | `refineConstraints`, `constraintViolation`, and the `ConstraintViolation` errors `UniqueViolation`, `ForeignKeyViolation`, `NotNullViolation`, `CheckViolation` | `/database` |
 | `makeRepository`, `Repository`, `TenantRepository`, `RepositoryOf`, `RepositoryOptions`, `RepositoryError` — CRUD derived from a table, tenant-pinned | `/database` |
 | `findById`, `findAllBy`, `FindById`, `FindAllBy`, `LookupOptions`, `LookupError` — batched lookups by a key, one `IN` statement per batch | `/database` |
