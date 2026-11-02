@@ -73,11 +73,7 @@ describe("seed", () => {
 						)
 						return { seeded, read, sent }
 					}).pipe(
-						// A server with fast float parsing (`precise_float_parsing = 0`, as on ClickHouse 26.2)
-						// can read a Float64 literal one ulp off; the test checks the seed, not the parser.
-						Effect.provide(
-							ClickhouseClient.layer({ url: endpoint!, username: user, password, database, clickhouse_settings: { precise_float_parsing: 1 } }),
-						),
+						Effect.provide(ClickhouseClient.layer({ url: endpoint!, username: user, password, database })),
 						Effect.ensuring(Effect.orDie(admin.asCommand(admin.unsafe(`DROP DATABASE IF EXISTS ${database} SYNC`)))),
 					)
 				}).pipe(Effect.provide(ClickhouseClient.layer({ url: endpoint!, username: user, password, database: "default" }))),
@@ -86,7 +82,13 @@ describe("seed", () => {
 			const expected = [...seeded]
 				.sort((a, b) => a.Id - b.Id)
 				.map(({ OrgId: _, ...row }) => ({ ...row, Version: 1 }))
-			expect(read.map(normalize)).toEqual(expected.map(normalize))
+			// ClickHouse 26.2 parses some Float64 VALUES one ulp off (26.8 reads them exactly, and
+			// `precise_float_parsing` does not reach the VALUES parser there), so Ratio is compared
+			// to the precision a double keeps and every other column exactly.
+			const close = (a: number, b: number) => Math.abs(a - b) <= Math.abs(a) * 4 * Number.EPSILON
+			read.forEach((row, i) => expect(close(row.Ratio, expected[i]!.Ratio), `Ratio ${row.Ratio} vs ${expected[i]!.Ratio}`).toBe(true))
+			const withoutRatio = ({ Ratio: _, ...row }: { readonly Ratio: number }) => row
+			expect(read.map(withoutRatio).map(normalize)).toEqual(expected.map(withoutRatio).map(normalize))
 		})
 	})
 })
