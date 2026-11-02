@@ -2,6 +2,8 @@
 
 import { expectTypeOf } from "expect-type"
 import * as CH from "./index"
+import * as PG from "../postgres"
+import * as SQLite from "../sqlite"
 import type { InferQueryOutput } from "./query"
 
 const Units = CH.table("units", { Id: CH.string, OrgId: CH.string, Name: CH.string })
@@ -125,3 +127,21 @@ expectTypeOf<Row<typeof sub>>().toEqualTypeOf<{ readonly unitId: string; readonl
 // The compiled query carries the narrowed row
 
 expectTypeOf(CH.compileUnsafe(notNull, {})).toEqualTypeOf<CH.CompiledQuery<Row<typeof notNull>, undefined>>()
+
+// The /sqlite and /postgres entries narrow the same way, their own nullable types included
+
+const Accounts = SQLite.table("accounts", { id: SQLite.text })
+const Profiles = SQLite.table("profiles", { accountId: SQLite.text, bio: SQLite.nullable(SQLite.text), age: SQLite.integer })
+const sqliteNarrowed = SQLite.from(Accounts)
+	.leftJoin(Profiles, "p", (a, p) => a.id.eq(p.accountId))
+	.where(($) => [$.p.bio.isNotNull()])
+	.select(($) => ({ bio: $.p.bio, age: $.p.age }))
+expectTypeOf<Row<typeof sqliteNarrowed>>().toEqualTypeOf<{ readonly bio: string; readonly age: number | null }>()
+expectTypeOf(SQLite.compileUnsafe(sqliteNarrowed, {})).toEqualTypeOf<SQLite.CompiledQuery<Row<typeof sqliteNarrowed>, undefined>>()
+
+const Members = PG.table("members", { columns: { id: PG.int4, accountId: PG.text, leftAt: PG.nullable(PG.text) } })
+const pgNarrowed = PG.from(Accounts)
+	.leftJoin(Members, "m", (a, m) => a.id.eq(m.accountId))
+	.where(($) => [$.m.leftAt.eq("x")])
+	.select(($) => ({ leftAt: $.m.leftAt, id: $.m.id }))
+expectTypeOf<Row<typeof pgNarrowed>>().toEqualTypeOf<{ readonly leftAt: string; readonly id: number | null }>()

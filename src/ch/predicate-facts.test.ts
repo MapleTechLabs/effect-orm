@@ -2,6 +2,7 @@ import { describe, expect, it } from "@effect/vitest"
 import { Effect, Exit } from "effect"
 import * as CH from "./index"
 import * as PG from "../postgres"
+import * as SQLite from "../sqlite"
 
 const Units = CH.table("units", { Id: CH.string, Name: CH.string })
 const Locks = CH.table("locks", { Id: CH.string, UnitId: CH.string, Battery: CH.uint8, Serial: CH.nullable(CH.string) })
@@ -87,5 +88,19 @@ describe("predicate facts narrow the row schema", () => {
 		)
 		expect(decodes(compiled, { leftAt: "2026-01-01T00:00:00Z", id: null })).toBe(true)
 		expect(decodes(compiled, { leftAt: null, id: 1 })).toBe(false)
+	})
+
+	it("narrows the same way on SQLite and D1", () => {
+		const Accounts = SQLite.table("accounts", { id: SQLite.text })
+		const Profiles = SQLite.table("profiles", { accountId: SQLite.text, bio: SQLite.nullable(SQLite.text), age: SQLite.integer })
+		const query = SQLite.from(Accounts)
+			.leftJoin(Profiles, "p", (a, p) => a.id.eq(p.accountId))
+			.where(($) => [$.p.bio.isNotNull()])
+			.select(($) => ({ bio: $.p.bio, age: $.p.age }))
+		for (const compiled of [SQLite.compileUnsafe(query, {}), SQLite.compileUnsafe(query, {}, { dialect: SQLite.d1Dialect })]) {
+			expect(compiled.sql).toContain(`"p"."bio" IS NOT NULL`)
+			expect(decodes(compiled, { bio: "hi", age: null })).toBe(true)
+			expect(decodes(compiled, { bio: null, age: 1 })).toBe(false)
+		}
 	})
 })
