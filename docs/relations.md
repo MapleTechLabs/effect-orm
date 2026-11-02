@@ -179,7 +179,8 @@ Two ways, for two shapes of read:
   only the rows that match. Only a `many` relation can be counted. It runs one statement per
   counted relation, the same way as a level of `with`:
   `SELECT <to>, count(*) FROM <target> WHERE <to> IN (<keys>) [AND <tenant pin>] GROUP BY <to>`.
-  A row with no related rows gets `0`.
+  A row with no related rows gets `0`. Its keys are split to the bound-value limit like a level
+  of `with`.
 - **`r.posts.count(where?)` on a query**, an `Expr<number>`: a correlated
   `coalesce((SELECT count(*) …), 0)`. Use it in a builder `select`, or in a `where` such as
   `Db.related(schema.users, $).posts.count().gte(2)`.
@@ -219,6 +220,14 @@ on by default in 26.8). On 26.8:
 - `_count` needs no correlation, so it works on every version.
 
 _(Backed by `tests/relation-filters.clickhouse.test.ts`.)_
+
+## On SQLite and D1
+
+The filters, `count()` and `_count` are plain correlated `EXISTS` and `count(*)`, so they run on
+SQLite and D1 as on Postgres, with the same tenant rule. Each filter binds its own `where` values
+inside the outer statement, so they count toward D1's 100 bound values.
+
+_(Backed by `src/sqlite/relations.test.ts`.)_
 
 ## Not yet
 
