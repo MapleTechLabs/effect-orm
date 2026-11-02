@@ -36,6 +36,9 @@ executor own those responsibilities.
 4. [Benchmark a change](./benchmarking.md) with a fixed workload and saved baseline.
 5. Consult [Troubleshooting](./troubleshooting.md) if installation or results differ from expectations.
 
+Coming from another ORM? [Coming from Drizzle or Prisma](./coming-from-drizzle-prisma.md) maps
+their operations to effect-orm, with one checked program and a Cloudflare Worker sketch.
+
 The named complete examples are extracted from Markdown, typechecked, and exercised by
 [`check-doc-examples.mjs`](../scripts/check-doc-examples.mjs). Focused behavior tests also live in
 [`src/docs-examples.test.ts`](../src/docs-examples.test.ts). Client execution requires a server;
@@ -68,6 +71,7 @@ Roughly in reading order.
 | [Testing your code](./testing.md#testing-your-own-code-layertest) | `layerTest`: a `Database` with no server for unit tests              |
 | [Seeding](./seeding.md)                               | Deterministic test and demo rows from the column Schemas: `rows`, `insert`, `arbitrary` |
 | [Relational reads](./relations.md)                    | `defineRelations`, `findMany` with nested `with`, tenant scope per level            |
+| [Coming from Drizzle or Prisma](./coming-from-drizzle-prisma.md) | Their operations mapped to effect-orm, what differs by design, a Worker on Hyperdrive |
 
 ## Reference
 
