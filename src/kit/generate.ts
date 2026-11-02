@@ -10,6 +10,7 @@ import { fromRecord, isStagingName, STATEMENT_BREAKPOINT, type LoadedMigration, 
 import type { MigrationDriver } from "../migrate/driver"
 import { diffSchemas, type DiffResult, type Hint } from "../schema/diff"
 import { fromDrizzleSnapshot } from "../schema/drizzle"
+import { fromDrizzleSqliteSnapshot } from "../schema/sqlite-drizzle"
 import { ORIGIN_ID, type AnySchemaEntity, type SchemaDialect, type SchemaEntity } from "../schema/entities"
 import type { SchemaDefinitionError } from "../schema/problems"
 import { labelOf, renderOp, type MigrationFile, type MigrationOp } from "../schema/ops"
@@ -17,6 +18,10 @@ import { diffPgSchemas } from "../schema/pg-diff"
 import type { PgSchemaEntity } from "../schema/pg-entities"
 import { labelOfPg, renderPgOp, type PgMigrationOp } from "../schema/pg-ops"
 import type { RenderOptions } from "../schema/render"
+import { sqliteEntitiesOf, type SqliteSchemaTable } from "../schema/sqlite-define"
+import { diffSqliteSchemas } from "../schema/sqlite-diff"
+import type { SqliteSchemaEntity } from "../schema/sqlite-entities"
+import { labelOfSqlite, renderSqliteMigrationSql, renderSqliteOp, type SqliteMigrationOp } from "../schema/sqlite-ops"
 import {
 	dialectOfObject,
 	entitiesOf,
@@ -31,7 +36,7 @@ import { analyze, type GraphProblem } from "./graph"
 export interface KitConfig {
 	/** The database this folder migrates. Default `clickhouse`. */
 	readonly dialect?: SchemaDialect
-	/** Modules whose exports include `table` / `materializedView` values from `/clickhouse` or `/postgres`. */
+	/** Modules whose exports include `table` / `materializedView` values from `/clickhouse`, `/postgres` or `/sqlite`. */
 	readonly schema: string | ReadonlyArray<string>
 	/** The migrations folder. */
 	readonly out: string
@@ -43,6 +48,7 @@ export interface KitConfig {
 	 * What a generated Postgres migration holds. `ops` (default) writes `migration.json`;
 	 * `sql` writes the rendered statements to `migration.sql`, split by
 	 * `--> statement-breakpoint`, so a tool that applies drizzle-kit folders applies it too.
+	 * A SQLite migration is always `migration.sql`.
 	 */
 	readonly emit?: "ops" | "sql"
 }
@@ -193,13 +199,16 @@ export const generate = (config: KitConfig, cwd: string, options: GenerateOption
 		}
 
 		let file: MigrationFile | undefined
+		/** A SQLite migration is SQL: there is no ops file for it. */
+		let sqliteOps: ReadonlyArray<SqliteMigrationOp> | undefined
 		let snapshotEntities: ReadonlyArray<AnySchemaEntity>
 		let prevIds = analysis.baseIds
 		if (options.baseline === "drizzle") {
-			if (dialect !== "postgres") return yield* new KitError({ code: "config", message: "--from-drizzle needs dialect: \"postgres\"" })
+			if (dialect === "clickhouse") return yield* new KitError({ code: "config", message: "--from-drizzle needs dialect: \"postgres\" or \"sqlite\"" })
 			const source = [...analysis.legacy].reverse().find((m) => m.foreignSnapshot?.tool === "drizzle-kit")
 			if (source === undefined) return yield* new KitError({ code: "config", message: "no drizzle-kit snapshot.json in the folder to start from" })
-			const imported = fromDrizzleSnapshot(source.foreignSnapshot!.json)
+			const imported =
+				dialect === "sqlite" ? fromDrizzleSqliteSnapshot(source.foreignSnapshot!.json) : fromDrizzleSnapshot(source.foreignSnapshot!.json)
 			if (imported.unsupported.length > 0) {
 				return yield* new KitError({
 					code: "unsupported",
@@ -212,7 +221,11 @@ export const generate = (config: KitConfig, cwd: string, options: GenerateOption
 		} else {
 			const objects = yield* loadSchema(config, cwd)
 			const entities: Effect.Effect<ReadonlyArray<AnySchemaEntity>, SchemaDefinitionError> =
-				dialect === "postgres" ? pgEntitiesOf(objects) : entitiesOf(objects)
+				dialect === "postgres"
+					? pgEntitiesOf(objects)
+					: dialect === "sqlite"
+						? sqliteEntitiesOf(objects as ReadonlyArray<SqliteSchemaTable<string, any>>)
+						: entitiesOf(objects)
 			const next = yield* entities.pipe(
 				Effect.mapError(
 					(error) =>
@@ -228,10 +241,12 @@ export const generate = (config: KitConfig, cwd: string, options: GenerateOption
 			else if (options.custom === true) snapshotEntities = analysis.base
 			else {
 				const hints = [...(options.hints ?? [])]
-				const diff = (): DiffResult<MigrationOp | PgMigrationOp> =>
+				const diff = (): DiffResult<MigrationOp | PgMigrationOp | SqliteMigrationOp> =>
 					dialect === "postgres"
 						? diffPgSchemas(analysis.base as ReadonlyArray<PgSchemaEntity>, next as ReadonlyArray<PgSchemaEntity>, hints)
-						: diffSchemas(analysis.base as ReadonlyArray<SchemaEntity>, next as ReadonlyArray<SchemaEntity>, hints)
+						: dialect === "sqlite"
+							? diffSqliteSchemas(analysis.base as ReadonlyArray<SqliteSchemaEntity>, next as ReadonlyArray<SqliteSchemaEntity>, hints)
+							: diffSchemas(analysis.base as ReadonlyArray<SchemaEntity>, next as ReadonlyArray<SchemaEntity>, hints)
 				let result = diff()
 				if (result.unsupported.length > 0) {
 					return yield* new KitError({
@@ -254,10 +269,9 @@ export const generate = (config: KitConfig, cwd: string, options: GenerateOption
 					})
 				}
 				if (result.ops.length === 0) return { written: undefined, plan: [] } satisfies GenerateResult
-				file =
-					dialect === "postgres"
-						? { version: "1", dialect: "postgres", ops: result.ops as ReadonlyArray<PgMigrationOp> }
-						: { version: "1", ops: result.ops as ReadonlyArray<MigrationOp> }
+				if (dialect === "sqlite") sqliteOps = result.ops as ReadonlyArray<SqliteMigrationOp>
+				else if (dialect === "postgres") file = { version: "1", dialect: "postgres", ops: result.ops as ReadonlyArray<PgMigrationOp> }
+				else file = { version: "1", ops: result.ops as ReadonlyArray<MigrationOp> }
 			}
 		}
 
@@ -269,29 +283,31 @@ export const generate = (config: KitConfig, cwd: string, options: GenerateOption
 		// Written aside and renamed into place, so a reader never sees half a migration.
 		yield* Effect.gen(function* () {
 			yield* io(() => mkdir(staging, { recursive: true }), `Cannot create ${staging}`)
-			yield* io(
-				() =>
-					file === undefined
-						? writeFile(
-								join(staging, "migration.sql"),
+			const [fileName, contents] =
+				sqliteOps !== undefined
+					? ["migration.sql", renderSqliteMigrationSql(sqliteOps, STATEMENT_BREAKPOINT)]
+					: file === undefined
+						? [
+								"migration.sql",
 								options.baseline !== undefined
 									? "-- Baseline: the schema as it stood when effect-orm took over this folder. Runs nothing.\n"
 									: "-- Custom SQL migration. Separate statements with a line holding only:\n-- --> statement-breakpoint\n",
-							)
+							]
 						: "dialect" in file && config.emit === "sql"
-							? writeFile(join(staging, "migration.sql"), renderPgSqlFile(file.ops))
-							: writeFile(join(staging, "migration.json"), `${JSON.stringify(file, null, "\t")}\n`),
-				`Cannot write ${dir}`,
-			)
+							? ["migration.sql", renderPgSqlFile(file.ops)]
+							: ["migration.json", `${JSON.stringify(file, null, "\t")}\n`]
+			yield* io(() => writeFile(join(staging, fileName), contents), `Cannot write ${dir}`)
 			yield* io(() => writeFile(join(staging, "snapshot.json"), serializeSnapshot(snapshot)), `Cannot write ${dir}`)
 			yield* io(() => rename(staging, dir), `Cannot move ${staging} to ${dir}`)
 		}).pipe(Effect.onError(() => Effect.promise(() => rm(staging, { recursive: true, force: true }).catch(() => undefined))))
 
 		const plan =
-			file === undefined
-				? []
-				: "dialect" in file
-					? file.ops.map((op) => ({ label: labelOfPg(op), sql: renderPgOp(op) }))
-					: file.ops.map((op) => ({ label: labelOf(op), sql: renderOp(op, config.render) }))
+			sqliteOps !== undefined
+				? sqliteOps.map((op) => ({ label: labelOfSqlite(op), sql: renderSqliteOp(op) }))
+				: file === undefined
+					? []
+					: "dialect" in file
+						? file.ops.map((op) => ({ label: labelOfPg(op), sql: renderPgOp(op) }))
+						: file.ops.map((op) => ({ label: labelOf(op), sql: renderOp(op, config.render) }))
 		return { written: dir, plan } satisfies GenerateResult
 	})
