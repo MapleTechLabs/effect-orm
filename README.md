@@ -210,6 +210,7 @@ Full guides live in [`docs/`](./docs/README.md):
 | [Decoding results](./docs/decoding-results.md)             | `rowSchema`, `decodeRows`, decode errors                        |
 | [Running a query](./docs/running-queries.md)               | Executing the SQL with a real client, wire settings, `SETTINGS` |
 | [Tenant scoping](./docs/tenant-scoping.md)                 | `tenantColumn`, what marks a query scoped, `crossTenant()`      |
+| [Relational reads](./docs/relations.md)                    | `defineRelations`, `findMany` with nested `with`                |
 | [Postgres](./docs/postgres.md)                             | The Postgres dialect, its column types and functions            |
 | [Schema and migrations](./docs/migrations.md)              | DDL from `table`, `effect-orm generate`, applying migrations    |
 | [Extending the DSL](./docs/extending.md)                   | `defineFn`, raw escape hatches, handwritten SQL                 |

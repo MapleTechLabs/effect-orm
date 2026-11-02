@@ -67,6 +67,7 @@ Roughly in reading order.
 | [Statements and transactions](./database.md)          | `Database` over your `SqlClient`: `run`, `execute`, `transaction`, retry, repositories |
 | [Testing your code](./testing.md#testing-your-own-code-layertest) | `layerTest`: a `Database` with no server for unit tests              |
 | [Seeding](./seeding.md)                               | Deterministic test and demo rows from the column Schemas: `rows`, `insert`, `arbitrary` |
+| [Relational reads](./relations.md)                    | `defineRelations`, `findMany` with nested `with`, tenant scope per level            |
 
 ## Reference
 
