@@ -1,0 +1,5 @@
+---
+"@maple-dev/effect-orm": minor
+---
+
+A query that cannot compile for its target is now a type error, not only a failure at compile time. A built-in function of one dialect (`CH.countIf`, `PG.countIf`, `SQLite.count`, ...) marks its result with `ClickHouseOnly`, `PostgresOnly` or `SqliteOnly` (SQLite and D1 share one set), and `compile`, `compileUnion` and `run` refuse a query with a function of another dialect (`wrongDialect`), or with functions of two (`mixedDialects`). Row locks (`forUpdate`, `forShare`, ...) are refused the same way for ClickHouse, SQLite and D1 (`unsupportedClause`), as only Postgres writes them. The target is `options.dialect`, else the entry's dialect; `fromSqlClient` now returns a `DatabaseApi<"postgres">`, `DatabaseApi<"clickhouse">` or `DatabaseApi<"sqlite">` whose `run` checks it. A column ref now names its source (`SourceEntry`), and a query refuses a column of a source that is not in its FROM or JOIN (`sourceNotInQuery`); a correlated subquery can use the outer query's accessor. The runtime checks stay. Also, `orderBy(($) => [...])` now carries the params of every sort key, not only the first.

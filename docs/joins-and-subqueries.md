@@ -119,6 +119,11 @@ CH.from(Services, "s")
 	.where(($) => [$.OrgId.eq("org_123"), CH.exists(inner)])
 ```
 
+Or build the inner query inside the outer callback and use the outer accessor: `e.Name.eq($.Name)`
+writes `s.Name`, and the type checks that the outer query has a source `s` (see
+[Checked in the type](./params-and-compilation.md#checked-in-the-type)). A string `outerRef` is
+not checked.
+
 All three also accept a pre-compiled SQL string, for the rare case where that is all you have.
 
 > **A subquery never scopes its outer query.** `WHERE x IN (SELECT y FROM t WHERE OrgId = 'a')`

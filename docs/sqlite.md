@@ -184,7 +184,12 @@ written as decimal text, because SQLite reads some decimals as a neighbouring do
 fraction compared with an `integer` column (`Amount > 9.75`) compiles as on Postgres. It refuses these unsupported forms at compile time:
 
 - `DISTINCT ON`, row locks and `ILIKE`. Use `LIKE`, which on SQLite ignores ASCII case
-  (`'acme' LIKE 'ACME'` is true, unlike Postgres and ClickHouse).
+  (`'acme' LIKE 'ACME'` is true, unlike Postgres and ClickHouse). A row lock is refused in the
+  type as well: `SQLite.compile(q.forUpdate())` and `run` on a SQLite or D1 `Database` do not
+  typecheck. Claim a row with a conditional `update(…).where(…).returning(…)` instead. A
+  Postgres or ClickHouse function in a SQLite query, and a SQLite function in a Postgres or
+  ClickHouse one, are type errors too; see
+  [Checked in the type](./params-and-compilation.md#checked-in-the-type).
 - Text containing U+0000. SQLite stores it, but its drivers end text there, so the value would
   read back cut short; the builder refuses it in literals and bound params.
 - `ON CONSTRAINT` conflict targets. Name the indexed columns instead.

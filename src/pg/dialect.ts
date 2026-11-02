@@ -95,7 +95,7 @@ const transactionModes = (settings: TransactionSettings): string | undefined => 
  * rather than ClickHouse's `1`/`0`, and `param.dateTime` an ISO-8601 instant
  * rather than a zoneless string a session time zone could reinterpret.
  */
-export const postgresDialect: Dialect = {
+export const postgresDialect: Dialect<"postgres"> = {
 	name: "postgres",
 	functions: "postgres",
 	quoteIdent,

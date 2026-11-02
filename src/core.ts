@@ -82,6 +82,7 @@ export { param, paramPlaceholder, type ParamKind, type ParamMarker } from "./ch/
 
 // Query builder
 export {
+	type BindSources,
 	type CHQuery,
 	type ColumnAccessor,
 	type JoinedColumnAccessor,
@@ -89,6 +90,7 @@ export {
 	type InferOutput,
 	type InferQueryOutput,
 	type LockOptions,
+	type RowLock,
 	// What `compile` asks of a query, for a wrapper generic over its output.
 	type NeedsSelect,
 	from,
@@ -99,12 +101,20 @@ export {
 // declarations. Without them public, `tsc --declaration` fails with TS4023 /
 // TS2742 pointing into a hashed internal chunk.
 export {
+	type ClauseEntry,
+	type DialectEntry,
+	type DialectSatisfied,
+	type DialectsIn,
 	type OptionalParamEntry,
 	type OptionalParams,
 	type ParamEntry,
 	type ParamsIn,
 	type ParamsSatisfied,
+	type SourceEntry,
+	type SourceOf,
+	type SourcesSatisfied,
 } from "./ch/expr"
+export type { ClickHouseOnly, PostgresOnly, SqliteOnly } from "./ch/functions/builtin"
 
 export {
 	type CHInsert,
@@ -141,8 +151,14 @@ export {
 	type CompiledQueryInput,
 	type CompiledQueryRowSchema,
 	type CHWrite,
+	type Compile,
+	type CompileUnion,
+	type CompileUnionUnsafe,
+	type CompileUnsafe,
 	type InsertCompileOptions,
+	type QueryCompileOptions,
 	type RowSchemaMismatch,
+	type UnionCompileOptions,
 	type TenantScope,
 	CompiledQueryDecodeError,
 	CompiledQueryEncodeError,

@@ -45,6 +45,8 @@ it("refuses unsupported SQLite syntax while compiling, before sending SQL", () =
 		.onConflictDoNothing({ target: { constraint: "items_pkey" } }))).toThrow(/ON CONSTRAINT/)
 	expect(() => SQLite.compileUnsafe(SQLite.from(Items).select("id").distinctOn("id"))).toThrow(/DISTINCT ON/)
 	expect(() => SQLite.compileUnsafe(SQLite.from(Items).select("id").where(($) => [$.note.ilike("a%")]))).toThrow(/ILIKE/)
+	// The type refuses it too (see `RowLock`); this is the run-time net.
+	// @ts-expect-error -- FOR UPDATE has no meaning for the sqlite dialect
 	expect(() => SQLite.compileUnsafe(SQLite.from(Items).select("id").forUpdate())).toThrow(/row locks/)
 })
 

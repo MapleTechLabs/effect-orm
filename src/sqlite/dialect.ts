@@ -30,7 +30,7 @@ const literal = (value: unknown, context: string): string => {
 }
 
 /** SQLite with positional bindings and transactions supplied by the caller's SqlClient. */
-export const sqliteDialect: Dialect = {
+export const sqliteDialect: Dialect<"sqlite"> = {
 	name: "sqlite",
 	functions: "sqlite",
 	ilike: false,
@@ -77,7 +77,7 @@ export const sqliteDialect: Dialect = {
 }
 
 /** D1 executes SQLite SQL, limits each statement to 100 bindings, and has no interactive transactions. */
-export const d1Dialect: Dialect = {
+export const d1Dialect: Dialect<"sqlite"> = {
 	...sqliteDialect,
 	name: "d1",
 	params: { ...sqliteDialect.params, _tag: "bind", placeholder: () => "?", reuse: false, maxParameters: 100 },

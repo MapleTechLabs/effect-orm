@@ -3,11 +3,11 @@ import { expectTypeOf } from "expect-type"
 import * as CH from "./index"
 
 const values = CH.arrayFilter("x -> x > 0", CH.arrayOf(CH.lit(1)))
-expectTypeOf(values).toEqualTypeOf<CH.Expr<ReadonlyArray<number>>>()
+expectTypeOf(values).toEqualTypeOf<CH.Expr<ReadonlyArray<number>, CH.ClickHouseOnly>>()
 const nullable = CH.arrayFilter("x -> isNotNull(x)", CH.arrayOf(CH.nullIf(CH.lit(1), 1)))
 // A handwritten predicate cannot prove that NULL has been removed.
-expectTypeOf(nullable).toEqualTypeOf<CH.Expr<ReadonlyArray<number | null>>>()
-expectTypeOf(CH.arrayJoin(values)).toEqualTypeOf<CH.Expr<number>>()
+expectTypeOf(nullable).toEqualTypeOf<CH.Expr<ReadonlyArray<number | null>, CH.ClickHouseOnly>>()
+expectTypeOf(CH.arrayJoin(values)).toEqualTypeOf<CH.Expr<number, CH.ClickHouseOnly>>()
 // @ts-expect-error arrayFilter requires an array
 CH.arrayFilter("x -> x > 0", CH.lit(1))
 // @ts-expect-error filtered numeric elements cannot become strings
@@ -19,8 +19,8 @@ expectTypeOf<CH.InferQueryOutput<typeof query>>().toEqualTypeOf<{
 }>()
 
 // Public overloads already protect toDateTime's implementation signature.
-expectTypeOf(CH.toDateTime(CH.lit(1))).toEqualTypeOf<CH.Expr<DateTime.Utc>>()
-expectTypeOf(CH.toDateTime(CH.lit("2026-01-01"))).toEqualTypeOf<CH.Expr<string>>()
+expectTypeOf(CH.toDateTime(CH.lit(1))).toEqualTypeOf<CH.Expr<DateTime.Utc, CH.ClickHouseOnly>>()
+expectTypeOf(CH.toDateTime(CH.lit("2026-01-01"))).toEqualTypeOf<CH.Expr<string, CH.ClickHouseOnly>>()
 // @ts-expect-error arrays cannot be converted to DateTime
 CH.toDateTime(values)
 

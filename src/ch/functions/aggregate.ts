@@ -8,7 +8,7 @@ import { type DateTime, Schema } from "effect"
 import * as T from "../types"
 
 import { schemaOf } from "../define-fn"
-import { builtins } from "./builtin"
+import { builtins, type ClickHouseOnly } from "./builtin"
 
 const { compileTypedFnCall, defineFn, lazy } = builtins("clickhouse", "aggregate")
 
@@ -24,7 +24,7 @@ export const count = defineFn<[], number>("count", T.uint64)
 export const avg = defineFn<[Expr<number | null>], number | null>("avg", T.nullable(T.float64))
 // A finite Float64 input can overflow during accumulation; the resulting
 // infinity decodes as NaN (see `overflowResultSchema`).
-export const sum = <N extends number | null, Q = never>(expr: Expr<N, Q>): Expr<number | Extract<N, null>, Q> =>
+export const sum = <N extends number | null, Q = never>(expr: Expr<N, Q>): Expr<number | Extract<N, null>, Q | ClickHouseOnly> =>
 	compileTypedFnCall("sum", overflowResultSchema(expr), expr)
 
 // Condition-taking aggregates
@@ -33,16 +33,16 @@ export const countIf = defineFn<[Condition], number>("countIf", T.uint64)
 export const sumIf = <N extends number | null, Q1 = never, Q2 = never>(
 	expr: Expr<N, Q1>,
 	condition: Condition<Q2>,
-): Expr<number | Extract<N, null>, Q1 | Q2> => compileTypedFnCall("sumIf", overflowResultSchema(expr), expr, condition)
+): Expr<number | Extract<N, null>, Q1 | Q2 | ClickHouseOnly> => compileTypedFnCall("sumIf", overflowResultSchema(expr), expr, condition)
 export const avgIf = defineFn<[Expr<number | null>, Condition], number | null>("avgIf", T.nullable(T.float64))
 export const maxIf = <N extends number | null, Q1 = never, Q2 = never>(
 	expr: Expr<N, Q1>,
 	condition: Condition<Q2>,
-): Expr<number | Extract<N, null>, Q1 | Q2> => compileTypedFnCall("maxIf", numericResultSchema(expr), expr, condition)
+): Expr<number | Extract<N, null>, Q1 | Q2 | ClickHouseOnly> => compileTypedFnCall("maxIf", numericResultSchema(expr), expr, condition)
 export const minIf = <N extends number | null, Q1 = never, Q2 = never>(
 	expr: Expr<N, Q1>,
 	condition: Condition<Q2>,
-): Expr<number | Extract<N, null>, Q1 | Q2> => compileTypedFnCall("minIf", numericResultSchema(expr), expr, condition)
+): Expr<number | Extract<N, null>, Q1 | Q2 | ClickHouseOnly> => compileTypedFnCall("minIf", numericResultSchema(expr), expr, condition)
 
 // Generic aggregates (compileFnCall for type preservation)
 
@@ -54,16 +54,16 @@ export const minIf = <N extends number | null, Q1 = never, Q2 = never>(
 // here (as an earlier version did with `NonNullable<T>`) lied to every caller
 // while `sameAs(0)` kept the nullable runtime codec.
 
-export const min_ = <T, Q = never>(expr: Expr<T, Q>): Expr<T, Q> => compileTypedFnCall("min", schemaOf<T>(expr), expr)
+export const min_ = <T, Q = never>(expr: Expr<T, Q>): Expr<T, Q | ClickHouseOnly> => compileTypedFnCall("min", schemaOf<T>(expr), expr)
 
-export const max_ = <T, Q = never>(expr: Expr<T, Q>): Expr<T, Q> => compileTypedFnCall("max", schemaOf<T>(expr), expr)
+export const max_ = <T, Q = never>(expr: Expr<T, Q>): Expr<T, Q | ClickHouseOnly> => compileTypedFnCall("max", schemaOf<T>(expr), expr)
 
-export const any_ = <T, Q = never>(expr: Expr<T, Q>): Expr<T, Q> => compileTypedFnCall("any", schemaOf<T>(expr), expr)
+export const any_ = <T, Q = never>(expr: Expr<T, Q>): Expr<T, Q | ClickHouseOnly> => compileTypedFnCall("any", schemaOf<T>(expr), expr)
 
-export const anyIf = <T, Q1 = never, Q2 = never>(expr: Expr<T, Q1>, cond: Condition<Q2>): Expr<T, Q1 | Q2> =>
+export const anyIf = <T, Q1 = never, Q2 = never>(expr: Expr<T, Q1>, cond: Condition<Q2>): Expr<T, Q1 | Q2 | ClickHouseOnly> =>
 	compileTypedFnCall("anyIf", schemaOf<T>(expr), expr, cond)
 
-export const uniq = <T, Q = never>(expr: Expr<T, Q>): Expr<number, Q> => compileTypedFnCall("uniq", T.uint64.schema, expr)
+export const uniq = <T, Q = never>(expr: Expr<T, Q>): Expr<number, Q | ClickHouseOnly> => compileTypedFnCall("uniq", T.uint64.schema, expr)
 
 /**
  * `uniqIf(value, condition)` — distinct `value`s among the rows matching
@@ -73,7 +73,7 @@ export const uniq = <T, Q = never>(expr: Expr<T, Q>): Expr<number, Q> => compile
  * `countIf` on a `ReplacingMergeTree`: un-merged duplicate rows for the same
  * key would inflate a `countIf` but not a `uniqIf` on that key.
  */
-export const uniqIf = <T, Q1 = never, Q2 = never>(expr: Expr<T, Q1>, cond: Condition<Q2>): Expr<number, Q1 | Q2> =>
+export const uniqIf = <T, Q1 = never, Q2 = never>(expr: Expr<T, Q1>, cond: Condition<Q2>): Expr<number, Q1 | Q2 | ClickHouseOnly> =>
 	compileTypedFnCall("uniqIf", T.uint64.schema, expr, cond)
 
 /**
@@ -83,10 +83,10 @@ export const uniqIf = <T, Q1 = never, Q2 = never>(expr: Expr<T, Q1>, cond: Condi
  * number sits next to the rows it counts: a facet count that disagrees with the
  * visible list reads as a bug, not as an approximation.
  */
-export const uniqExact = <T, Q = never>(expr: Expr<T, Q>): Expr<number, Q> =>
+export const uniqExact = <T, Q = never>(expr: Expr<T, Q>): Expr<number, Q | ClickHouseOnly> =>
 	compileTypedFnCall("uniqExact", T.uint64.schema, expr)
 
-export const groupUniqArray = <T, Q = never>(expr: Expr<T, Q>): Expr<ReadonlyArray<T>, Q> =>
+export const groupUniqArray = <T, Q = never>(expr: Expr<T, Q>): Expr<ReadonlyArray<T>, Q | ClickHouseOnly> =>
 	compileTypedFnCall("groupUniqArray", arraySchemaOf<T>(expr), expr)
 
 /**
@@ -98,24 +98,24 @@ export const groupUniqArray = <T, Q = never>(expr: Expr<T, Q>): Expr<ReadonlyArr
  * `SimpleAggregateFunction(groupUniqArrayArray, Array(T))` column is declared
  * with, so reading such a column back uses the same name.
  */
-export const groupUniqArrayArray = <T, Q = never>(expr: Expr<ReadonlyArray<T>, Q>): Expr<ReadonlyArray<T>, Q> =>
+export const groupUniqArrayArray = <T, Q = never>(expr: Expr<ReadonlyArray<T>, Q>): Expr<ReadonlyArray<T>, Q | ClickHouseOnly> =>
 	compileTypedFnCall("groupUniqArrayArray", schemaOf<ReadonlyArray<T>>(expr), expr)
 
 /** `argMin(value, orderBy)` — the `value` from the row with the smallest `orderBy`. */
-export const argMin = <T, Q1 = never, Q2 = never>(value: Expr<T, Q1>, orderBy: Expr<any, Q2>): Expr<T, Q1 | Q2> =>
+export const argMin = <T, Q1 = never, Q2 = never>(value: Expr<T, Q1>, orderBy: Expr<any, Q2>): Expr<T, Q1 | Q2 | ClickHouseOnly> =>
 	compileTypedFnCall("argMin", schemaOf<T>(value), value, orderBy)
 
 /** `argMax(value, orderBy)` — the `value` from the row with the largest `orderBy`. */
-export const argMax = <T, Q1 = never, Q2 = never>(value: Expr<T, Q1>, orderBy: Expr<any, Q2>): Expr<T, Q1 | Q2> =>
+export const argMax = <T, Q1 = never, Q2 = never>(value: Expr<T, Q1>, orderBy: Expr<any, Q2>): Expr<T, Q1 | Q2 | ClickHouseOnly> =>
 	compileTypedFnCall("argMax", schemaOf<T>(value), value, orderBy)
 
-export const argMaxMerge = <T, Q = never>(expr: Expr<T, Q>): Expr<T, Q> =>
+export const argMaxMerge = <T, Q = never>(expr: Expr<T, Q>): Expr<T, Q | ClickHouseOnly> =>
 	compileTypedFnCall("argMaxMerge", schemaOf<T>(expr), expr)
 
 // Curried / parametric aggregates (handwritten — custom SQL syntax)
 
 export function quantile(q: number) {
-	return <Q = never>(expr: Expr<number | null, Q>): Expr<number | null, Q> =>
+	return <Q = never>(expr: Expr<number | null, Q>): Expr<number | null, Q | ClickHouseOnly> =>
 		makeExpr(lazy(() => `quantile(${q})(${compile(expr.toFragment())})`), T.nullable(T.float64).schema)
 }
 
@@ -127,7 +127,7 @@ export function quantile(q: number) {
  * curried shape: `groupUniqArrayIf(3)(x, cond)` → `groupUniqArrayIf(3)(x, cond)`.
  */
 export function groupUniqArrayIf(maxSize: number) {
-	return <T, Q1 = never, Q2 = never>(expr: Expr<T, Q1>, cond: Condition<Q2>): Expr<ReadonlyArray<T>, Q1 | Q2> =>
+	return <T, Q1 = never, Q2 = never>(expr: Expr<T, Q1>, cond: Condition<Q2>): Expr<ReadonlyArray<T>, Q1 | Q2 | ClickHouseOnly> =>
 		makeExpr(
 			lazy(() =>
 				`groupUniqArrayIf(${Math.round(maxSize)})(` +
@@ -164,7 +164,7 @@ export function windowFunnel(window: number, mode?: WindowFunnelMode) {
 	return <Q = never, C extends ReadonlyArray<Condition> = ReadonlyArray<Condition>>(
 		timestamp: Expr<number | string | DateTime.Utc, Q>,
 		...conditions: C
-	): Expr<number, Q | ParamsIn<C[number]>> => {
+	): Expr<number, Q | ParamsIn<C[number]> | ClickHouseOnly> => {
 		// A failure, not a defect: the number of conditions is the number of steps a
 		// funnel has, and that count comes from data as often as from source.
 		const args = () => [timestamp.toFragment(), ...conditions.map((c) => c.toFragment())]
@@ -194,7 +194,7 @@ export function sequenceMatch(pattern: string) {
 	return <Q = never, C extends ReadonlyArray<Condition> = ReadonlyArray<Condition>>(
 		timestamp: Expr<number | string | DateTime.Utc, Q>,
 		...conditions: C
-	): Expr<number, Q | ParamsIn<C[number]>> => {
+	): Expr<number, Q | ParamsIn<C[number]> | ClickHouseOnly> => {
 		// An injection guard, so it is a failure: the pattern is embedded verbatim,
 		// and "not user input" is a claim the caller is exactly who might get wrong.
 		// Checked as the SQL renders, so it fails the compile that uses it.

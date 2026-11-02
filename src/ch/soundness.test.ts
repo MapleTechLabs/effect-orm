@@ -179,10 +179,14 @@ describe("aggregates and GROUP BY", () => {
 })
 
 describe("function sets", () => {
+	// The type refuses both too (`dialect.test-d.ts`); this is the check behind it,
+	// for a caller past the types.
 	it("refuses a ClickHouse function on Postgres, and a Postgres one on ClickHouse", () => {
+		// @ts-expect-error -- count() is a ClickHouse function
 		expect(() => PG.compileUnsafe(CH.from(Users).select(() => ({ n: CH.count() })))).toThrow(
 			/count\(\) is a ClickHouse function/,
 		)
+		// @ts-expect-error -- count(*) is a Postgres function
 		expect(() => compileCHUnsafe(CH.from(Users).select(() => ({ n: PG.count() })))).toThrow(/count\(\) is a Postgres function/)
 		expect(PG.compileUnsafe(CH.from(Users).select(() => ({ n: PG.count() }))).sql).toContain("count(*)")
 	})

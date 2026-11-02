@@ -3,7 +3,7 @@ import { compile } from "../../sql/sql-fragment"
 import type { Expr, Condition, ParamsIn } from "../expr"
 import { Schema } from "effect"
 import { firstTypedNonNull, mergeResultSchemas, numericResultSchema, schemaOf } from "../define-fn"
-import { builtins } from "./builtin"
+import { builtins, type ClickHouseOnly } from "./builtin"
 
 const { compileTypedFnCall, lazy } = builtins("clickhouse", "scalar")
 const portable = builtins("portable", "scalar")
@@ -15,13 +15,13 @@ export const if_ = <T, Q1 = never, Q2 = never, Q3 = never>(
 	cond: Condition<Q1>,
 	then_: Expr<T, Q2>,
 	else_: Expr<T, Q3>,
-): Expr<T, Q1 | Q2 | Q3> => compileTypedFnCall("if", branchSchema<T>(then_, else_), cond, then_, else_)
+): Expr<T, Q1 | Q2 | Q3 | ClickHouseOnly> => compileTypedFnCall("if", branchSchema<T>(then_, else_), cond, then_, else_)
 
 export function multiIf<
 	T,
 	const Cases extends ReadonlyArray<readonly [Condition, Expr<T>]> = ReadonlyArray<readonly [Condition, Expr<T>]>,
 	Q = never,
->(cases: Cases & ReadonlyArray<readonly [Condition, Expr<T>]>, else_: Expr<T, Q>): Expr<T, ParamsIn<Cases[number][number]> | Q> {
+>(cases: Cases & ReadonlyArray<readonly [Condition, Expr<T>]>, else_: Expr<T, Q>): Expr<T, ParamsIn<Cases[number][number]> | Q | ClickHouseOnly> {
 	const parts = () => cases
 		.map(([cond, val]) => `${compile(cond.toFragment())}, ${compile(val.toFragment())}`)
 		.join(", ")
@@ -58,7 +58,7 @@ export const coalesce = <const Args extends Expr<any>[]>(...exprs: Args): Expr<C
  * `ifNull(expr, fallback)` — `expr` unless it is NULL, else `fallback`. The
  * two-argument coalesce; a non-nullable fallback strips the `| null`.
  */
-export const ifNull = <T, Q1 = never, Q2 = never>(expr: Expr<T | null, Q1>, fallback: Expr<T, Q2>): Expr<T, Q1 | Q2> =>
+export const ifNull = <T, Q1 = never, Q2 = never>(expr: Expr<T | null, Q1>, fallback: Expr<T, Q2>): Expr<T, Q1 | Q2 | ClickHouseOnly> =>
 	compileTypedFnCall("ifNull", firstTypedNonNull<[Expr<T | null>, Expr<T>], T>()(expr, fallback), expr, fallback)
 
 export function nullIf<T, Q1 = never, Q2 = never>(expr: Expr<T, Q1>, value: Expr<T, Q2> | T): Expr<T | null, Q1 | Q2> {
@@ -77,7 +77,7 @@ export function nullIf<T, Q1 = never, Q2 = never>(expr: Expr<T, Q1>, value: Expr
 export function ifNotFinite<N extends number | null, Q1 = never, Q2 = never>(
 	expr: Expr<N, Q1>,
 	fallback: number | Expr<number, Q2>,
-): Expr<number | Extract<N, null>, Q1 | Q2> {
+): Expr<number | Extract<N, null>, Q1 | Q2 | ClickHouseOnly> {
 	return makeExpr<number | Extract<N, null>>(
 		lazy(() => `ifNotFinite(${compile(expr.toFragment())}, ${compile(toFragment(fallback))})`),
 		numericResultSchema(expr),

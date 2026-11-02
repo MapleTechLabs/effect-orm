@@ -242,3 +242,14 @@ CH.compileUnsafe(eitherName, { name: "a" })
 CH.compileUnsafe(eitherName, { name: "a", prevName: "b" })
 // @ts-expect-error -- `prevName` must be a string
 CH.compileUnsafe(eitherName, { prevName: 1 })
+
+// orderBy callback: a param in any sort key, not only the first, is required.
+const sorted = CH.from(Users)
+	.select("Id")
+	.orderBy(($) => [
+		[$.Name, "asc"],
+		[$.Age.add(CH.param.int("bias")), "desc"],
+	])
+// @ts-expect-error -- `bias` is missing
+CH.compileUnsafe(sorted, {})
+CH.compileUnsafe(sorted, { bias: 1 })
