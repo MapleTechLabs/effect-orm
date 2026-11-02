@@ -56,6 +56,22 @@ it("copies acknowledgments on D1, keeps the first row, scopes reads and pages ex
 	expect(result).toEqual({ byUser: [{ entry_id: "release_1" }, { entry_id: "release_2" }], page: [second, other], kept: [first] })
 }, 30_000)
 
+it("syncs acknowledgments on D1 with excludedAll under requireTenantScope", async () => {
+	const rows = await withD1((db, statements) => Effect.gen(function* () {
+		yield* db.run(SQLite.insertInto(Ack).values(first))
+		yield* db.run(SQLite.insertInto(Ack).values({ ...first, acked_at: "2026-10-09T00:00:00.000Z" })
+			.onConflictDoUpdate({
+				target: ["id"],
+				set: SQLite.excludedAll(["entry_id"]),
+				// The SET copies org_id from the rows; this pins the conflicting row to the same tenant.
+				where: (existing, excluded) => existing.org_id.eq(excluded.org_id),
+			}))
+		return { rows: yield* db.run(SQLite.from(Ack).select().where(($) => [$.org_id.eq("org_1")])), sql: statements.at(-2) }
+	}))
+	expect(rows.rows).toEqual([{ ...first, acked_at: "2026-10-09T00:00:00.000Z" }])
+	expect(rows.sql).toContain('DO UPDATE SET "user_id" = "excluded"."user_id", "org_id" = "excluded"."org_id", "acked_at" = "excluded"."acked_at" WHERE')
+}, 30_000)
+
 it("refuses an unscoped query, too many bindings and interactive transactions before dispatch", async () => {
 	const seen = await withD1((db, statements) => Effect.gen(function* () {
 		const scope = yield* Effect.exit(db.run(SQLite.from(Ack).select()))

@@ -171,6 +171,11 @@ Maple: 25 `DO UPDATE`, 43 `DO NOTHING`, 66 `excluded.` references, 6 `setWhere`.
   `ReplacingMergeTree`.
 - `DO NOTHING` with `RETURNING` returns no row for a skipped insert; the docs say so, because it
   is the usual Drizzle surprise.
+- `set: excluded(cols)` / `excludedAll(except)` are values, not callbacks: the compiler expands
+  them through the same proposed-row accessor the callback gets. That accessor is the one place a
+  dialect decides how to read the proposed row. SQLite writes `excluded."col"` as Postgres does.
+  MySQL writes `VALUES(col)` (or a row alias, 8.0.19+) and has no conflict target, so its
+  dialect will swap the accessor and refuse `target`; the helpers need no change.
 
 ## 7. ClickHouse specifics
 

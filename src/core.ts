@@ -122,6 +122,9 @@ export {
 	type CHInsertStart,
 	type ConflictSet,
 	type ConflictTarget,
+	type ExcludedAll,
+	type ExcludedColumns,
+	type ExcludedSet,
 	type InsertRow,
 	type InsertRowOf,
 	type InsertSelectMisfits,
@@ -130,6 +133,8 @@ export {
 	type InsertValue,
 	type OnConflictDoNothing,
 	type OnConflictDoUpdate,
+	excluded,
+	excludedAll,
 	insertInto,
 } from "./ch/insert"
 

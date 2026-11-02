@@ -229,6 +229,23 @@ it("executes SQLite upserts, updates and deletes with RETURNING", async () => {
 	expect(rows).toEqual({ upsert: [{ id: 1, note: "updated" }], update: [{ note: "changed" }], deleted: [{ id: 2 }] })
 })
 
+it("copies the proposed row with excluded and excludedAll, keeping columns the rows leave out", async () => {
+	const rows = await withDatabase((db) => Effect.gen(function* () {
+		yield* db.run(SQLite.insertInto(Items).values({ id: 1, note: "first", enabled: true, score: 2 }))
+		yield* db.run(SQLite.insertInto(Items).values({ id: 1, note: "second", enabled: false, score: 3 })
+			.onConflictDoUpdate({ target: ["id"], set: SQLite.excluded(["note"]) }))
+		const one = yield* db.run(SQLite.from(Items).select())
+		// The rows leave score out: excludedAll keeps the old score rather than writing its default.
+		const synced = yield* db.run(SQLite.insertInto(Items).values([{ id: 1, note: "third", enabled: false }, { id: 2, note: "new", enabled: true }])
+			.onConflictDoUpdate({ target: ["id"], set: SQLite.excludedAll() }).returning("id", "note", "enabled", "score"))
+		return { one, synced: [...synced].sort((a, b) => a.id - b.id) }
+	}))
+	expect(rows).toEqual({
+		one: [{ id: 1, note: "second", enabled: true, score: 2 }],
+		synced: [{ id: 1, note: "third", enabled: false, score: 2 }, { id: 2, note: "new", enabled: true, score: 7 }],
+	})
+})
+
 it("runs scoped CTEs, joins and derived-table queries with the same row decoder", async () => {
 	const rows = await withDatabase((db) => Effect.gen(function* () {
 		yield* db.run(SQLite.insertInto(Items).values({ id: 1, note: "one", enabled: true, score: null }))

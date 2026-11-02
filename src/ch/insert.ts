@@ -128,6 +128,56 @@ export type ConflictSet<Cols extends ColumnDefs, Computed extends string = never
 	readonly [K in Exclude<keyof Cols & string, Known<Computed>>]?: InsertValue<Cols[K]> | undefined
 }
 
+/**
+ * A SET built from the row proposed for insertion, which `onConflictDoUpdate`
+ * takes as `set`: `excluded(columns)` names the columns, `excludedAll(except)`
+ * takes every column the insert writes. The dialect picks the SQL that reads
+ * the proposed row, so one value works on every dialect with an upsert.
+ */
+export type ExcludedSet<K extends string = string> = ExcludedColumns<K> | ExcludedAll<K>
+
+/** `excluded(columns)`: `SET col = EXCLUDED.col` for each named column. */
+export interface ExcludedColumns<K extends string = string> {
+	readonly _tag: "ExcludedColumns"
+	readonly columns: ReadonlyArray<K>
+}
+
+/**
+ * `excludedAll(except)`: `SET col = EXCLUDED.col` for each column the insert
+ * writes, except the named ones and the conflict target's columns.
+ */
+export interface ExcludedAll<K extends string = string> {
+	readonly _tag: "ExcludedAll"
+	readonly except: ReadonlyArray<K>
+}
+
+/**
+ * Set the named columns from the row proposed for insertion:
+ * `onConflictDoUpdate({ target: ["key"], set: excluded(["count", "name"]) })`.
+ * The names are checked against the insert's table where `set` takes them.
+ */
+export const excluded = <const K extends string>(columns: readonly [K, ...Array<K>]): ExcludedColumns<K> => ({
+	_tag: "ExcludedColumns",
+	columns: [...columns],
+})
+
+/**
+ * Set every column the insert writes from the row proposed for insertion,
+ * except the named columns and the conflict target's columns:
+ * `onConflictDoUpdate({ target: ["id"], set: excludedAll(["createdAt"]) })`.
+ */
+export const excludedAll = <const K extends string = never>(except: ReadonlyArray<K> = []): ExcludedAll<K> => ({
+	_tag: "ExcludedAll",
+	except: [...except],
+})
+
+/** @internal */
+export const isExcludedSet = (set: unknown): set is ExcludedSet =>
+	typeof set === "object" &&
+	set !== null &&
+	"_tag" in set &&
+	(set._tag === "ExcludedColumns" || set._tag === "ExcludedAll")
+
 export interface OnConflictDoNothing<Cols extends ColumnDefs> {
 	/** Omit to skip a row that conflicts on any unique index or constraint. */
 	readonly target?: ConflictTarget<Cols>
@@ -164,9 +214,12 @@ export interface OnConflictDoUpdate<
 	/**
 	 * The columns to write into the existing row. As a callback, `$` is the
 	 * existing row and `excluded` the row that was proposed for insertion:
-	 * `(($, excluded) => ({ count: $.count.add(excluded.count) }))`.
+	 * `(($, excluded) => ({ count: $.count.add(excluded.count) }))`. Or
+	 * `excluded(columns)` / `excludedAll(except)`, to copy columns from the
+	 * proposed row.
 	 */
 	readonly set:
+		| ExcludedSet<WritableColumns<Cols, Computed>>
 		| (S & OnlyColumns<S, WritableColumns<Cols, Computed>>)
 		| (($: ColumnAccessor<Cols>, excluded: ColumnAccessor<Cols>) => S & OnlyColumns<S, WritableColumns<Cols, Computed>>)
 	/** Update only the existing rows this holds for; the others are skipped. */

@@ -138,6 +138,23 @@ CH.insertInto(Counters).values({ key: "k", count: 1 }).onConflictDoUpdate({ set:
 // @ts-expect-error a computed column cannot be set
 CH.insertInto(Spans).values({ OrgId: "o", Label: "l" }).onConflictDoUpdate({ target: ["OrgId"], set: { Day: "x" } })
 
+// excluded / excludedAll: SET from the proposed row, names checked against the table.
+const fromExcluded = CH.insertInto(Counters)
+	.values({ key: "k", count: 1 })
+	.onConflictDoUpdate({ target: ["key"], set: CH.excluded(["count"]) })
+// No params, so it compiles without any.
+expectTypeOf(PG.compileUnsafe(fromExcluded)).toEqualTypeOf<CH.CompiledQuery<never, undefined>>()
+CH.insertInto(Counters).values({ key: "k", count: 1 }).onConflictDoUpdate({ target: ["key"], set: CH.excludedAll() })
+CH.insertInto(Counters).values({ key: "k", count: 1 }).onConflictDoUpdate({ target: ["key"], set: CH.excludedAll(["count"]) })
+// @ts-expect-error not a column
+CH.insertInto(Counters).values({ key: "k", count: 1 }).onConflictDoUpdate({ target: ["key"], set: CH.excluded(["nope"]) })
+// @ts-expect-error not a column
+CH.insertInto(Counters).values({ key: "k", count: 1 }).onConflictDoUpdate({ target: ["key"], set: CH.excludedAll(["nope"]) })
+// @ts-expect-error a computed column cannot be set
+CH.insertInto(Spans).values({ OrgId: "o", Label: "l" }).onConflictDoUpdate({ target: ["OrgId"], set: CH.excluded(["Day"]) })
+// @ts-expect-error at least one column
+CH.excluded([])
+
 // INSERT ... SELECT: the selected row must fit the table.
 const Daily = CH.table("daily", { OrgId: CH.string, Total: CH.uint64, Note: CH.nullable(CH.string) })
 const Source = CH.table("source", { OrgId: CH.string, Ms: CH.uint64, Label: CH.string })
