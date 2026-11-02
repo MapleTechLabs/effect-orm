@@ -338,6 +338,8 @@ export const evaluate = (plan: Plan, sem: Semantics, fixture: Fixture = coreFixt
 	const constantRow: Row = { o: coreFixture.orders[0]! }
 	for (const e of all) if (constant(e)) evalExpr(env, constantRow, e)
 	for (const row of sourceRows(env, fixture)) for (const e of all) evalExpr(env, row, e)
+	// A filter pushed below the join reads every order, even one an inner join would drop.
+	if (plan.join !== undefined) for (const o of fixture.orders) for (const e of all) evalExpr(env, { o }, e)
 	const filtered = sourceRows(env, fixture).filter((row) => and3(plan.where.map((c) => evalCond(env, row, c))) === true)
 	const orgs = new Set(filtered.flatMap((row) => [row.o.OrgId, ...(row.c ? [row.c.OrgId] : [])]))
 	const shape = plan.shape

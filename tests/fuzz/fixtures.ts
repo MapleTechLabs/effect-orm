@@ -64,6 +64,12 @@ export const fixtureSource = (dialect: string, data: Fixture, table: keyof Fixtu
 		const empty = row === undefined && dialect === "clickhouse" ? (name === "Note" ? null : name === "Created" ? "2026-01-01 00:00:00.000" : type.startsWith("U") || type === "Int64" ? 0 : "") : v
 		return `CAST(${value(empty)} AS ${type}) AS "${name}"`
 	}).join(", ")
+	if (dialect === "clickhouse" && data[table].length === 0) {
+		// Constant placeholder columns would be folded: `Id % Id` over `CAST(0 AS UInt32) AS Id WHERE 1 = 0`
+		// divides by zero at plan time. Columns computed from numbers(0) are not constants, and have no rows.
+		const empty = defs.map(([name, type]) => `CAST(${name === "Note" ? "NULL" : name === "Created" ? "toDateTime64(number, 3, 'UTC')" : type === "String" ? "toString(number)" : "number"} AS ${type}) AS "${name}"`)
+		return `SELECT ${empty.join(", ")} FROM numbers(0)`
+	}
 	if (dialect === "clickhouse" && data[table].length > 0) {
 		// Match the core fixture's values() source. ClickHouse 26.2 incorrectly
 		// pushes DISTINCT/OFFSET into UNION ALL sources made from constant SELECTs.

@@ -60,6 +60,20 @@ export interface UnionInput {
 	readonly plan: UnionPlan
 }
 
-const unionIssues: ReadonlyArray<KnownIssue<UnionInput>> = []
+/** A `%` by a negative constant anywhere in the input's plans. */
+const negativeModulo = (value: unknown): boolean =>
+	Array.isArray(value) ? value.some(negativeModulo)
+	: value !== null && typeof value === "object"
+		? ((value as { k?: string; op?: string; r?: unknown }).k === "arith" && (value as { op?: string }).op === "mod" && typeof (value as { r?: unknown }).r === "number" && (value as { r: number }).r < 0)
+			|| Object.values(value).some(negativeModulo)
+		: false
+
+const unionIssues: ReadonlyArray<KnownIssue<UnionInput>> = [{
+	id: "clickhouse-26.2-union-negative-modulo",
+	// Server bug, not the builder's: on 26.2, `SELECT A % -4 FROM t UNION ALL SELECT 0 FROM t` with A = -5
+	// returns 3, not -1. 26.8 returns -1. Delete this entry once CI no longer runs 26.2.
+	reason: "ClickHouse 26.2 computes % by a negative divisor wrongly under UNION ALL",
+	matches: (input) => input.target.startsWith("clickhouse") && negativeModulo(input.plan),
+}]
 
 export const knownUnionIssue = (input: UnionInput): string | undefined => firstMatch(unionIssues, input)

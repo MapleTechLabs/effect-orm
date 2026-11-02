@@ -76,7 +76,8 @@ const labels = (type: string) =>
 		return rows.map((r) => r.label)
 	})
 
-describe("Postgres enums and unique constraints", () => {
+// Each test starts its own PGlite; on a CI runner busy with the fuzz suite that alone can pass 5s.
+describe("Postgres enums and unique constraints", { timeout: 30_000 }, () => {
 	it.effect("migrate creates them, verify reads them back clean, and queries use them", () =>
 		Effect.gen(function* () {
 			const { Channels, Outbox } = schemaWith()
