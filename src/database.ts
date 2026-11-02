@@ -51,6 +51,14 @@ export {
 	type ConstraintViolation,
 	type TransactionError,
 } from "./database/errors"
+export {
+	makeRepository,
+	type Repository,
+	type RepositoryError,
+	type RepositoryOf,
+	type RepositoryOptions,
+	type TenantRepository,
+} from "./database/repository"
 export { QuerySummary, withQuerySummary } from "./database/tracing"
 export {
 	TestDatabase,
