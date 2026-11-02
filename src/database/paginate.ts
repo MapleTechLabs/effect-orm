@@ -149,6 +149,12 @@ export const paginate = <Q extends CHQuery<any, any, any, any>, const Given exte
 			const expr = selected[key]
 			if (!isExprLike(expr)) return yield* defect(`${JSON.stringify(key)} is not a selected alias`)
 			if (expr.schema === undefined) return yield* defect(`${JSON.stringify(key)} has no type, so its cursor value cannot be encoded`)
+			// The type check already refuses this; an untyped caller is caught here.
+			// A NULL key drops out of the seek, and dialects disagree on where NULLs
+			// sort (ascending, SQLite puts them first, Postgres and ClickHouse last).
+			if (Schema.is(Schema.toType(expr.schema))(null)) {
+				return yield* defect(`${JSON.stringify(key)} can be NULL, and a NULL key has no place in the seek`)
+			}
 			schemas.push(expr.schema)
 		}
 		const sortKey = orderBy.map(([key, direction]) => `${key} ${direction}`).join(",")

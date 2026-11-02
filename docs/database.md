@@ -5,13 +5,13 @@
 connections: a `Database` is a small object over your client.
 
 ```sh
-npm install @effect/sql-pg@4.0.0   # or @effect/sql-pglite, @effect/sql-clickhouse
+npm install @effect/sql-pg@4.0.6   # or @effect/sql-pglite, @effect/sql-clickhouse
 ```
 
 Transactions are Effect's own `SqlClient.withTransaction`, with four additions:
 
 - **Settings**: isolation level, access mode, deferrable.
-- **Typed COMMIT and ROLLBACK failures**: Effect 4.0.0 turns them into defects.
+- **Typed COMMIT and ROLLBACK failures**: Effect fails with a bare `SqlError` or dies.
 - **A guard** against statements that outlive their transaction.
 - **Contention retry** for SQLSTATE 40001 and 40P01.
 
@@ -90,6 +90,7 @@ Calling `withdraw(1, 30)` outside `transfer` does not compile: `requireTransacti
 | `execute(statement)` | Run a statement and discard its rows |
 | `transaction(options?)` | Run an effect in a transaction; data-first or pipeable |
 | `requireTransaction` | Mark an effect as correct only inside a transaction |
+| `afterCommit(effect)` | Queue an effect to run after the outermost transaction commits, never after a rollback |
 | `retryContention(options?)` | Re-run on serialization failure or deadlock |
 | `Transaction` | The open transaction (`depth`, `isolationLevel`, `accessMode`) |
 | `isContention(error)` | Whether an error is a serialization failure or deadlock |
@@ -183,8 +184,12 @@ The key must be unique, so end it with a unique column such as the primary key. 
 cannot check this: rows that tie on the whole key can be skipped at a page boundary.
 
 With one direction the seek is a row comparison, `("createdAt", "id") < ($2, $3)`, which
-Postgres serves from an index on `(createdAt, id)` and ClickHouse compares as a tuple. With
-mixed directions it is `a >= x AND (a > x OR (a = x AND b < y))`.
+Postgres and SQLite (D1 too) serve from an index on `(createdAt, id)` and ClickHouse compares
+as a tuple. With mixed directions it is `a >= x AND (a > x OR (a = x AND b < y))`.
+
+A NULL key has no place in the seek, and dialects disagree on where NULLs sort: ascending,
+SQLite puts them first, Postgres and ClickHouse last. So a nullable key is a type error,
+and a defect at run time when the types were bypassed.
 
 The cursor is base64url text. It holds the sort key and the last row's key values, encoded
 through the key columns' schemas, so a `DateTime.Utc` key comes back as the same instant. It
@@ -242,6 +247,47 @@ Effect's own `Effect.tx` treats `Effect.Transaction`. A helper that works either
 most reads, needs no marker. Inside a transaction, `yield* Db.Transaction` gives its `depth`
 and settings.
 
+### After commit
+
+A vendor call (an SMS, an HTTP request, a job enqueue) must not run inside a transaction: it
+holds the connection while it waits, and it cannot be rolled back. `afterCommit` queues the
+call and runs it only after COMMIT succeeds:
+
+```ts
+const bookTour = Effect.fn("bookTour")(function* (tour: NewTour) {
+	yield* Db.execute(Db.sql`INSERT INTO tours VALUES (${tour.id}, ${tour.phone})`)
+	yield* Db.afterCommit(sms.send(tour.phone, "Your tour is booked"))
+}, Db.requireTransaction)
+
+Db.transaction(bookTour(tour))  // the SMS goes out after COMMIT, or not at all
+```
+
+Like `requireTransaction`, `afterCommit` adds `Transaction` to the requirements, so a helper
+deep in the call stack can queue work without knowing where the transaction starts. The
+requirements of the queued effect stay in `R`: they must be met where it is queued.
+
+Effect's own `SqlClient.afterCommit` does the queueing; `afterCommit` adds the `Transaction`
+requirement and the failure policy below.
+
+- **Order.** Hooks run one at a time, in the order they were queued, after COMMIT and outside
+  the transaction. A statement in a hook runs on its own connection, not the transaction's.
+- **Rollback.** A rolled-back transaction runs nothing. A savepoint that rolls back drops what
+  it queued; a savepoint that is kept hands its hooks to the outer transaction. With `retry`,
+  only the attempt that commits runs its hooks.
+- **Context.** A hook runs with the services of the place it was queued, minus the
+  transaction.
+- **Failures.** A hook that fails or dies does not fail the transaction, because the data is
+  already committed and a caller that retries would write it twice. The hook's cause goes to
+  the `ErrorReporter`s in context (`Effect.withErrorReporting` uses the same ones) and to an
+  error log, and the next hook still runs. When the caller must know that the call failed,
+  handle the error inside the hook.
+- **At most once.** A crash before the hooks run skips them. Hooks run before `transaction`
+  returns and uninterruptibly, so keep them short and fork long-running work. When the work
+  must happen, write it to an outbox table inside the transaction instead.
+
+`afterCommit` dies when nothing would run the work: a `Transaction` provided by hand, or a
+transaction that has already ended (a fiber forked inside it and not joined).
+
 ### Settings
 
 | Option | Postgres |
@@ -266,8 +312,8 @@ again. `read uncommitted` is not offered because Postgres runs it as `read commi
 | `TransactionOptionsRejected` | A setting the dialect does not support, or settings on a nested transaction |
 | `TransactionUnsupported` | The dialect has no transactions (ClickHouse) |
 
-Effect 4.0.0 turns a failed COMMIT or ROLLBACK into a defect and, when ROLLBACK fails, drops
-the body's own failure. `transaction` turns both back into the typed errors above. Defects
+Effect fails with a bare `SqlError` on a failed COMMIT, dies on a failed ROLLBACK and, when
+ROLLBACK fails, drops the body's own failure. `transaction` turns these into the typed errors above. Defects
 from `body` stay defects.
 
 `TransactionClosed` is a defect, not an error to handle. A fiber forked inside a transaction
