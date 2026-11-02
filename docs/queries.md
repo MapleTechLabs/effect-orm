@@ -204,7 +204,7 @@ changing the SQL. Both are covered in [Tenant scoping](./tenant-scoping.md).
 
 ## Pipeable, data-last queries
 
-A query is `Pipeable`, and `Query` has a data-last form of the most used methods, as `Effect`,
+A query is `Pipeable`, and `Query` has a data-last form of each builder method, as `Effect`,
 `Stream` and `Schema` do. Each `Query` function is a `dual` that calls the fluent method, so
 both styles write the same SQL:
 
@@ -222,8 +222,14 @@ CH.Query.from(Events).pipe(
 an unselected `orderBy` key is a type error at that step. Each function also has a data-first
 form: `CH.Query.where(query, ($) => […])`.
 
-`Query` has `from`, `fromQuery`, `fromUnion`, `select`, `where`, `orderBy`, `limit`,
-`innerJoin`, `leftJoin` and `crossJoin`. Use the fluent method for the others.
+`Query` has `from`, `fromQuery` and `fromUnion` to start, and a function for every `CHQuery`
+method: `select`, `where`, `groupBy`, `having`, `orderBy`, `limit`, `offset`, `format`,
+`distinct`, `distinctOn`, the row locks (`forUpdate`, `forNoKeyUpdate`, `forShare`,
+`forKeyShare`), `route`, `crossTenant`, the joins (`innerJoin`, `leftJoin`, `crossJoin` and
+their `…Query` forms) and `withCTE`. A form a dialect lacks (a row lock on ClickHouse or SQLite,
+`format` outside ClickHouse, `distinctOn` on SQLite) is refused at compile, as the fluent method
+is. Unions (`CHUnionQuery`) and writes (`insertInto`, `update`, `deleteFrom`) are not pipeable
+yet; use their fluent methods.
 
 A reusable part is a plain function. Type its `$` with the table's columns:
 

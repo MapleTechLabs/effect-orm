@@ -94,3 +94,42 @@ CH.from(Tours).pipe(
 	// @ts-expect-error -- the alias `u` is in use
 	Query.innerJoin(Units, "u", (t, u) => t.Id.eq(u.TourId)),
 )
+
+// The rest of the builder: each data-last form gives the fluent type.
+const ids = CH.from(Tours).select(($) => ({ id: $.Id, at: $.StartsAt }))
+expectTypeOf(ids.pipe(Query.groupBy("id"), Query.having(($) => [$.OrgId.eq(CH.param.string("orgId"))]))).toEqualTypeOf(
+	ids.groupBy("id").having(($) => [$.OrgId.eq(CH.param.string("orgId"))]),
+)
+expectTypeOf(ids.pipe(Query.offset(5), Query.distinct(), Query.format("JSON"))).toEqualTypeOf(ids.offset(5).distinct().format("JSON"))
+expectTypeOf(ids.pipe(Query.distinctOn("id"), Query.crossTenant())).toEqualTypeOf(ids.distinctOn("id").crossTenant())
+expectTypeOf(ids.pipe(Query.forUpdate(), Query.forShare({ skipLocked: true }))).toEqualTypeOf(ids.forUpdate().forShare({ skipLocked: true }))
+expectTypeOf(Query.forKeyShare(ids)).toEqualTypeOf(ids.forKeyShare())
+expectTypeOf(ids.pipe(Query.route("replica"))).toEqualTypeOf(ids.route("replica"))
+// @ts-expect-error -- `nope` is not selected
+ids.pipe(Query.groupBy("nope"))
+// @ts-expect-error -- `nope` is not selected
+ids.pipe(Query.distinctOn("nope"))
+// @ts-expect-error -- a negative offset
+ids.pipe(Query.offset(-1))
+
+// Subquery joins and CTEs carry the inner query's params.
+const units = CH.from(Units)
+	.select(($) => ({ tour: $.TourId, name: $.Name }))
+	.where(($) => [$.Name.eq(CH.param.string("unit"))])
+const viaUnits = CH.from(Tours).pipe(
+	Query.leftJoinQuery(units, "u", (t, u) => t.Id.eq(u.tour)),
+	Query.select(($) => ({ id: $.Id, unit: $.u.name })),
+)
+expectTypeOf<InferQueryOutput<typeof viaUnits>>().toEqualTypeOf<{ readonly id: string; readonly unit: string | null }>()
+// @ts-expect-error -- `unit` is missing
+CH.compileUnsafe(viaUnits, {})
+expectTypeOf(CH.from(Tours).pipe(Query.innerJoinQuery(units, "u", (t, u) => t.Id.eq(u.tour)))).toEqualTypeOf(
+	CH.from(Tours).innerJoinQuery(units, "u", (t, u) => t.Id.eq(u.tour)),
+)
+expectTypeOf(CH.from(Tours).pipe(Query.crossJoinQuery(units, "u"))).toEqualTypeOf(CH.from(Tours).crossJoinQuery(units, "u"))
+expectTypeOf(ids.pipe(Query.withCTE("u", units))).toEqualTypeOf(ids.withCTE("u", units))
+expectTypeOf(ids.pipe(Query.withCTE("one", "SELECT 1"))).toEqualTypeOf(ids.withCTE("one", "SELECT 1"))
+CH.from(Tours).pipe(
+	// @ts-expect-error -- the subquery selects no `nope`
+	Query.innerJoinQuery(units, "u", (t, u) => t.Id.eq(u.nope)),
+)

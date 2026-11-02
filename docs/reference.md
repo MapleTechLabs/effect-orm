@@ -87,8 +87,17 @@ fluent method, and writes the same SQL. See [Pipeable, data-last queries](./quer
 | `Query.select()` / `Query.select(...names)` / `Query.select(fn)` | `select`                 |
 | `Query.where(fn)`                                         | `where`                         |
 | `Query.orderBy(...[key, dir])` / `Query.orderBy(fn)`      | `orderBy`                       |
-| `Query.limit(n)`                                          | `limit`                         |
+| `Query.limit(n)` / `Query.offset(n)`                      | `limit` / `offset`              |
+| `Query.groupBy(...keys)` / `Query.having(fn)`             | `groupBy` / `having`            |
+| `Query.distinct()` / `Query.distinctOn(...keys)`          | `distinct` / `distinctOn`       |
+| `Query.format(fmt)`                                       | `format`                        |
+| `Query.forUpdate` / `Query.forNoKeyUpdate` / `Query.forShare` / `Query.forKeyShare` | `(options?)`, the row locks |
+| `Query.route(route)` / `Query.crossTenant()`              | `route` / `crossTenant`         |
 | `Query.innerJoin` / `Query.leftJoin` / `Query.crossJoin`  | `(table, alias, on?)`           |
+| `Query.innerJoinQuery` / `Query.leftJoinQuery` / `Query.crossJoinQuery` | `(query, alias, on?)` |
+| `Query.withCTE(name, query)` / `Query.withCTE(name, sql, options?)` | `withCTE`             |
+
+`CHUnionQuery` and the writes are not `Pipeable`; use their methods.
 
 ### Compilation
 
