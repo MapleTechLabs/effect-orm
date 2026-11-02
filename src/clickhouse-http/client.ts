@@ -272,6 +272,7 @@ export const make = (
 
 		const client = yield* Client.make({
 			acquirer: Effect.succeed(connection),
+			driver: "clickhouse-http",
 			compiler,
 			// The peer, for service maps: with the HTTP span off, nothing else names it.
 			// The caller's attributes come last, so they can rename the peer.
