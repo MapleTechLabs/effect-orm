@@ -88,7 +88,8 @@ to its own dialect; `options.dialect` overrides it.
 
 `Dialect`, `DialectClauses` and `ParamStyle` describe a database: how identifiers and literals
 are written, how params reach the server, and which clauses exist. Pass one as
-`options.dialect`. `DialectTransactions` (with `IsolationLevel` and `TransactionSettings`) says
+`options.dialect`, or provide it as `CurrentDialect`, a `Context.Reference<Dialect | undefined>`
+that `compile` reads when no `options.dialect` is given. `DialectTransactions` (with `IsolationLevel` and `TransactionSettings`) says
 which transactions the database supports, and how settings are written: `beginTransaction`
 (optional) for a BEGIN that carries them, `setTransaction` for a statement run after BEGIN;
 see [Database](./database.md#settings). See [Params and compilation](./params-and-compilation.md#dialects) and
@@ -424,7 +425,8 @@ Types: `WindowSpec`, `CompiledWindowSpec`, `WindowFrameBound`, `WindowRowsFrame`
 ### Dialect
 
 `compile` and the other compile functions default to `clickhouseDialect`: params written into the
-SQL as ClickHouse literals.
+SQL as ClickHouse literals. A `CurrentDialect` in context, or `options.dialect`, overrides
+the default.
 
 ---
 
@@ -515,7 +517,8 @@ unit union), `dateBin(seconds, ts)`, `now()`, `lower(x)`, `upper(x)`, `length(x)
 ### Dialect
 
 `compile` and the other compile functions default to `postgresDialect`: numbered `$n`
-placeholders, double-quoted identifiers.
+placeholders, double-quoted identifiers. A `CurrentDialect` in context, or `options.dialect`, overrides
+the default.
 
 ---
 
@@ -555,8 +558,8 @@ conditions).
 ## SQLite and D1
 
 `@maple-dev/effect-orm/sqlite` exports the shared query builder and the four compile functions.
-`sqliteDialect` is the default; `d1Dialect` uses the same SQL with a 100-binding limit and no
-interactive transactions. See [SQLite and D1](./sqlite.md) for driver wiring and limits.
+`sqliteDialect` is the default; a `CurrentDialect` in context, or `options.dialect`, overrides it.
+`d1Dialect` uses the same SQL with a 100-binding limit and no interactive transactions. See [SQLite and D1](./sqlite.md) for driver wiring and limits.
 
 | Export | Purpose |
 | --- | --- |

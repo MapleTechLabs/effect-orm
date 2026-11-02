@@ -151,6 +151,7 @@ export {
 export { formatDecodeError, type DecodeIssue, type FormatDecodeErrorOptions } from "./ch/decode-error"
 
 export {
+	CurrentDialect,
 	type Dialect,
 	type DialectClauses,
 	type DialectTransactions,

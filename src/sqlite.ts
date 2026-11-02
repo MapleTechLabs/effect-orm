@@ -5,6 +5,7 @@
 // the SQLite dialect. Migrations stay with the caller for now. See
 // docs/sqlite.md.
 import { compileCH, compileCHRaw, compileCHUnsafe, compileUnion as compileUnionCH, compileUnionUnsafe as compileUnionUnsafeCH } from "./ch/compile"
+import { activeDialect, type Dialect } from "./ch/dialect"
 import { compiled, compiledUnsafe } from "./ch/failure"
 import { table as queryTable, type Table, type TableOptions } from "./ch/table"
 import type { ColumnDefs } from "./ch/types"
@@ -20,6 +21,7 @@ import {
 	type TableDefinition,
 } from "./schema/sqlite-define"
 import { sqliteDialect } from "./sqlite/dialect"
+import { Effect } from "effect"
 
 export * from "./core"
 export * from "./sqlite/types"
@@ -68,21 +70,31 @@ export function table(name: string, definition: any, options?: TableOptions<any,
 }
 export { sqliteDialect, d1Dialect } from "./sqlite/dialect"
 
-/** The shared compiler, defaulting to SQLite. Pass d1Dialect for D1's limits. */
+/** The dialect a `/sqlite` compile writes for: `options.dialect`, else `CurrentDialect`, else SQLite. */
+const sqliteOptions = <O extends { readonly dialect?: Dialect | undefined } | undefined>(options: O) => ({
+	...options,
+	dialect: options?.dialect ?? activeDialect() ?? sqliteDialect,
+})
+
+/**
+ * The shared compiler, for SQLite unless `options.dialect` or `CurrentDialect`
+ * says otherwise. Pass (or provide) d1Dialect for D1's limits. The dialect is
+ * read when the Effect runs, from the fiber that runs it.
+ */
 export const compile: typeof compileCH = (
 	query: Parameters<typeof compileCHRaw>[0],
 	params?: Record<string, unknown>,
 	options?: Parameters<typeof compileCHRaw>[2],
-) => compiled(() => compileCHRaw(query, params, { ...options, dialect: options?.dialect ?? sqliteDialect }))
+) => compiled(() => compileCHRaw(query, params, sqliteOptions(options)))
 
 /** Compile immediately, throwing on a failed compile. */
 export const compileUnsafe: typeof compileCHUnsafe = (
 	query: Parameters<typeof compileCHRaw>[0],
 	params?: Record<string, unknown>,
 	options?: Parameters<typeof compileCHRaw>[2],
-) => compiledUnsafe(() => compileCHRaw(query, params, { ...options, dialect: options?.dialect ?? sqliteDialect }))
+) => compiledUnsafe(() => compileCHRaw(query, params, sqliteOptions(options)))
 
 export const compileUnion: typeof compileUnionCH = (query, params, options) =>
-	compileUnionCH(query, params, { ...options, dialect: options?.dialect ?? sqliteDialect })
+	Effect.suspend(() => compileUnionCH(query, params, sqliteOptions(options)))
 export const compileUnionUnsafe: typeof compileUnionUnsafeCH = (query, params, options) =>
-	compileUnionUnsafeCH(query, params, { ...options, dialect: options?.dialect ?? sqliteDialect })
+	compileUnionUnsafeCH(query, params, sqliteOptions(options))

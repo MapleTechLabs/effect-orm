@@ -1,8 +1,11 @@
 import { describe, expect, it } from "@effect/vitest"
-import { compile as compileFragment, str } from "../sql/sql-fragment"
+import { Effect } from "effect"
+import { compile as compileFragment, lazy, str } from "../sql/sql-fragment"
 import { compileCHUnsafe, compileUnionUnsafe } from "./compile"
 import type { Dialect } from "./dialect"
 import * as CH from "./index"
+import * as PG from "../postgres"
+import * as SQLite from "../sqlite"
 
 const numbered: Dialect = {
 	...CH.clickhouseDialect,
@@ -221,5 +224,97 @@ describe("dialect identifiers and clauses", () => {
 
 		expect(() => compileCHUnsafe(branch.format("JSON"), {}, { dialect: quoted })).toThrow(/no FORMAT clause/)
 		expect(compileCHUnsafe(branch.format("JSON"), {}).sql).toMatch(/FORMAT JSON$/)
+	})
+})
+
+describe("dialect from Effect context", () => {
+	const params = { orgId: "org_1", service: "api" }
+
+	it.effect("compile reads CurrentDialect when no dialect is passed", () =>
+		Effect.gen(function* () {
+			const compiled = yield* CH.compile(byService, params).pipe(Effect.provideService(CH.CurrentDialect, numbered))
+			expect(compiled.sql).toContain("OrgId = $1")
+			expect(compiled.parameters).toEqual(["org_1", "api"])
+			// An explicit dialect beats the one in context.
+			const explicit = yield* CH.compile(byService, params, { dialect: CH.clickhouseDialect }).pipe(
+				Effect.provideService(CH.CurrentDialect, numbered),
+			)
+			expect(explicit.sql).toContain("OrgId = 'org_1'")
+		}),
+	)
+
+	it.effect("the /postgres compile defaults to Postgres, and also reads CurrentDialect", () =>
+		Effect.gen(function* () {
+			const query = PG.from(PG.table("users", { columns: { email: PG.text } })).select("email").where(($) => [$.email.eq("a@x")])
+			expect((yield* PG.compile(query)).sql).toContain(`"email" = $1`)
+			const inContext = yield* PG.compile(query).pipe(Effect.provideService(PG.CurrentDialect, standard))
+			expect(inContext.sql).toContain("email = 'a@x'")
+			expect(PG.compileUnsafe(query).sql).toContain(`"email" = $1`)
+		}),
+	)
+
+	it.effect("the /sqlite compile defaults to SQLite, and reads CurrentDialect (D1's binding limit)", () =>
+		Effect.gen(function* () {
+			const users = SQLite.table("users", { email: SQLite.text })
+			const query = SQLite.from(users).select("email").where(($) => [$.email.eq("a@x")])
+			expect((yield* SQLite.compile(query)).sql).toContain(`"email" = ?`)
+			const inContext = yield* SQLite.compile(query).pipe(Effect.provideService(SQLite.CurrentDialect, standard))
+			expect(inContext.sql).toContain("email = 'a@x'")
+			const union = yield* SQLite.compileUnion(SQLite.unionAll(query, query)).pipe(Effect.provideService(SQLite.CurrentDialect, standard))
+			expect(union.sql).toContain("email = 'a@x'")
+			// D1 from context: more than 100 bindings is refused before dispatch.
+			const wide = SQLite.from(users).select("email").where(($) => [$.email.in_(...Array.from({ length: 101 }, (_, index) => `u${index}`))])
+			expect((yield* SQLite.compile(wide)).parameters).toHaveLength(101)
+			const refused = yield* SQLite.compile(wide).pipe(Effect.provideService(SQLite.CurrentDialect, SQLite.d1Dialect), Effect.flip)
+			expect(refused.message).toMatch(/100/)
+		}),
+	)
+
+	it.effect("compiles for two dialects in concurrent fibers", () =>
+		Effect.gen(function* () {
+			const compileIn = (dialect: Dialect) =>
+				Effect.gen(function* () {
+					yield* Effect.yieldNow
+					const compiled = yield* CH.compile(byService, params)
+					yield* Effect.yieldNow
+					return compiled
+				}).pipe(Effect.provideService(CH.CurrentDialect, dialect))
+			const results = yield* Effect.all(
+				Array.from({ length: 20 }, (_, index) => compileIn(index % 2 === 0 ? numbered : standard)),
+				{ concurrency: "unbounded" },
+			)
+			results.forEach((compiled, index) => {
+				if (index % 2 === 0) {
+					expect(compiled.sql).toContain("OrgId = $1")
+					expect(compiled.parameters).toEqual(["org_1", "api"])
+				} else {
+					expect(compiled.sql).toContain("OrgId = 'org_1'")
+					expect(compiled.parameters).toEqual([])
+				}
+			})
+		}),
+	)
+
+	it("keeps the compile's dialect in its own fiber, not in module state", () => {
+		// While a numbered compile runs, a compile in another fiber sees none of it.
+		let inner: string | undefined
+		const outer = compileCHUnsafe(
+			CH.from(events)
+				.select(($) => ({ count: $.Count }))
+				.where(($) => [
+					$.OrgId.eq(CH.param.string("orgId")),
+					CH.makeCond(
+						lazy(() => {
+							inner = Effect.runSync(Effect.sync(() => compileCHUnsafe(byService, params).sql))
+							return "1 = 1"
+						}),
+						[],
+					),
+				]),
+			{ orgId: "org_1" },
+			{ dialect: numbered },
+		)
+		expect(outer.sql).toContain("OrgId = $1")
+		expect(inner).toContain("OrgId = 'org_1'")
 	})
 })

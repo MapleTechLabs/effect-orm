@@ -588,6 +588,25 @@ describe("docs/params-and-compilation.md", () => {
 		expect(oneLine(compileCHUnsafe(query, { orgId: "org_a" }).sql)).toContain("'org_a'")
 		expect(oneLine(compileCHUnsafe(query, { orgId: "org_b" }).sql)).toContain("'org_b'")
 	})
+
+	it.effect("The dialect can come from Effect context", () =>
+		Effect.gen(function* () {
+			const numbered: CH.Dialect = {
+				...CH.clickhouseDialect,
+				name: "numbered",
+				params: { _tag: "bind", placeholder: (index) => `$${index}`, reuse: true },
+			}
+			const query = CH.from(Events)
+				.select(($) => ({ name: $.Name }))
+				.where(($) => [$.OrgId.eq(CH.param.string("orgId"))])
+
+			const compiled = yield* CH.compile(query, { orgId: "org_1" }).pipe(
+				Effect.provideService(CH.CurrentDialect, numbered),
+			)
+			expect(oneLine(compiled.sql)).toContain("OrgId = $1")
+			expect(compiled.parameters).toEqual(["org_1"])
+		}),
+	)
 })
 
 // decoding-results.md
