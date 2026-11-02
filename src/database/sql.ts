@@ -5,7 +5,7 @@
 // Postgres, an escaped literal for ClickHouse, which takes no bound values over
 // HTTP. Nothing in a value can become SQL.
 
-import { Effect } from "effect"
+import { Effect, Redacted } from "effect"
 import { checkedLiteral, type Dialect } from "../ch/dialect"
 import { QueryBuilderError } from "../ch/errors"
 import { collectFailures, fail } from "../ch/failure"
@@ -117,14 +117,25 @@ const identifier = (dialect: Dialect, name: string): string => {
 		.join(".")
 }
 
-/** Text with the dialect's placeholders, and the values they bind. */
-export const renderTemplate = (
-	template: SqlTemplate,
-	dialect: Dialect,
-): Effect.Effect<{ readonly sql: string; readonly parameters: ReadonlyArray<unknown> }, DatabaseError> =>
+/** A rendered template: text with the dialect's placeholders, and the values they bind. */
+export interface RenderedTemplate {
+	readonly sql: string
+	readonly parameters: ReadonlyArray<unknown>
+	/** The indexes in `parameters` of the values given as `Redacted`. Absent when there are none. */
+	readonly sensitiveParameters?: ReadonlyArray<number>
+}
+
+/**
+ * Text with the dialect's placeholders, and the values they bind. A `Redacted`
+ * value binds as its plain value and is marked in `sensitiveParameters`. A
+ * dialect that writes values into the text (ClickHouse) refuses it: the value
+ * would be in the statement text, which spans and errors carry.
+ */
+export const renderTemplate = (template: SqlTemplate, dialect: Dialect): Effect.Effect<RenderedTemplate, DatabaseError> =>
 	Effect.suspend(() => {
-		const { value, failures } = collectFailures(() => {
+		const { value, failures } = collectFailures((): RenderedTemplate => {
 			const parameters: Array<unknown> = []
+			const sensitiveParameters: Array<number> = []
 			const render = (current: SqlTemplate): string => {
 				if (emptyJoins.has(current)) {
 					return fail(new QueryBuilderError({ code: "InvalidArguments", message: "sql.join: no values to join" }), "")
@@ -136,15 +147,30 @@ export const renderTemplate = (
 					if (isIdentifier(value)) return text + identifier(dialect, value.name) + part
 					if (isRaw(value)) return text + value.sql + part
 					if (dialect.params._tag === "inline") {
+						if (Redacted.isRedacted(value)) {
+							return fail(
+								new QueryBuilderError({
+									code: "InvalidLiteral",
+									message: `a Redacted sql\`\` value would be written into the ${dialect.name} statement text; ${dialect.name} binds no values here`,
+								}),
+								"",
+							)
+						}
 						// A negative literal after `-` would write `--`, which comments out the line.
 						const literal = checkedLiteral(dialect, value, "a sql`` value")
 						return text + (literal.startsWith("-") ? `(${literal})` : literal) + part
 					}
-					parameters.push(value)
+					if (Redacted.isRedacted(value)) {
+						sensitiveParameters.push(parameters.length)
+						parameters.push(Redacted.value(value))
+					} else {
+						parameters.push(value)
+					}
 					return text + dialect.params.placeholder(parameters.length, "") + part
 				}, "")
 			}
-			return { sql: render(template), parameters }
+			const sql = render(template)
+			return sensitiveParameters.length > 0 ? { sql, parameters, sensitiveParameters } : { sql, parameters }
 		})
 		const failure = failures[0]
 		return failure === undefined

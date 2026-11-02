@@ -609,6 +609,7 @@ the default.
 | `withQuerySummary`, `QuerySummary` — the `db.query.summary` of the statements an effect runs, for spans | `/database` |
 | `layerTest`, `TestDatabase`, `TestDatabaseApi`, `TestDatabaseOptions`, `TestReply`, `TestStatement` — a `Database` with no server, for unit tests | `/database` |
 | `rows`, `insert`, `arbitrary`, `pick`, `SeedError`, `SeedRow`, `SeedRowOf`, `ColumnOverride`, `RowsOptions`, `InsertOptions`, `ArbitraryOptions` — rows from the column Schemas; see [Seeding](./seeding.md) | `/seed` |
+| `StatementObservation` — what `observeExit` gets for each statement: names, duration, rows, `error.type` | `/database` |
 | `ClickhouseHttpClient`, `layer`, `make`, `ClickhouseHttpClientConfig` — a ClickHouse `SqlClient` over `fetch`, for Workers | `/clickhouse-http` |
 | `defineConfig`, `generate`, `check`, `pull`, `verifySchema`, `loadSchema`, `readMigrations`, `analyze`, `KitError` | `/kit`            |
 | `defineSuite`, `query`, `caseFromCompiled`, `runSuite`, `compareRuns`, `compareBudgets`          | `/benchmark`      |

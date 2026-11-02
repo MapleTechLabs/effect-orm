@@ -88,7 +88,7 @@ export {
 	type Related,
 	type WithOf,
 } from "./database/relations"
-export { QuerySummary, withQuerySummary } from "./database/tracing"
+export { QuerySummary, withQuerySummary, type StatementObservation } from "./database/tracing"
 export {
 	TestDatabase,
 	layerTest,

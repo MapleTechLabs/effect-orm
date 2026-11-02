@@ -179,6 +179,8 @@ For SQL inside a builder query rather than a whole statement, use
 | `dialect` | `postgresDialect` or `clickhouseDialect` |
 | `command` | Wraps `execute`. Pass ClickHouse's `asCommand`: DDL has no JSON result |
 | `observe` | Called with every statement before it runs, including the `BEGIN ...` or `SET TRANSACTION` a transaction's settings become |
+| `observeExit` | Called with every statement after it ends: names, duration, rows or `error.type`. See [Observing statements](#observing-statements) |
+| `spanParameters` | Put the bound values on the span as `db.query.parameter.<index>`. Off by default. See [Redaction](#redaction) |
 
 `run` refuses a query compiled for another dialect (`CompiledQuery.dialect`), as a defect: a
 query compiled with the `/clickhouse` entry's `compile` would run on Postgres with the wrong
@@ -652,6 +654,61 @@ out.
 
 _(Backed by `src/database/repository.test.ts`, `src/database/repository.test-d.ts`,
 `src/database/repository.sqlite.test.ts` and `tests/repository.clickhouse.test.ts`.)_
+
+### Observing statements
+
+`observeExit` gets a `StatementObservation` for each statement when it ends, success or not.
+Use it for metrics, a slow-query log, or one log line per request:
+
+```ts
+const db = Db.fromSqlClient(sql, {
+	dialect: postgresDialect,
+	observeExit: (o) =>
+		o.durationMillis > 200 ? Effect.logWarning("slow statement", o.summary, o.durationMillis) : Effect.void,
+})
+```
+
+| Field            | Value                                                                    |
+| ---------------- | ------------------------------------------------------------------------ |
+| `sql`            | The statement text                                                       |
+| `parameters`     | The bound values; a value given as `Redacted` stays `Redacted`           |
+| `system`         | `db.system.name`                                                         |
+| `operation`      | `db.operation.name`; for `sql\`...\``, its first word                  |
+| `collection`     | `db.collection.name`, when there is one table                            |
+| `summary`        | `db.query.summary`, the span name                                        |
+| `tenantScope`    | The compiled query's tenant scope; absent for `sql\`...\``              |
+| `route`          | The compiled query's `route`, when it has one                            |
+| `durationMillis` | From just before the statement is sent until its result is back          |
+| `rows`           | The rows it returned; absent for `execute` and for a failure             |
+| `errorType`      | On failure: the `DatabaseError` reason, the error's tag, or `Interrupted` |
+
+`observe` still runs before each statement, with the `Statement` as it is sent.
+
+### Redaction
+
+Spans carry no bound values by default. The statement span carries the query text
+(`db.query.text`), which has placeholders, not values, on Postgres, SQLite and D1. To put the
+values on the span, as `db.query.parameter.<index>`, set `spanParameters: true`.
+
+A value given as `Redacted` never reaches a span or `observeExit` as plain text. Give a column a
+`Redacted` type with `brand`; the driver gets the plain value:
+
+```ts
+const doorCode = PG.brand(PG.text, Schema.RedactedFromValue(Schema.String))
+const Codes = PG.table("door_codes", { columns: { id: PG.int4, code: doorCode }, primaryKey: ["id"] })
+
+yield* Db.run(PG.insertInto(Codes).values({ id: 1, code: Redacted.make("4821") }))
+// with spanParameters: db.query.parameter.0 = "1", db.query.parameter.1 = "<redacted>"
+```
+
+`compile` marks such values in `CompiledQuery.sensitiveParameters`, whether they are compared
+values, `param.*` values, or values an insert or update writes. `sql\`...\`` binds a
+`Redacted` value as its plain value and marks it too. This holds on every dialect that binds
+values: Postgres, SQLite and D1.
+
+ClickHouse writes values into the statement text, so there the text, and the span's
+`db.query.text` with it, carries them, including a `Redacted` column value the builder wrote.
+`sql\`...\`` refuses a `Redacted` value on ClickHouse for this reason.
 
 ## Writes
 

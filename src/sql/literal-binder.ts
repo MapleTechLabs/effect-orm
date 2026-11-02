@@ -9,8 +9,12 @@
 import { Context } from "effect"
 import { fiberLocal } from "./fiber-local"
 
-/** Takes an encoded wire value; returns the SQL that stands for it. */
-export type LiteralBinder = (wire: unknown) => string
+
+/**
+ * Takes an encoded wire value, and whether it was given as `Redacted`; returns
+ * the SQL that stands for it.
+ */
+export type LiteralBinder = (wire: unknown, sensitive?: boolean) => string
 
 // Kept in the compiling fiber's context; see `fiber-local.ts`.
 const current = fiberLocal(

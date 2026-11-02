@@ -34,12 +34,17 @@ import {
 } from "./errors"
 import { isSqlTemplate, renderTemplate, type SqlTemplate } from "./sql"
 import { errorCodeOf, firstLine, reasonOf, sqlStateOf, toDatabaseError } from "./sql-error"
-import { traceStatement, traceStream, type TracedStatement } from "./tracing"
+import { traceStatement, traceStream, type StatementObservation, type TraceOptions, type TracedStatement } from "./tracing"
 
 /** SQL and the values bound to its placeholders. A `CompiledQuery` is one. */
 export interface Statement {
 	readonly sql: string
 	readonly parameters?: ReadonlyArray<unknown>
+	/**
+	 * The indexes in `parameters` of values that must not reach a span or a log:
+	 * those given as `Redacted`. Set by `compile` and by `sql\`...\``.
+	 */
+	readonly sensitiveParameters?: ReadonlyArray<number>
 }
 
 /** What `query` and `execute` take: a `sql\`...\`` template, or SQL with its parameters. */
@@ -192,6 +197,19 @@ export interface FromSqlClientOptions<Functions extends string = string> {
 	 */
 	readonly driverSpans?: boolean
 	/**
+	 * Called with every statement once it has ended: its names, duration, row
+	 * count or `error.type`. Values given as `Redacted` stay `Redacted` in its
+	 * `parameters`. For metrics, slow-query logs, or a statement collector.
+	 */
+	readonly observeExit?: (observation: StatementObservation) => Effect.Effect<void>
+	/**
+	 * Put each bound value on the statement span as
+	 * `db.query.parameter.<index>`, as the OpenTelemetry conventions allow. Off
+	 * by default, so spans carry no values. A value given as `Redacted` is
+	 * written `<redacted>`.
+	 */
+	readonly spanParameters?: boolean
+	/**
 	 * Refuse, as a `TenantScopeViolation` defect, any compiled statement whose
 	 * `tenantScope` is `"cross-tenant"` unless it was declared with
 	 * `.crossTenant()`. Off by default. Plain SQL given to `query` and
@@ -254,6 +272,7 @@ export const fromSqlClient = <Functions extends string = string>(
 		options.driverSpans === true ? effect : Effect.withTracerEnabled(effect, false)
 	const driverStream = <A, E, R>(stream: Stream.Stream<A, E, R>): Stream.Stream<A, E, R> =>
 		options.driverSpans === true ? stream : Stream.provideService(stream, References.TracerEnabled, false)
+	const traceOptions: TraceOptions = { spanParameters: options.spanParameters, observeExit: options.observeExit }
 	// Result names exactly as the server sent them: the compiled decoder reads
 	// the aliases it wrote.
 	const raw = sql.withoutTransforms()
@@ -300,6 +319,7 @@ export const fromSqlClient = <Functions extends string = string>(
 				Effect.mapError(toDatabaseError(statement.sql)),
 			),
 			(rows) => rows.length,
+			traceOptions,
 		)
 
 	const decodeWith =
@@ -338,6 +358,8 @@ export const fromSqlClient = <Functions extends string = string>(
 					Effect.asVoid,
 					Effect.mapError(toDatabaseError(resolved.sql)),
 				),
+				undefined,
+				traceOptions,
 			),
 		)
 
@@ -390,6 +412,7 @@ export const fromSqlClient = <Functions extends string = string>(
 					Stream.unwrap(Effect.as(guard(statement), driverStream(raw.unsafe<Record<string, unknown>>(statement.sql, statement.parameters ?? []).stream))).pipe(
 						Stream.mapError(toDatabaseError(statement.sql)),
 					),
+					traceOptions,
 				)
 
 	// Each row through the query's row schema, as `decodeRows` does for a whole result.
