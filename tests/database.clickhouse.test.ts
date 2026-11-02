@@ -2,7 +2,7 @@
 // refused before anything is sent. Creates one table in a throwaway database.
 
 import { ClickhouseClient } from "@effect/sql-clickhouse"
-import { DateTime, Effect, Exit } from "effect"
+import { DateTime, Effect, Exit, Stream } from "effect"
 import { describe, expect, it } from "vitest"
 import * as CH from "@maple-dev/effect-orm/clickhouse"
 import * as Db from "@maple-dev/effect-orm/database"
@@ -196,6 +196,24 @@ describe("database", () => {
 				{ OrgId: "p", Id: 3 },
 			])
 			expect(result.nulls).toEqual([{ Id: 1 }, { Id: 3 }])
+		})
+
+		it("streams a query's rows through Effect's ClickHouse client, decoding each one", async () => {
+			const rows = await Effect.runPromise(
+				withDatabase((db) =>
+					Effect.gen(function* () {
+						yield* db.execute(Db.sql`CREATE TABLE events (Id UInt64, Name String) ENGINE = MergeTree ORDER BY Id`)
+						yield* db.execute(Db.sql`INSERT INTO events VALUES (${1}, ${"a"}), (${2}, ${"b"}), (${3}, ${"c"})`)
+						const Events = CH.table("events", { external: true, columns: { Id: CH.uint64, Name: CH.string } })
+						return yield* Stream.runCollect(db.stream(CH.from(Events).select("Id", "Name").orderBy(["Id", "asc"])))
+					}),
+				),
+			)
+			expect(rows).toEqual([
+				{ Id: 1, Name: "a" },
+				{ Id: 2, Name: "b" },
+				{ Id: 3, Name: "c" },
+			])
 		})
 
 		it("refuses a transaction before sending anything", async () => {

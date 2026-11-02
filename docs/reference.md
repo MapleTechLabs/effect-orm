@@ -512,7 +512,7 @@ placeholders, double-quoted identifiers.
 | `ClickHouseStatementFromString`, `splitTerminalClauses`, `maskLiteralsAndComments`               | `/sql`            |
 | Schema tooling: `isSchemaObject`, `makeSnapshot`, `renderSchema`, `diffSchemas`, `diffPgSchemas`, `fromDrizzleSnapshot`, snapshot and entity schemas (`PgEnumEntity`, `PgUniqueEntity`, …), `Hint`; for SQLite, `sqliteEntitiesOf`, `renderSqliteSchema`, `renderSqliteCreateTable`, `renderSqliteCreateIndex`, `diffSqliteSchemas`, `fromDrizzleSqliteSnapshot`, `SqliteMigrationOp`, `renderSqliteOp`, `renderSqliteMigrationSql`, `labelOfSqlite`, `rebuildName`, the `SqliteSnapshot` schema and the `SqliteTableEntity`, `SqliteColumnEntity`, `SqliteIndexEntity`, `SqliteUniqueEntity` schemas | `/schema`         |
 | `run`, `status`, `verify`, `baseline`, `MigrationDriver` and the migrate errors                  | `/migrate`        |
-| `Database`, `run`, `runOne`, `runOption`, `runNonEmpty`, `sql`, `query`, `execute`, `transaction`, `requireTransaction`, `afterCommit`, `retryContention`, `Transaction` | `/database` |
+| `Database`, `run`, `runOne`, `runOption`, `runNonEmpty`, `stream`, `sql`, `query`, `execute`, `transaction`, `requireTransaction`, `afterCommit`, `retryContention`, `Transaction` | `/database` |
 | `DatabaseError`, `ResultCardinalityError`, `TransactionCommitFailed`, `TransactionRollbackFailed` and the other transaction errors | `/database` |
 | `withQuerySummary`, `QuerySummary` — the `db.query.summary` of the statements an effect runs, for spans | `/database` |
 | `layerTest`, `TestDatabase`, `TestDatabaseApi`, `TestDatabaseOptions`, `TestReply`, `TestStatement` — a `Database` with no server, for unit tests | `/database` |

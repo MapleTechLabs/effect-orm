@@ -21,6 +21,7 @@ export {
 	runNonEmpty,
 	runOne,
 	runOption,
+	stream,
 	transaction,
 	type DatabaseApi,
 	type RowOf,

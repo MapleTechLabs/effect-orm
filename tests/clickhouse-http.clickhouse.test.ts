@@ -70,6 +70,20 @@ describe.skipIf(!endpoint)("ClickhouseHttpClient on ClickHouse", () => {
 			}),
 		)
 
+		it.effect("Db.stream decodes each streamed row with the query's row schema, and stops early", () =>
+			Effect.gen(function* () {
+				const query = CH.from(Numbers).select(($) => ({ n: $.number })).where(($) => [$.number.lt(CH.param.int("limit"))])
+				const rows = yield* Stream.runCollect(Db.stream(query, { limit: 3 }))
+				// UInt64 arrives as a string and is decoded to a number by the row schema.
+				expect(rows).toEqual([{ n: 0 }, { n: 1 }, { n: 2 }])
+				// An unbounded scan ends when the consumer stops reading.
+				expect(yield* Stream.runCollect(Stream.take(Db.stream(CH.from(Numbers).select(($) => ({ n: $.number }))), 2))).toEqual([
+					{ n: 0 },
+					{ n: 1 },
+				])
+			}),
+		)
+
 		it.effect("classifies a syntax error", () =>
 			Effect.gen(function* () {
 				const exit = yield* Effect.exit(Db.query({ sql: "SELEKT 1" }))

@@ -85,6 +85,7 @@ Calling `withdraw(1, 30)` outside `transfer` does not compile: `requireTransacti
 | `Database` | The service |
 | `run(query, params?)` | Compile a query for the database's dialect, run it, decode its rows |
 | `runOne`, `runOption`, `runNonEmpty` | `run`, with a check on how many rows came back ([Cardinality](#cardinality)) |
+| `stream(query, params?)` | `run` as a `Stream`: each row decoded as it arrives |
 | `sql\`...\`` | A statement with every `${value}` bound; `sql.identifier(name)` for a table or column name |
 | `query(statement, schema?)` | Run a statement and return its rows, decoded when a schema is given |
 | `execute(statement)` | Run a statement and discard its rows |
@@ -96,7 +97,7 @@ Calling `withdraw(1, 30)` outside `transfer` does not compile: `requireTransacti
 | `isContention(error)` | Whether an error is a serialization failure or deadlock |
 | `layerTest(options)`, `TestDatabase` | A `Database` with no server, for unit tests ([Testing](./testing.md#testing-your-own-code-layertest)) |
 
-`run`, `query`, `execute`, `transaction` and `retryContention` are also methods on
+`run`, `stream`, `query`, `execute`, `transaction` and `retryContention` are also methods on
 `DatabaseApi`.
 
 ### Queries and statements
@@ -178,6 +179,29 @@ For SQL inside a builder query rather than a whole statement, use
 query compiled with the `/clickhouse` entry's `compile` would run on Postgres with the wrong
 quoting and inlined params. Rows come back without the client's name transforms, because the
 decoder reads the aliases the compiler wrote.
+
+### Streaming rows
+
+`stream` takes what `run` takes and returns a `Stream` of the same rows. Each row goes through
+the query's row schema when it arrives, so an export or a reconciliation over a large table does
+not hold the whole result in memory:
+
+```ts
+const rows = Db.stream(PG.from(AccessLogs).select("id", "at", "lock_id").where(($) => [$.at.gte(since)]))
+yield* rows.pipe(Stream.grouped(500), Stream.runForEach(writeBatch))
+```
+
+The statement is sent when the stream runs, and again each time it runs. A row that does not
+match the schema fails the stream with `CompiledQueryDecodeError` and its `rowIndex`, after the
+rows before it; a failed statement fails it with `DatabaseError`. Inside `transaction`, the
+stream reads on the transaction's connection, so run it to the end before the body returns.
+
+How rows arrive is the driver's: `stream` uses the `SqlClient` statement's `.stream`. The
+ClickHouse clients read the response body as it comes. A driver with no streaming read, such as
+PGlite, reads the whole result first and then emits it row by row. On `sqliteDialect` and
+`d1Dialect` the result is always read whole first, because Effect's SQLite and D1 drivers have no
+streaming read at all. A write streams its `RETURNING` rows, and one without `RETURNING` runs and emits nothing.
+The statement's span stays open until the stream ends and counts the rows it emitted.
 
 Build the `Database` wherever you build the client. If each request has its own pool, build a
 `Database` per request from it: nothing request-scoped is stored in the `Database`, and the

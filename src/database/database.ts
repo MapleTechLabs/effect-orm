@@ -7,7 +7,7 @@
 // statements outliving their transaction, and contention retry. See
 // `design/transactions.md`.
 
-import { Array as Arr, Cause, Context, Effect, ErrorReporter, Exit, Layer, Option, Schedule, Schema } from "effect"
+import { Array as Arr, Cause, Context, Effect, ErrorReporter, Exit, Layer, Option, References, Schedule, Schema, Stream } from "effect"
 import { dual } from "effect/Function"
 import * as SqlClient from "effect/sql/SqlClient"
 import { isSqlError } from "effect/sql/SqlError"
@@ -32,7 +32,7 @@ import {
 } from "./errors"
 import { isSqlTemplate, renderTemplate, type SqlTemplate } from "./sql"
 import { firstLine, reasonOf, sqlStateOf, toDatabaseError } from "./sql-error"
-import { traceStatement, type TracedStatement } from "./tracing"
+import { traceStatement, traceStream, type TracedStatement } from "./tracing"
 
 /** SQL and the values bound to its placeholders. A `CompiledQuery` is one. */
 export interface Statement {
@@ -110,6 +110,17 @@ export interface DatabaseApi {
 		query: Q & RunCheck<Q> & ParamsSatisfied<QueryParams<Q>, Given>,
 		params?: Given,
 	) => Effect.Effect<ReadonlyArray<RowOf<Q>>, DatabaseError | QueryBuilderError | CompiledQueryDecodeError>
+	/**
+	 * `run` as a stream: rows come out one at a time, each decoded by the
+	 * query's row schema, so a large result never has to fit in memory. The
+	 * statement is sent when the stream runs, and again each time it runs.
+	 * Rows arrive as the driver reads them: a cursor where the driver has one,
+	 * otherwise the whole result first.
+	 */
+	readonly stream: <Q extends Runnable, const Given extends object = {}>(
+		query: Q & RunCheck<Q> & ParamsSatisfied<QueryParams<Q>, Given>,
+		params?: Given,
+	) => Stream.Stream<RowOf<Q>, DatabaseError | QueryBuilderError | CompiledQueryDecodeError>
 	/** Run a statement and return its rows, decoded through `schema` when given. */
 	readonly query: {
 		(statement: StatementInput): Effect.Effect<ReadonlyArray<Record<string, unknown>>, DatabaseError>
@@ -219,6 +230,8 @@ export const fromSqlClient = (sql: SqlClient.SqlClient, options: FromSqlClientOp
 	// The statement span is the span: the driver's own runs untraced unless asked for.
 	const driver = <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>
 		options.driverSpans === true ? effect : Effect.withTracerEnabled(effect, false)
+	const driverStream = <A, E, R>(stream: Stream.Stream<A, E, R>): Stream.Stream<A, E, R> =>
+		options.driverSpans === true ? stream : Stream.provideService(stream, References.TracerEnabled, false)
 	// Result names exactly as the server sent them: the compiled decoder reads
 	// the aliases it wrote.
 	const raw = sql.withoutTransforms()
@@ -333,6 +346,56 @@ export const fromSqlClient = (sql: SqlClient.SqlClient, options: FromSqlClientOp
 				: Effect.flatMap(rows(compiled), (wire) => compiled.decodeRows(wire)),
 		)
 
+	// Effect's SQLite drivers (node:sqlite, D1, …) have no streaming read: their
+	// `.stream` dies with "executeStream not implemented". A SQLite-family
+	// dialect reads the whole result as `run` does and emits it row by row.
+	const cursorless = dialect.functions === "sqlite"
+
+	const wireStream = (statement: Statement & TracedStatement): Stream.Stream<Record<string, unknown>, DatabaseError> =>
+		cursorless
+			? Stream.fromIterableEffect(rows(statement))
+			: traceStream(
+					dialect,
+					statement,
+					Stream.unwrap(Effect.as(guard(statement), driverStream(raw.unsafe<Record<string, unknown>>(statement.sql, statement.parameters ?? []).stream))).pipe(
+						Stream.mapError(toDatabaseError(statement.sql)),
+					),
+				)
+
+	// Each row through the query's row schema, as `decodeRows` does for a whole result.
+	const decodeStream = (
+		compiled: CompiledQuery<any, any>,
+		wire: Stream.Stream<Record<string, unknown>, DatabaseError>,
+	): Stream.Stream<unknown, DatabaseError | CompiledQueryDecodeError> => {
+		const schema = compiled.rowSchema
+		if (schema === undefined) return wire
+		const decode = Schema.decodeUnknownEffect(schema)
+		return wire.pipe(
+			Stream.zipWithIndex,
+			Stream.mapEffect(([row, rowIndex]) =>
+				decode(row).pipe(
+					Effect.mapError(
+						(cause) =>
+							new CompiledQueryDecodeError({
+								message: `Compiled query row ${rowIndex} did not match its declared output schema`,
+								rowIndex,
+								cause,
+							}),
+					),
+				),
+			),
+		)
+	}
+
+	const stream: DatabaseApi["stream"] = (runnable, params) =>
+		Stream.unwrap(
+			Effect.map(Effect.flatMap(compileFor(runnable, params ?? {}), checkScope), (compiled) =>
+				compiled.kind !== "select" && compiled.returning === undefined
+					? Stream.fromEffectDrain(execute(compiled))
+					: decodeStream(compiled, wireStream(compiled)),
+			),
+		) as Stream.Stream<never, DatabaseError | QueryBuilderError | CompiledQueryDecodeError>
+
 	const retryContention = <A, E, R>(effect: Effect.Effect<A, E, R>, retry?: RetryOptions) =>
 		Effect.flatMap(Effect.serviceOption(sql.transactionService), (open): Effect.Effect<A, E | TransactionOptionsRejected, R> =>
 			Option.isSome(open)
@@ -433,7 +496,7 @@ export const fromSqlClient = (sql: SqlClient.SqlClient, options: FromSqlClientOp
 			? once(body, options)
 			: retryContention(once(body, options), options.retry === "contention" ? undefined : options.retry)
 
-	return { dialect, run, query, execute, transaction, retryContention }
+	return { dialect, run, stream, query, execute, transaction, retryContention }
 }
 
 /**
@@ -557,6 +620,13 @@ export const runNonEmpty = <Q extends Runnable, const Given extends object = {}>
 	Effect.flatMap(run(query, params), (rows) =>
 		Arr.isReadonlyArrayNonEmpty(rows) ? Effect.succeed(rows) : Effect.fail(cardinalityError("nonEmpty", 0)),
 	)
+
+/** `stream` on the `Database` in context. */
+export const stream = <Q extends Runnable, const Given extends object = {}>(
+	query: Q & RunCheck<Q> & ParamsSatisfied<QueryParams<Q>, Given>,
+	params?: Given,
+): Stream.Stream<RowOf<Q>, DatabaseError | QueryBuilderError | CompiledQueryDecodeError, Database> =>
+	Stream.unwrap(Effect.map(Effect.service(Database), (db) => db.stream(query, params)))
 
 /** `query` on the `Database` in context. */
 export const query: {
