@@ -112,6 +112,13 @@ layer(Live)("Database statement spans", (it) => {
 		}),
 	)
 
+	it.effect("does not read a table name out of a string literal", () =>
+		Effect.gen(function* () {
+			const { spans } = yield* traced(Db.execute(Db.sql`SELECT 'from Alice', 'it''s from Bob' AS note FROM traced_items`))
+			expect(dbSpan(spans).name).toBe("SELECT traced_items")
+		}),
+	)
+
 	it.effect("names plain SQL without a table after its operation alone", () =>
 		Effect.gen(function* () {
 			const { spans } = yield* traced(Db.execute(Db.sql`SELECT pg_advisory_xact_lock(${1})`))

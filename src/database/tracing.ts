@@ -44,13 +44,15 @@ const OPERATIONS: Record<NonNullable<TracedStatement["kind"]>, string> = {
 // as the conventions allow: the first operation and the first collection named.
 const LEADING_WORD = /^\s*(\w+)/
 const FIRST_TABLE = /(?:from|into|update|join|table)\s+\W?([\w.]+)/i
+/** String literals, with `''` and backslash escapes, so text inside them is not read as a table. */
+const STRING_LITERAL = /'(?:[^'\\]|\\.|'')*'/g
 
 /** The operation and table a statement names: compiled, or read off plain SQL. */
 const describeStatement = (statement: TracedStatement): { operation?: string; collection?: string } => {
 	if (statement.kind !== undefined) return { operation: OPERATIONS[statement.kind], collection: statement.collection }
 	return {
 		operation: LEADING_WORD.exec(statement.sql)?.[1]?.toUpperCase(),
-		collection: FIRST_TABLE.exec(statement.sql)?.[1],
+		collection: FIRST_TABLE.exec(statement.sql.replace(STRING_LITERAL, "''"))?.[1],
 	}
 }
 
