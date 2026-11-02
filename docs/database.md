@@ -98,6 +98,8 @@ Calling `withdraw(1, 30)` outside `transfer` does not compile: `requireTransacti
 | `layerTest(options)`, `TestDatabase` | A `Database` with no server, for unit tests ([Testing](./testing.md#testing-your-own-code-layertest)) |
 | `refineConstraints(effect)` | Fail with a typed `ConstraintViolation` where a statement broke a constraint ([Constraint violations](#constraint-violations)) |
 | `constraintViolation(error)` | The `ConstraintViolation` an error reports, as an `Option` |
+| `findById(query, { key })` | A batched lookup of one row by a key: N concurrent calls send one statement ([Batching lookups](#batching-lookups)) |
+| `findAllBy(query, { key })` | A batched lookup of every row with a key, such as the children of a parent |
 
 `run`, `stream`, `query`, `execute`, `transaction` and `retryContention` are also methods on
 `DatabaseApi`.
@@ -380,6 +382,82 @@ errors. Use it around a transaction, or around a single statement outside one. I
 transaction it fails with `TransactionOptionsRejected`, because the database has already
 aborted the whole transaction. `transaction(body, { retry: "contention" })` is shorthand for
 `retryContention(transaction(body))`, so each attempt starts with a fresh BEGIN.
+
+## Batching lookups
+
+Many fibers that each read one row by its id send one statement per fiber: the N+1 problem.
+`findById` and `findAllBy` collect the lookups that run at the same time into one batch, with
+Effect's `RequestResolver`, and send one statement for the batch: your query with
+`key IN (...)` added to its WHERE.
+
+```ts title="batched-lookups.ts"
+import { Effect } from "effect"
+import * as Db from "@maple-dev/effect-orm/database"
+import * as PG from "@maple-dev/effect-orm/postgres"
+
+const Users = PG.table("users", {
+	columns: { id: PG.int4, org_id: PG.text, name: PG.text },
+	primaryKey: ["id"],
+	tenantColumn: "org_id",
+})
+const Posts = PG.table("posts", {
+	columns: { id: PG.int4, org_id: PG.text, author_id: PG.int4, title: PG.text },
+	primaryKey: ["id"],
+	tenantColumn: "org_id",
+})
+
+// Built once, for example at module level. The tenant is a param.
+const userById = Db.findById(
+	PG.from(Users)
+		.select("id", "name")
+		.where(($) => [$.org_id.eq(PG.param.string("org"))]),
+	{ key: "id" },
+)
+const postsByAuthor = Db.findAllBy(
+	PG.from(Posts)
+		.select("id", "author_id", "title")
+		.where(($) => [$.org_id.eq(PG.param.string("org"))])
+		.orderBy(["id", "asc"]),
+	{ key: "author_id" },
+)
+
+// One SELECT for the users and one for their posts, whatever the number of ids.
+export const authors = (org: string, ids: ReadonlyArray<number>) =>
+	Effect.forEach(
+		ids,
+		(id) =>
+			Effect.all({ user: userById.with({ org })(id), posts: postsByAuthor.with({ org })(id) }, { concurrency: "unbounded" }),
+		{ concurrency: "unbounded" },
+	)
+```
+
+- **Rows** decode as `run` decodes them. The query must select `key` under its own name, so
+  each row can go back to the lookup that asked for it. That is a type error if it does not.
+- **Not found.** `findById` fails with `NoSuchElementError` for a key with no row; with more
+  than one row, the first one wins. `findAllBy` gives an empty array.
+- **Params.** Call the lookup directly when the query has no `param.*` markers. Otherwise
+  give them first with `.with(params)`, which checks them as `run` does.
+- **What shares a batch.** Lookups through the same `findById` that run at the same time, on
+  the same `Database`, in the same transaction (or both outside one), with equal params. A
+  lookup inside a transaction never runs on another connection, and one outside never runs
+  inside it. A key asked for twice is sent once.
+- **Tenant scope.** Put the tenant filter in the query, with a value or a param. Lookups with
+  different params never share a batch, so one statement never reads two tenants, and
+  [`requireTenantScope`](./tenant-scoping.md#enforcing-it) checks each batch statement as it
+  checks `run`.
+- **Bound-parameter limits.** On a dialect with a limit on the values one statement may
+  bind (D1: 100, Postgres: 65535), a large batch is split into statements that each fit,
+  with room for the query's own params. The statements run one after another on the
+  batch's connection. Each key is in exactly one of them, so its rows keep the query's
+  `ORDER BY`. ClickHouse inlines values and has no such limit.
+- **`limit` and `offset`** would apply to the whole batch, not to each key, so a query with
+  either fails with `QueryBuilderError` and sends nothing.
+
+The batch waits one `yieldNow`, the same as Effect's own resolvers, so the lookups must start
+together: through `Effect.forEach` or `Effect.all` with concurrency, or in fibers forked in the
+same step. Lookups in sequence send one statement each.
+
+_(Backed by `Request batching on PGlite`, in `src/database/resolver.test.ts`: one statement for N lookups, tenants and transactions kept apart; and `src/database/resolver.sqlite.test.ts`: a D1 batch over 100 bindings split into statements that fit.)_
 
 ## ClickHouse
 

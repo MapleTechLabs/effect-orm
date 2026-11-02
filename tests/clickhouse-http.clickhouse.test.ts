@@ -26,6 +26,7 @@ const Live = Layer.effect(
 ).pipe(Layer.provideMerge(Client))
 
 const Numbers = CH.table("system.numbers", { external: true, columns: { number: CH.uint64 } })
+const Databases = CH.table("system.databases", { external: true, columns: { name: CH.string, engine: CH.string } })
 
 describe.skipIf(!endpoint)("ClickhouseHttpClient on ClickHouse", () => {
 	it.layer(Live)((it) => {
@@ -39,6 +40,20 @@ describe.skipIf(!endpoint)("ClickhouseHttpClient on ClickHouse", () => {
 					{ limit: 3 },
 				)
 				expect(rows).toEqual([{ n: 0 }, { n: 1 }, { n: 2 }])
+			}),
+		)
+
+		it.effect("batches concurrent findById lookups into one IN statement", () =>
+			Effect.gen(function* () {
+				const byName = Db.findById(CH.from(Databases).select("name").crossTenant(), { key: "name" })
+				const found = yield* Effect.forEach(["system", "default", "no_such_db"], (name) => Effect.result(byName(name)), {
+					concurrency: "unbounded",
+				})
+				expect(found.map((result) => (result._tag === "Success" ? result.success : result.failure._tag))).toEqual([
+					{ name: "system" },
+					{ name: "default" },
+					"NoSuchElementError",
+				])
 			}),
 		)
 

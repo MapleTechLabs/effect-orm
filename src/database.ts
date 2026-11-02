@@ -68,5 +68,13 @@ export {
 	type TestReply,
 	type TestStatement,
 } from "./database/test-layer"
+export {
+	findAllBy,
+	findById,
+	type FindAllBy,
+	type FindById,
+	type LookupError,
+	type LookupOptions,
+} from "./database/resolver"
 export { sql, type SqlIdentifier, type SqlRawText, type SqlTemplate } from "./database/sql"
 export type { DialectTransactions, IsolationLevel, TransactionSettings } from "./ch/dialect"

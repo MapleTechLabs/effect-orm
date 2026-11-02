@@ -579,6 +579,7 @@ the default.
 | `DatabaseError`, `ResultCardinalityError`, `TransactionCommitFailed`, `TransactionRollbackFailed` and the other transaction errors | `/database` |
 | `refineConstraints`, `constraintViolation`, and the `ConstraintViolation` errors `UniqueViolation`, `ForeignKeyViolation`, `NotNullViolation`, `CheckViolation` | `/database` |
 | `makeRepository`, `Repository`, `TenantRepository`, `RepositoryOf`, `RepositoryOptions`, `RepositoryError` — CRUD derived from a table, tenant-pinned | `/database` |
+| `findById`, `findAllBy`, `FindById`, `FindAllBy`, `LookupOptions`, `LookupError` — batched lookups by a key, one `IN` statement per batch | `/database` |
 | `withQuerySummary`, `QuerySummary` — the `db.query.summary` of the statements an effect runs, for spans | `/database` |
 | `layerTest`, `TestDatabase`, `TestDatabaseApi`, `TestDatabaseOptions`, `TestReply`, `TestStatement` — a `Database` with no server, for unit tests | `/database` |
 | `ClickhouseHttpClient`, `layer`, `make`, `ClickhouseHttpClientConfig` — a ClickHouse `SqlClient` over `fetch`, for Workers | `/clickhouse-http` |
