@@ -96,6 +96,8 @@ Calling `withdraw(1, 30)` outside `transfer` does not compile: `requireTransacti
 | `Transaction` | The open transaction (`depth`, `isolationLevel`, `accessMode`) |
 | `isContention(error)` | Whether an error is a serialization failure or deadlock |
 | `layerTest(options)`, `TestDatabase` | A `Database` with no server, for unit tests ([Testing](./testing.md#testing-your-own-code-layertest)) |
+| `refineConstraints(effect)` | Fail with a typed `ConstraintViolation` where a statement broke a constraint ([Constraint violations](#constraint-violations)) |
+| `constraintViolation(error)` | The `ConstraintViolation` an error reports, as an `Option` |
 
 `run`, `stream`, `query`, `execute`, `transaction` and `retryContention` are also methods on
 `DatabaseApi`.
@@ -308,11 +310,51 @@ again. `read uncommitted` is not offered because Postgres runs it as `read commi
 
 | Error | When |
 | --- | --- |
-| `DatabaseError` | A statement failed. `reason` is the driver's classification (`UniqueViolation`, `SerializationError`, ...) and `sqlState` the server's code |
-| `TransactionCommitFailed` | COMMIT failed: a deferred constraint, a serialization failure at commit, a dropped connection. Carries `reason` and `sqlState` |
+| `DatabaseError` | A statement failed. `reason` is the driver's classification (`UniqueViolation`, `SerializationError`, ...), `sqlState` the server's five-character code (Postgres) and `errorCode` its numeric code (ClickHouse) |
+| `TransactionCommitFailed` | COMMIT failed: a deferred constraint, a serialization failure at commit, a dropped connection. Carries `reason`, `sqlState` and `errorCode` |
 | `TransactionRollbackFailed` | ROLLBACK failed after the body failed. `bodyCause` is the body's failure, `cause` the rollback's |
 | `TransactionOptionsRejected` | A setting the dialect does not support, or settings on a nested transaction |
 | `TransactionUnsupported` | The dialect has no transactions (ClickHouse) |
+
+### Constraint violations
+
+`refineConstraints(effect)` turns a `DatabaseError` or `TransactionCommitFailed` for a broken
+constraint into one tagged error per kind, so you can `catchTag` a duplicate key instead of
+reading SQLSTATEs. Every other failure passes through unchanged.
+
+| Error | Postgres SQLSTATE | ClickHouse code | SQLite and D1 |
+| --- | --- | --- | --- |
+| `UniqueViolation` | 23505 | — | `SQLITE_CONSTRAINT_UNIQUE`, `SQLITE_CONSTRAINT_PRIMARYKEY` |
+| `ForeignKeyViolation` | 23503 | — | `SQLITE_CONSTRAINT_FOREIGNKEY` |
+| `NotNullViolation` | 23502 | — | `SQLITE_CONSTRAINT_NOTNULL` |
+| `CheckViolation` | 23514 | 469 (`VIOLATED_CONSTRAINT`) | `SQLITE_CONSTRAINT_CHECK` |
+
+Each carries `message`, `sql`, the server's `sqlState` or `errorCode`, and `cause` (the error it
+came from). It also carries `constraint`, `table` and `column` when the server named them:
+Postgres names the constraint and the table, and the column for NOT NULL. ClickHouse names the
+CHECK constraint and the table (`db.table`) in its message. ClickHouse has no unique, foreign key
+or NOT NULL constraints to violate. SQLite names no unique index: a unique or NOT NULL violation
+carries the `table` and, when the key has one column, the `column`. A CHECK violation carries
+the CHECK's name as `constraint`, or its expression when it has no name. A foreign key violation
+names nothing. SQLite's extended code is read from `node:sqlite` and from D1's message; neither
+sets `sqlState` or `errorCode`.
+
+```ts title="database-constraints.ts"
+import { Effect } from "effect"
+import * as Db from "@maple-dev/effect-orm/database"
+
+// An idempotent write: a duplicate email is "already exists", not a failure.
+export const register = (email: string) =>
+	Db.execute(Db.sql`INSERT INTO users (email) VALUES (${email})`).pipe(
+		Db.refineConstraints,
+		Effect.as("created" as const),
+		Effect.catchTag("@maple-dev/effect-orm/UniqueViolation", () => Effect.succeed("exists" as const)),
+	)
+// Effect<"created" | "exists", DatabaseError | ForeignKeyViolation | NotNullViolation | CheckViolation, Database>
+```
+
+A deferred constraint fails at COMMIT, so put `refineConstraints` outside the `transaction`
+to see it.
 
 Effect fails with a bare `SqlError` on a failed COMMIT, dies on a failed ROLLBACK and, when
 ROLLBACK fails, drops the body's own failure. `transaction` turns these into the typed errors above. Defects

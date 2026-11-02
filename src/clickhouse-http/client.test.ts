@@ -106,6 +106,7 @@ describe("ClickhouseHttpClient", () => {
 		[516, "AuthenticationError"],
 		[497, "AuthorizationError"],
 		[159, "StatementTimeoutError"],
+		[469, "ConstraintError"],
 		[241, "UnknownError"],
 	] as const)("classifies ClickHouse code %s as %s", ([code, reason]) => {
 		const { live } = fake(() => ({
@@ -154,6 +155,25 @@ describe("ClickhouseHttpClient", () => {
 			const rows = yield* Db.run(query, { org: "o'1" })
 			expect(rows).toEqual([{ id: "18446744073709551615", n: 7 }])
 			expect(sent[0]?.body).toContain("events.OrgId = 'o\\'1'")
+		}).pipe(
+			Effect.provide(Layer.effect(Db.Database, Effect.gen(function* () {
+				return Db.fromSqlClient(yield* SqlClient.SqlClient, { dialect: CH.clickhouseDialect })
+			})).pipe(Layer.provideMerge(live))),
+		)
+	})
+
+	it.effect("keeps the numeric code on DatabaseError, and a violated CHECK is CheckViolation", () => {
+		const body =
+			"Code: 469. DB::Exception: Constraint `positive` for table default.rents (7fee639d-39fa-44e2-936d-107bc35ca49b) is violated at row 1. Expression: (cents > 0). Column values: cents = -5. (VIOLATED_CONSTRAINT) (version 26.10.2.103 (official build))"
+		const { live } = fake(() => ({ status: 500, body, headers: { "x-clickhouse-exception-code": "469" } }))
+		return Effect.gen(function* () {
+			const insert = Db.execute(Db.sql`INSERT INTO rents VALUES (${1}, ${-5})`)
+			const raw = yield* Effect.flip(insert)
+			expect(raw).toMatchObject({ errorCode: 469, reason: "ConstraintError" })
+			expect(raw.sqlState).toBeUndefined()
+			const error = yield* Effect.flip(insert.pipe(Db.refineConstraints))
+			expect(error).toBeInstanceOf(Db.CheckViolation)
+			expect(error).toMatchObject({ constraint: "positive", table: "default.rents", errorCode: 469 })
 		}).pipe(
 			Effect.provide(Layer.effect(Db.Database, Effect.gen(function* () {
 				return Db.fromSqlClient(yield* SqlClient.SqlClient, { dialect: CH.clickhouseDialect })

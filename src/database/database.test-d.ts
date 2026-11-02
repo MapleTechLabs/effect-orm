@@ -109,3 +109,9 @@ const byNote = CH.from(Items)
 expectTypeOf(Db.stream(byNote, { note: "a" })).toEqualTypeOf<Stream.Stream<Row, RunError, Db.Database>>()
 // @ts-expect-error -- a missing param is a type error
 Db.stream(byNote)
+// `refineConstraints` adds the violations; catching one removes it.
+const write = Db.execute(Db.sql`INSERT INTO t VALUES (1)`).pipe(Db.refineConstraints)
+expectTypeOf(write).toEqualTypeOf<Effect.Effect<void, Db.DatabaseError | Db.ConstraintViolation, Db.Database>>()
+expectTypeOf(write.pipe(Effect.catchTag("@maple-dev/effect-orm/UniqueViolation", (error) => Effect.succeed(error.constraint)))).toEqualTypeOf<
+	Effect.Effect<string | undefined | void, Db.DatabaseError | Db.ForeignKeyViolation | Db.NotNullViolation | Db.CheckViolation, Db.Database>
+>()

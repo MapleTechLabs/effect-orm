@@ -34,15 +34,21 @@ export {
 	type TransactionInfo,
 	type TransactionOptions,
 } from "./database/database"
+export { constraintViolation, refineConstraints } from "./database/constraint"
 export {
+	CheckViolation,
 	DatabaseError,
 	ResultCardinalityError,
+	ForeignKeyViolation,
+	NotNullViolation,
+	UniqueViolation,
 	TenantScopeViolation,
 	TransactionClosed,
 	TransactionCommitFailed,
 	TransactionOptionsRejected,
 	TransactionRollbackFailed,
 	TransactionUnsupported,
+	type ConstraintViolation,
 	type TransactionError,
 } from "./database/errors"
 export { QuerySummary, withQuerySummary } from "./database/tracing"
