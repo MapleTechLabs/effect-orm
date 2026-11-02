@@ -71,6 +71,8 @@ export {
 export {
 	defineRelations,
 	findMany,
+	related,
+	type CountOf,
 	type FindManyOptions,
 	type FindManyRow,
 	type KeyColumn,
@@ -78,9 +80,12 @@ export {
 	type RelationalSchema,
 	type RelationalTable,
 	type RelationBuilder,
+	type RelationFilter,
 	type RelationOptions,
 	type RelationsConfig,
 	type RelationTables,
+	type RelationWhere,
+	type Related,
 	type WithOf,
 } from "./database/relations"
 export { QuerySummary, withQuerySummary } from "./database/tracing"

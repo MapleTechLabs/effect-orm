@@ -600,6 +600,7 @@ the default.
 | `makeRepository`, `Repository`, `TenantRepository`, `RepositoryOf`, `RepositoryOptions`, `RepositoryError` — CRUD derived from a table, tenant-pinned | `/database` |
 | `findById`, `findAllBy`, `FindById`, `FindAllBy`, `LookupOptions`, `LookupError` — batched lookups by a key, one `IN` statement per batch | `/database` |
 | `defineRelations`, `findMany`, `Relation`, `RelationBuilder`, `RelationsConfig`, `RelationTables`, `RelationalSchema`, `RelationalTable`, `RelationOptions`, `FindManyOptions`, `FindManyRow`, `WithOf`, `KeyColumn` — relational reads, one statement per level ([Relational reads](./relations.md)) | `/database` |
+| `related`, `Related`, `RelationFilter`, `RelationWhere`, `CountOf` — relation filters `some` / `none` / `every`, relation counts, and `_count` in `findMany` ([Filter by relations](./relations.md#filter-by-relations)) | `/database` |
 | `withQuerySummary`, `QuerySummary` — the `db.query.summary` of the statements an effect runs, for spans | `/database` |
 | `layerTest`, `TestDatabase`, `TestDatabaseApi`, `TestDatabaseOptions`, `TestReply`, `TestStatement` — a `Database` with no server, for unit tests | `/database` |
 | `rows`, `insert`, `arbitrary`, `pick`, `SeedError`, `SeedRow`, `SeedRowOf`, `ColumnOverride`, `RowsOptions`, `InsertOptions`, `ArbitraryOptions` — rows from the column Schemas; see [Seeding](./seeding.md) | `/seed` |

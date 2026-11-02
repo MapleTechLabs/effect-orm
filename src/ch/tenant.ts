@@ -32,3 +32,19 @@ export const withTenantBound = <A extends ScopedQuery>(query: A, bound: string |
 	if (bound !== undefined) bounds.set(query, bound)
 	return query
 }
+
+/**
+ * A correlated subquery whose main table's tenant column equals a tenant column
+ * of the enclosing query (`inner.OrgId = outer.OrgId` in its own WHERE). Only
+ * the relation filters mark one, and they write that equality themselves.
+ * Compiled as a subquery, it takes the enclosing column's binding instead of
+ * needing one of its own; compiled alone, the mark means nothing.
+ */
+const correlated = new WeakMap<object, string>()
+export const correlatedTenantOf = (query: object): string | undefined => correlated.get(query)
+export const markCorrelatedTenant = <A extends object>(query: A, outerColumn: string): A => {
+	correlated.set(query, outerColumn)
+	return query
+}
+/** The bound a correlated subquery reports: the outer column, not a value. */
+export const correlatedBound = (outerColumn: string): string => `\u0000correlated:${outerColumn}`

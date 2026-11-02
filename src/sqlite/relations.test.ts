@@ -108,3 +108,94 @@ it("splits a level's IN list to fit D1's 100 bound values", async () => {
 		await mf.dispose()
 	}
 }, 60_000)
+
+// Relation filters and counts: correlated EXISTS and count(*) are plain SQL, so
+// SQLite runs them as Postgres does. `_count` is a grouped level, split on D1
+// like a loaded one.
+const withSqlite = <A, E>(units: number, body: (db: Db.DatabaseApi) => Effect.Effect<A, E, Db.Database>) =>
+	Effect.runPromise(
+		Effect.gen(function* () {
+			const db = Db.fromSqlClient(yield* SqlClient.SqlClient, { dialect: SQLite.sqliteDialect, requireTenantScope: true })
+			yield* setup(db, units)
+			yield* db.execute({ sql: "DELETE FROM locks WHERE unit_id = 2" })
+			return yield* body(db).pipe(Effect.provideService(Db.Database, db))
+		}).pipe(Effect.provide(SqliteClient.layer({ filename: ":memory:" }))),
+	)
+
+it("filters by related rows and counts them on SQLite, inside the outer tenant", async () => {
+	const seen = await withSqlite(3, (db) =>
+		Effect.gen(function* () {
+			const some = yield* Db.findMany(schema.units, {
+				where: ($, r) => [$.org_id.eq("a"), r.locks.some()],
+				orderBy: ($) => [[$.id, "asc"]],
+			})
+			const none = yield* Db.findMany(schema.units, { where: ($, r) => [$.org_id.eq("a"), r.locks.none()] })
+			const every = yield* Db.findMany(schema.units, {
+				where: ($, r) => [$.org_id.eq("a"), r.locks.every(($) => [$.id.lt(4)])],
+				orderBy: ($) => [[$.id, "asc"]],
+			})
+			const counted = yield* Db.findMany(schema.units, {
+				where: ($) => [$.org_id.eq("a")],
+				orderBy: ($) => [[$.id, "asc"]],
+				_count: { locks: true },
+			})
+			const selected = yield* db.run(
+				SQLite.from(Units)
+					.select(($) => ({ id: $.id, org_id: $.org_id, locks: Db.related(schema.units, $).locks.count() }))
+					.where(($) => [$.org_id.eq("a")])
+					.orderBy(["id", "asc"]),
+			)
+			return {
+				some: some.map((unit) => unit.id),
+				none: none.map((unit) => unit.id),
+				every: every.map((unit) => unit.id),
+				counted: counted.map((unit) => [unit.id, unit._count.locks]),
+				selected: selected.map((row) => [row.id, row.locks]),
+			}
+		}),
+	)
+	// Unit 1 also has a lock of org b: the tenant pin keeps it out of every filter and count.
+	expect(seen).toEqual({
+		some: [1, 3],
+		none: [2],
+		every: [1, 2],
+		counted: [[1, 2], [2, 0], [3, 2]],
+		selected: [[1, 2], [2, 0], [3, 2]],
+	})
+})
+
+it("splits a _count level to fit D1's 100 bound values", async () => {
+	const mf = new Miniflare({
+		modules: true,
+		script: "export default { fetch() { return new Response('D1 relation counts test') } }",
+		compatibilityDate: "2026-07-01",
+		d1Databases: ["DB"],
+	})
+	try {
+		const binding = await mf.getD1Database("DB")
+		const { units, statements } = await Effect.runPromise(
+			Effect.gen(function* () {
+				const statements: Array<string> = []
+				const db = Db.fromSqlClient(yield* SqlClient.SqlClient, {
+					dialect: SQLite.d1Dialect,
+					requireTenantScope: true,
+					observe: (statement) => Effect.sync(() => void statements.push(statement.sql)),
+				})
+				yield* setup(db, 250)
+				statements.length = 0
+				const units = yield* Db.findMany(schema.units, {
+					where: ($, r) => [$.org_id.eq("a"), r.locks.some(($) => [$.id.gt(0)])],
+					_count: { locks: true },
+				}).pipe(Effect.provideService(Db.Database, db))
+				return { units, statements }
+			}).pipe(Effect.provide(D1Client.layer({ db: binding }))),
+		)
+		expect(units).toHaveLength(250)
+		expect(units.every((unit) => unit._count.locks === 2)).toBe(true)
+		// The top level, then 3 grouped count statements of at most 99 keys.
+		expect(statements).toHaveLength(4)
+		for (const statement of statements) expect((statement.match(/\?/g) ?? []).length).toBeLessThanOrEqual(100)
+	} finally {
+		await mf.dispose()
+	}
+}, 60_000)
