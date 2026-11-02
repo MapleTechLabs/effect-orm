@@ -7,10 +7,10 @@
 // statements outliving their transaction, and contention retry. See
 // `design/transactions.md`.
 
-import { Cause, Context, Effect, Exit, Layer, Option, Schedule, Schema } from "effect"
+import { Cause, Context, Effect, ErrorReporter, Exit, Layer, Option, Schedule, Schema } from "effect"
 import { dual } from "effect/Function"
 import * as SqlClient from "effect/sql/SqlClient"
-import { isSqlError, type SqlError } from "effect/sql/SqlError"
+import { isSqlError } from "effect/sql/SqlError"
 import { compileCH, compileUnion, CompiledQueryDecodeError, type CompiledQuery } from "../ch/compile"
 import { noTransactions, type Dialect, type IsolationLevel, type TransactionSettings } from "../ch/dialect"
 import type { QueryBuilderError } from "../ch/errors"
@@ -29,7 +29,6 @@ import {
 	TransactionUnsupported,
 	type TransactionError,
 } from "./errors"
-import { coreBeginTransaction, type BeginTransactionReference } from "./begin-transaction"
 import { isSqlTemplate, renderTemplate, type SqlTemplate } from "./sql"
 import { firstLine, reasonOf, sqlStateOf, toDatabaseError } from "./sql-error"
 import { traceStatement, type TracedStatement } from "./tracing"
@@ -204,20 +203,7 @@ const committed = (state: OpenState) =>
 	})
 
 /** A `Database` over an Effect `SqlClient`. */
-export const fromSqlClient = (sql: SqlClient.SqlClient, options: FromSqlClientOptions): DatabaseApi =>
-	makeDatabase(sql, options, coreBeginTransaction)
-
-/**
- * `fromSqlClient` with the `SqlClient.BeginTransaction` reference given, so
- * tests can drive both paths on any effect. `undefined` means the installed
- * effect has none: settings are sent as `SET TRANSACTION`. Not exported from
- * the package.
- */
-export const makeDatabase = (
-	sql: SqlClient.SqlClient,
-	options: FromSqlClientOptions,
-	beginReference: BeginTransactionReference | undefined,
-): DatabaseApi => {
+export const fromSqlClient = (sql: SqlClient.SqlClient, options: FromSqlClientOptions): DatabaseApi => {
 	const { dialect } = options
 	const capabilities = dialect.transactions ?? noTransactions
 	const command = options.command ?? ((effect) => effect)
@@ -398,15 +384,12 @@ export const makeDatabase = (
 				depth === 0 || Option.isNone(outer)
 					? { depth, isolationLevel: settings.isolationLevel, accessMode: settings.accessMode }
 					: { ...outer.value, depth }
-			// Settings travel in BEGIN when both effect and the dialect can do it,
-			// else as a `SET TRANSACTION` run first. Top level only: a savepoint
-			// takes no settings.
-			const beginHook = beginReference === undefined ? undefined : capabilities.beginTransaction
-			const beginStatement = depth === 0 && beginHook !== undefined ? beginHook(settings) : undefined
-			const begin =
-				beginReference !== undefined && beginStatement !== undefined
-					? { reference: beginReference, sql: beginStatement }
-					: undefined
+			// Settings travel in BEGIN when the dialect can write one, else as a
+			// `SET TRANSACTION` run first. Top level only: a savepoint takes no
+			// settings. Without settings the client keeps its own BEGIN (SQLite's
+			// `BEGIN IMMEDIATE`, for one).
+			const beginHook = capabilities.beginTransaction
+			const begin = depth === 0 && beginHook !== undefined ? beginHook(settings) : undefined
 			const setTransaction = depth === 0 && beginHook === undefined ? capabilities.setTransaction(settings) : undefined
 			const state: OpenState = { open: true, client: sql }
 			let bodyExit: Exit.Exit<unknown, unknown> | undefined
@@ -418,7 +401,7 @@ export const makeDatabase = (
 				// The reference applies to every top-level transaction started while it
 				// is provided; clear it for the body, so a transaction on another client
 				// keeps that client's BEGIN.
-				(effect) => (begin === undefined ? effect : Effect.provideService(effect, begin.reference, undefined)),
+				(effect) => (begin === undefined ? effect : Effect.provideService(effect, SqlClient.BeginTransaction, undefined)),
 				Effect.provideService(Transaction, info),
 				Effect.provideService(TransactionOpen, state),
 				Effect.onExit((exit) =>
@@ -435,12 +418,12 @@ export const makeDatabase = (
 				begin === undefined
 					? sql.withTransaction(inner)
 					: Effect.andThen(
-							observe({ sql: begin.sql }),
-							sql.withTransaction(inner).pipe(Effect.provideService(begin.reference, begin.sql)),
+							observe({ sql: begin }),
+							sql.withTransaction(inner).pipe(Effect.provideService(SqlClient.BeginTransaction, begin)),
 						)
 			const exit = yield* Effect.exit(transaction.pipe(Effect.ensuring(committed(state))))
 			if (Exit.isSuccess(exit)) return exit.value
-			return yield* restoreCause<E>(exit.cause, bodyExit, depth, begin?.sql)
+			return yield* restoreCause<E>(exit.cause, bodyExit, depth, begin)
 		}).pipe(
 			Effect.withSpan("effect_orm.transaction", {
 				// Semconv defines no transaction attributes, and `db.*` is reserved for it.
@@ -459,23 +442,13 @@ export const makeDatabase = (
 	return { dialect, run, query, execute, transaction, retryContention }
 }
 
-const commitFailed = (error: SqlError, depth: number): TransactionCommitFailed => {
-	const sqlState = sqlStateOf(error)
-	return new TransactionCommitFailed({
-		message: `${depth === 0 ? "COMMIT" : "releasing the savepoint"} failed: ${firstLine(error)}`,
-		reason: reasonOf(error),
-		...(sqlState === undefined ? undefined : { sqlState }),
-		cause: error,
-	})
-}
-
 /**
  * Turn what came out of `withTransaction` back into what the caller should see.
- * Effect dies on a failed ROLLBACK, and a dying ROLLBACK replaces the body's own
- * exit. A failed COMMIT dies on effect 4.0.0 and fails with the `SqlError` from
- * 4.0.6. Body defects were carried through as `BodyDefect`, so any other defect
- * that is a `SqlError` came from transaction control, and so did a `SqlError`
- * failure after the body succeeded.
+ * Effect fails with the `SqlError` of a failed COMMIT (or dies, when cleanup
+ * after it failed too), and dies on a failed ROLLBACK, which replaces the body's
+ * own exit. Body defects were carried through as `BodyDefect`, so any other
+ * defect that is a `SqlError` came from transaction control. `begin` is the
+ * statement that started the transaction, when it was not the client's BEGIN.
  */
 const restoreCause = <E>(
 	cause: Cause.Cause<unknown>,
@@ -488,9 +461,27 @@ const restoreCause = <E>(
 		return Effect.failCause(failure.success.cause as Cause.Cause<E>)
 	}
 	const defect = Cause.findDefect(cause)
+	// The body succeeded, so a `SqlError` here came from COMMIT or RELEASE.
+	if (bodyExit !== undefined && Exit.isSuccess(bodyExit)) {
+		const error =
+			failure._tag === "Success" && isSqlError(failure.success)
+				? failure.success
+				: defect._tag === "Success" && isSqlError(defect.success)
+					? defect.success
+					: undefined
+		if (error === undefined) return Effect.failCause(cause as Cause.Cause<E>)
+		const sqlState = sqlStateOf(error)
+		return Effect.fail(
+			new TransactionCommitFailed({
+				message: `${depth === 0 ? "COMMIT" : "releasing the savepoint"} failed: ${firstLine(error)}`,
+				reason: reasonOf(error),
+				...(sqlState === undefined ? undefined : { sqlState }),
+				cause: error,
+			}),
+		)
+	}
 	if (defect._tag === "Success" && isSqlError(defect.success)) {
 		const error = defect.success
-		if (bodyExit !== undefined && Exit.isSuccess(bodyExit)) return Effect.fail(commitFailed(error, depth))
 		// The body never ran: BEGIN or SAVEPOINT died, not ROLLBACK.
 		if (bodyExit === undefined) return Effect.fail(toDatabaseError(depth === 0 ? (begin ?? "BEGIN") : "SAVEPOINT")(error))
 		// An interrupted transaction whose ROLLBACK died stays interrupted.
@@ -502,10 +493,6 @@ const restoreCause = <E>(
 				cause: error,
 			}),
 		)
-	}
-	// The body succeeded, so this failure is COMMIT's (effect 4.0.6 and later).
-	if (bodyExit !== undefined && Exit.isSuccess(bodyExit) && failure._tag === "Success" && isSqlError(failure.success)) {
-		return Effect.fail(commitFailed(failure.success, depth))
 	}
 	// BEGIN or SAVEPOINT failed before the body ran.
 	if (bodyExit === undefined && failure._tag === "Success" && isSqlError(failure.success)) {
@@ -559,6 +546,43 @@ export const execute = (statement: StatementInput): Effect.Effect<void, Database
  */
 export const requireTransaction = <A, E, R>(self: Effect.Effect<A, E, R>): Effect.Effect<A, E, R | Transaction> =>
 	Effect.andThen(Effect.service(Transaction), self)
+
+/**
+ * Queue `effect` to run after the outermost transaction commits, and never if
+ * it rolls back: an SMS, an HTTP call, a job enqueue. Effect's own
+ * `SqlClient.afterCommit` does the queueing (savepoints, ordering, rollback);
+ * this adds `Transaction` to the requirements, like `requireTransaction`, so
+ * work queued outside a transaction does not compile instead of running at once.
+ *
+ * A hook that fails does not fail the committed transaction: its cause goes to
+ * the `ErrorReporter`s in context and to an error log. Hooks run at most once;
+ * work that must happen belongs in an outbox table written in the transaction.
+ *
+ * ```ts
+ * yield* Db.afterCommit(sms.send(phone, text))
+ * ```
+ */
+export const afterCommit = <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<void, never, R | Transaction> =>
+	Effect.gen(function* () {
+		yield* Transaction
+		const state = yield* Effect.serviceOption(TransactionOpen)
+		if (Option.isNone(state)) {
+			return yield* Effect.die(new Error("Db.afterCommit: no transaction opened by Db.transaction is open"))
+		}
+		yield* state.value.client.afterCommit(
+			effect.pipe(
+				Effect.catchCause((cause) =>
+					ErrorReporter.report(cause).pipe(
+						Effect.andThen(Effect.logError("afterCommit hook failed after the transaction committed", cause)),
+					),
+				),
+				Effect.asVoid,
+				// Effect drops its own transaction from the hook's context; drop ours too,
+				// so a statement in the hook does not trip the closed-transaction guard.
+				Effect.updateContext((context: Context.Context<R>) => Context.omit(TransactionOpen, Transaction)(context) as Context.Context<R>),
+			),
+		)
+	})
 
 /**
  * `transaction` on the `Database` in context. Data-first or pipeable, so it

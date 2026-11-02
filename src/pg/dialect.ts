@@ -77,14 +77,6 @@ const placeholderCasts: Readonly<Record<string, string>> = {
 	dateTimeSeconds: "timestamptz",
 }
 
-/**
- * Postgres: double-quoted identifiers, standard string literals, and params
- * bound to `$1`, `$2`, … and returned in `CompiledQuery.parameters`.
- *
- * Portable param kinds encode for Postgres: `param.bool` binds a boolean
- * rather than ClickHouse's `1`/`0`, and `param.dateTime` an ISO-8601 instant
- * rather than a zoneless string a session time zone could reinterpret.
- */
 // Postgres takes the same mode list after `SET TRANSACTION` and after `BEGIN`.
 const transactionModes = (settings: TransactionSettings): string | undefined => {
 	const modes = [
@@ -95,6 +87,14 @@ const transactionModes = (settings: TransactionSettings): string | undefined => 
 	return modes.length === 0 ? undefined : modes.join(", ")
 }
 
+/**
+ * Postgres: double-quoted identifiers, standard string literals, and params
+ * bound to `$1`, `$2`, … and returned in `CompiledQuery.parameters`.
+ *
+ * Portable param kinds encode for Postgres: `param.bool` binds a boolean
+ * rather than ClickHouse's `1`/`0`, and `param.dateTime` an ISO-8601 instant
+ * rather than a zoneless string a session time zone could reinterpret.
+ */
 export const postgresDialect: Dialect = {
 	name: "postgres",
 	functions: "postgres",

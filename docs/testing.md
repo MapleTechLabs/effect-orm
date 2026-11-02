@@ -95,20 +95,28 @@ order, and `windowFunnel` with `strict_order` rejects intervening events.
 
 ## Fuzzing
 
-`tests/fuzz/` generates random inputs with fast-check and checks them against oracles that do
-not trust the builder:
+`tests/fuzz/` generates schema-shaped inputs with Effect Arbitrary and SQL plans
+with fast-check, checking them against independent oracles:
 
-- `literals.fuzz.test.ts`: a random value of each column type reaches the database twice. One
+- `literals.fuzz.test.ts`: a random value of each catalogued column type reaches each target twice. One
   copy goes through the database's own JSON parser as the reference, the other through the
   builder, both as a comparison literal and as a param in the SELECT list. The two must agree.
 - `queries.fuzz.test.ts`: random query plans (joins, nested conditions, grouping, having,
-  ordering, paging, subqueries) run on the core fixture and must match `model.ts`, a JS
+  ordering, paging, subqueries) run on the core fixture and generated tables and must match `model.ts`, a JS
   evaluator with SQL three-valued logic. A plan that reports `single-tenant` must have read
   one org's rows only.
 - `compile.fuzz.test.ts`: needs no database. Valid plans always compile, compile
   deterministically, leak no `undefined`, `NaN` or `__PARAM_`, and number Postgres
   placeholders `$1..$n`. Any JS value placed where a value goes is compiled or refused with a
   `QueryBuilderError`, never thrown and never a defect.
+- `codecs.fuzz.test.ts`: Effect `TestSchema` verifies composed codec round trips;
+  schema-generated rows survive compiled encoding/decoding, and malformed wire rows
+  fail with a typed decode error.
+- `migrations*.fuzz.test.ts`: SQLite/D1 and Postgres transitions are compared with
+  freshly created schemas and independent seed-row expectations, using varied text,
+  numeric, JSON, array and binary payloads as supported by each suite.
+- `registry.fuzz.test.ts`: every dialect and public type export must have a literal
+  property or an explicit exemption.
 
 `bun run test` runs a small budget (a few seconds). Use `bun run fuzz` for longer runs:
 
@@ -119,7 +127,9 @@ FUZZ_VERBOSE=1 bun run fuzz         # print checked / skipped counts per propert
 ```
 
 A failure prints the shrunk input, the SQL it compiled to, the database's reply, and a
-`FUZZ_SEED=… FUZZ_PATH=…` command that replays it. Pin the input in
+`FUZZ_SEED=… FUZZ_PATH=…` command that replays it. Effect-native properties print an
+opaque token instead; use `FUZZ_REPLAY=…` with the failing test name. See [the fuzz guide](../tests/fuzz/README.md) for generator
+choices and replay details. Pin the input in
 `tests/fuzz/regressions.ts`, which is replayed before any random input.
 
 Bugs found but not yet fixed live in `tests/fuzz/known-issues.ts`. Each entry recognises

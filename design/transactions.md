@@ -70,8 +70,8 @@ Postgres accepts until the first query of the transaction.
 
 effect 4.0.6 adds `SqlClient.BeginTransaction` (Effect-TS/effect#9576): a
 `Context.Reference<string | undefined>` that, when set, replaces the client's BEGIN for a
-top-level transaction (sent unprepared; savepoints ignore it). `transaction` uses it when the
-installed effect has it; see section 9.
+top-level transaction (sent unprepared; savepoints ignore it). `transaction` uses it for a
+dialect with `beginTransaction`; see section 9.
 
 **Tracing.** A `sql.transaction` span with `db.transaction.commit`,
 `db.transaction.savepoint` and `db.transaction.rollback` events; statements inside are
@@ -395,6 +395,10 @@ This is a translation of Effect 4.0.0 behavior. The right fix is upstream: COMMI
 that is part of phase 2; when it lands, steps 1 and 2 become a no-op. Decided: ship the
 translation and file upstream in parallel, not one after the other.
 
+Update (effect 4.0.6): COMMIT failure now arrives as a `SqlError` in the error channel (still a
+die when the cleanup after it fails too). Step 2 also accepts that failure when the body
+succeeded. ROLLBACK still dies and still replaces the body's exit.
+
 **Retry.** `Database.retryContention(effect, options?)` re-runs `effect` when it fails with
 `DatabaseError` or `TransactionCommitFailed` whose reason is `SerializationError` or
 `DeadlockError`, three times with exponential backoff from 50 ms by default, matching
@@ -449,7 +453,7 @@ export interface Dialect extends SqlSyntax {
 ```
 
 - `postgresDialect`: `full`, savepoints, the three levels, access modes, deferrable,
-  `SET TRANSACTION ...`.
+  `BEGIN ...` through `beginTransaction` (`SET TRANSACTION ...` for a dialect without it).
 - `clickhouseDialect`: `none`. A later `"experimental-session"` value would be added only with
   the session-bound executor from section 3.
 - MySQL later: `full`, savepoints, four levels; it needs `SET TRANSACTION` **before** BEGIN,
@@ -655,18 +659,31 @@ What landed differently from the sections above:
 - **Not yet done from phase 2:** the over-the-wire `@effect/sql-pg` suite (two connections,
   real serialization failures), and filing the upstream Effect issue for orDie'd COMMIT and
   ROLLBACK. The PGlite suite simulates contention with `RAISE ... USING ERRCODE`.
-- **Settings in BEGIN (`SqlClient.BeginTransaction`).** `DialectTransactions.beginTransaction`
+- **Settings in BEGIN (`SqlClient.BeginTransaction`, effect 4.0.6).** `DialectTransactions.beginTransaction`
   (optional) writes the BEGIN that carries the settings; Postgres writes
-  `BEGIN ISOLATION LEVEL ..., READ ONLY, DEFERRABLE`. The peer range starts at effect 4.0.0,
-  which has no `BeginTransaction`, so `src/database/begin-transaction.ts` reads it by name
-  (`Reflect.get`, so bundlers do not flag a missing export). When it is there and the dialect
-  has the hook, `transaction` provides the statement around `withTransaction` and sends no
-  `SET TRANSACTION`; otherwise it sends `SET TRANSACTION` as before. The reference is cleared
-  inside the body: Effect applies it to every top-level transaction started while it is
-  provided, so a transaction the body starts on a second client would take it too. `observe`
-  sees the BEGIN statement, so a statement collector still sees the settings. When the peer
-  range moves to `^4.0.6`, the seam becomes a plain `SqlClient.BeginTransaction` and the
-  `SET TRANSACTION` path stays only for dialects without `beginTransaction`.
-- **COMMIT failure on effect 4.0.6.** Effect 4.0.6 reports a failed COMMIT as a `SqlError`
-  failure, not a defect. A `SqlError` failure after the body succeeded is COMMIT's, so it is
-  `TransactionCommitFailed` on both versions. ROLLBACK still dies on 4.0.6.
+  `BEGIN ISOLATION LEVEL ..., READ ONLY, DEFERRABLE`. When the dialect has the hook,
+  `transaction` provides the statement around `withTransaction` and sends no
+  `SET TRANSACTION`; a dialect without it keeps `SET TRANSACTION`. SQLite has neither: its
+  client keeps its own `BEGIN IMMEDIATE`, and serializable is the only level it accepts. The
+  reference is cleared inside the body: Effect applies it to every top-level transaction
+  started while it is provided, so a transaction the body starts on a second client would take
+  it too. `observe` sees the BEGIN statement, so a statement collector still sees the settings.
+
+## 10. `afterCommit` (issue #73)
+
+`Db.afterCommit(effect)` queues work that must wait for COMMIT: a vendor call, a job enqueue.
+Effect 4.0.6 ships `SqlClient.afterCommit`, which already runs callbacks after the outermost
+COMMIT, drops those of a rolled-back transaction or savepoint, hands a kept savepoint's callbacks
+to its parent, and dies when queued after the transaction ended. `Db.afterCommit` delegates to
+it on the client of the open `Db.transaction` and adds only:
+
+- **`Transaction` in `R`.** Effect's version runs the work at once outside a transaction; here
+  that does not compile, like `requireTransaction`.
+- **A failing hook does not fail the transaction.** The data is committed; a typed failure at
+  that point would invite a retry that writes twice. The cause goes to
+  `ErrorReporter.report` and `Effect.logError`, and the next hook still runs.
+- **The hook's context drops the open-state and `Transaction`** as Effect drops its own
+  transaction service, so a statement in a hook does not trip the closed-transaction guard.
+
+At most once: hooks are not persisted. Guaranteed delivery is an outbox table written inside
+the transaction, which needs no library support.
