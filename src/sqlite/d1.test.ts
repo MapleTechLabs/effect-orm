@@ -96,5 +96,9 @@ it("refuses a D1 integer past 2^53 instead of decoding a different number", asyn
 		return yield* Effect.exit(db.run(SQLite.from(Big).select().crossTenant()))
 	}))
 	if (!Exit.isFailure(exit)) throw new Error(`an unsafe integer decoded as ${JSON.stringify(exit.value)}`)
-	expect(Cause.findError(exit.cause)).toMatchObject({ success: { _tag: "@maple-dev/effect-orm/CompiledQueryDecodeError" } })
+	expect(Cause.findError(exit.cause)).toMatchObject({
+		success: { _tag: "@maple-dev/effect-orm/CompiledQueryDecodeError", dialect: "d1", collection: "big", column: "id" },
+	})
+	// The value is row data: the printed failure names the column, not the number.
+	expect(Cause.pretty(exit.cause)).not.toContain("9007199254740992")
 }, 30_000)
