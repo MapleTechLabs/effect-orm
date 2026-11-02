@@ -9,6 +9,7 @@
 export {
 	Database,
 	Transaction,
+	afterCommit,
 	execute,
 	fromSqlClient,
 	isContention,
