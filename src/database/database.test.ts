@@ -44,6 +44,17 @@ const ids = (table: string) =>
 const raiseSqlState = (code: "40001" | "40P01") =>
 	Db.execute({ sql: `DO $$ BEGIN RAISE EXCEPTION 'forced' USING ERRCODE = '${code}'; END $$` })
 
+// Records the `SqlClient.BeginTransaction` each top-level transaction starts
+// with, then runs the real transaction.
+const recordingBegin = (sql: SqlClient.SqlClient, begins: Array<string | undefined>): SqlClient.SqlClient =>
+	Object.assign(Object.create(sql) as SqlClient.SqlClient, {
+		withTransaction: <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+			Effect.flatMap(Effect.service(SqlClient.BeginTransaction), (begin) => {
+				begins.push(begin)
+				return sql.withTransaction(effect)
+			}),
+	})
+
 class Domain extends Error {
 	readonly _tag = "Domain"
 }
@@ -291,7 +302,7 @@ layer(Live, { excludeTestServices: true })("Database on PGlite", (it) => {
 		}),
 	)
 
-	it.effect("applies settings as the first statement of the transaction", () =>
+	it.effect("applies settings when the transaction starts", () =>
 		Effect.gen(function* () {
 			statements.length = 0
 			const settings = yield* Db.transaction(
@@ -304,9 +315,48 @@ layer(Live, { excludeTestServices: true })("Database on PGlite", (it) => {
 				}),
 				{ isolationLevel: "serializable", accessMode: "read only", deferrable: true },
 			)
-			expect(statements[0]).toBe("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE, READ ONLY, DEFERRABLE")
+			// The settings travel in BEGIN; the current_setting values show PGlite ran it.
+			expect(statements[0]).toBe("BEGIN ISOLATION LEVEL SERIALIZABLE, READ ONLY, DEFERRABLE")
+			expect(statements).not.toContain("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE, READ ONLY, DEFERRABLE")
 			expect(settings.row).toEqual({ isolation: "serializable", read_only: "on" })
 			expect(settings.info).toEqual({ depth: 0, isolationLevel: "serializable", accessMode: "read only" })
+		}),
+	)
+
+	it.effect("with Effect's BeginTransaction, settings go into the BEGIN statement and no SET TRANSACTION is sent", () =>
+		Effect.gen(function* () {
+			const begins: Array<string | undefined> = []
+			const sent: Array<string> = []
+			const db = Db.fromSqlClient(recordingBegin(yield* SqlClient.SqlClient, begins), {
+				dialect: postgresDialect,
+				observe: (statement) => Effect.sync(() => void sent.push(statement.sql)),
+			})
+			const inBody = yield* db.transaction(
+				Effect.andThen(db.execute(Db.sql`SELECT 1`), Effect.service(SqlClient.BeginTransaction)),
+				{ isolationLevel: "serializable", accessMode: "read only", deferrable: true },
+			)
+			yield* db.transaction(db.execute(Db.sql`SELECT 2`))
+			expect(begins).toEqual(["BEGIN ISOLATION LEVEL SERIALIZABLE, READ ONLY, DEFERRABLE", undefined])
+			expect(sent).toEqual(["BEGIN ISOLATION LEVEL SERIALIZABLE, READ ONLY, DEFERRABLE", "SELECT 1", "SELECT 2"])
+			// Not seen inside the body, so a transaction it starts on another client keeps that client's BEGIN.
+			expect(inBody).toBeUndefined()
+		}),
+	)
+
+	it.effect("a dialect without beginTransaction sends its settings as a SET TRANSACTION run first", () =>
+		Effect.gen(function* () {
+			const sent: Array<string> = []
+			const { beginTransaction: _, ...transactions } = postgresDialect.transactions!
+			const db = Db.fromSqlClient(yield* SqlClient.SqlClient, {
+				dialect: { ...postgresDialect, transactions },
+				observe: (statement) => Effect.sync(() => void sent.push(statement.sql)),
+			})
+			const row = yield* db.transaction(
+				db.query(Db.sql`SELECT current_setting('transaction_isolation') AS isolation`),
+				{ isolationLevel: "repeatable read" },
+			)
+			expect(sent[0]).toBe("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+			expect(row).toEqual([{ isolation: "repeatable read" }])
 		}),
 	)
 

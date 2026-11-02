@@ -78,6 +78,33 @@ layer(Live, { excludeTestServices: true })("afterCommit on PGlite", (it) => {
 		}),
 	)
 
+	// The settings go in through `SqlClient.BeginTransaction`; a hook runs after
+	// COMMIT and must not start its own transaction with them.
+	it.effect("runs after a transaction with settings, and a transaction it starts keeps the default BEGIN", () =>
+		Effect.gen(function* () {
+			const table = yield* freshTable
+			const seen = yield* Ref.make<ReadonlyArray<unknown>>([])
+			yield* Db.transaction(
+				Effect.gen(function* () {
+					yield* insert(table, 1)
+					yield* Db.afterCommit(
+						Effect.gen(function* () {
+							const inHook = yield* Effect.service(SqlClient.BeginTransaction)
+							const rows = yield* Db.transaction(
+								Db.query(
+									Db.sql`SELECT current_setting('transaction_isolation') AS isolation, current_setting('transaction_read_only') AS read_only`,
+								),
+							)
+							yield* Ref.set(seen, [inHook, rows[0]])
+						}).pipe(Effect.orDie),
+					)
+				}),
+				{ isolationLevel: "repeatable read" },
+			)
+			expect(yield* Ref.get(seen)).toEqual([undefined, { isolation: "read committed", read_only: "off" }])
+		}),
+	)
+
 	it.effect("runs in queue order; a rolled-back savepoint drops its hooks, a kept one hands them up", () =>
 		Effect.gen(function* () {
 			const ran = yield* Ref.make<ReadonlyArray<string>>([])

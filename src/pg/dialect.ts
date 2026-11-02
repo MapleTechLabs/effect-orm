@@ -1,7 +1,7 @@
 // The Postgres dialect.
 
 import { DateTime, Schema } from "effect"
-import type { Dialect } from "../ch/dialect"
+import type { Dialect, TransactionSettings } from "../ch/dialect"
 import { QueryBuilderError } from "../ch/errors"
 import { PARAM_MARKER_PREFIX } from "../ch/param"
 import { PgTimestampLiteral, timestampLiteral } from "./types"
@@ -77,6 +77,16 @@ const placeholderCasts: Readonly<Record<string, string>> = {
 	dateTimeSeconds: "timestamptz",
 }
 
+// Postgres takes the same mode list after `SET TRANSACTION` and after `BEGIN`.
+const transactionModes = (settings: TransactionSettings): string | undefined => {
+	const modes = [
+		settings.isolationLevel === undefined ? undefined : `ISOLATION LEVEL ${settings.isolationLevel.toUpperCase()}`,
+		settings.accessMode?.toUpperCase(),
+		settings.deferrable === undefined ? undefined : settings.deferrable ? "DEFERRABLE" : "NOT DEFERRABLE",
+	].filter((mode) => mode !== undefined)
+	return modes.length === 0 ? undefined : modes.join(", ")
+}
+
 /**
  * Postgres: double-quoted identifiers, standard string literals, and params
  * bound to `$1`, `$2`, … and returned in `CompiledQuery.parameters`.
@@ -120,12 +130,12 @@ export const postgresDialect: Dialect = {
 		accessModes: true,
 		deferrable: true,
 		setTransaction: (settings) => {
-			const modes = [
-				settings.isolationLevel === undefined ? undefined : `ISOLATION LEVEL ${settings.isolationLevel.toUpperCase()}`,
-				settings.accessMode?.toUpperCase(),
-				settings.deferrable === undefined ? undefined : settings.deferrable ? "DEFERRABLE" : "NOT DEFERRABLE",
-			].filter((mode) => mode !== undefined)
-			return modes.length === 0 ? undefined : `SET TRANSACTION ${modes.join(", ")}`
+			const modes = transactionModes(settings)
+			return modes === undefined ? undefined : `SET TRANSACTION ${modes}`
+		},
+		beginTransaction: (settings) => {
+			const modes = transactionModes(settings)
+			return modes === undefined ? undefined : `BEGIN ${modes}`
 		},
 	},
 }

@@ -68,6 +68,11 @@ client (`beginTransaction`, default `"BEGIN"`; ClickHouse passes `"BEGIN TRANSAC
 a `SET TRANSACTION ...` statement as the first statement inside the transaction, which
 Postgres accepts until the first query of the transaction.
 
+effect 4.0.6 adds `SqlClient.BeginTransaction` (Effect-TS/effect#9576): a
+`Context.Reference<string | undefined>` that, when set, replaces the client's BEGIN for a
+top-level transaction (sent unprepared; savepoints ignore it). `transaction` uses it for a
+dialect with `beginTransaction`; see section 9.
+
 **Tracing.** A `sql.transaction` span with `db.transaction.commit`,
 `db.transaction.savepoint` and `db.transaction.rollback` events; statements inside are
 children of it.
@@ -448,7 +453,7 @@ export interface Dialect extends SqlSyntax {
 ```
 
 - `postgresDialect`: `full`, savepoints, the three levels, access modes, deferrable,
-  `SET TRANSACTION ...`.
+  `BEGIN ...` through `beginTransaction` (`SET TRANSACTION ...` for a dialect without it).
 - `clickhouseDialect`: `none`. A later `"experimental-session"` value would be added only with
   the session-bound executor from section 3.
 - MySQL later: `full`, savepoints, four levels; it needs `SET TRANSACTION` **before** BEGIN,
@@ -456,6 +461,10 @@ export interface Dialect extends SqlSyntax {
   `withTransaction` cannot do for a pooled client. That is the point to revisit, not now.
 - SQLite later: `full`, savepoints, no isolation levels (it is serializable), access mode via
   `BEGIN DEFERRED/IMMEDIATE` rather than options.
+- With `SqlClient.BeginTransaction` (section 9) a dialect can also give `beginTransaction`,
+  the whole BEGIN statement. That is the hook for SQLite's `BEGIN IMMEDIATE` and MySQL's
+  `START TRANSACTION READ ONLY`. MySQL's isolation level still needs a `SET TRANSACTION`
+  before BEGIN, which neither hook can do on a pooled client.
 
 Capability is runtime, checked before any statement. A type-level split (no `transaction`
 method on a ClickHouse database) was considered and deferred: the `Dialect` value is not a
@@ -650,6 +659,15 @@ What landed differently from the sections above:
 - **Not yet done from phase 2:** the over-the-wire `@effect/sql-pg` suite (two connections,
   real serialization failures), and filing the upstream Effect issue for orDie'd COMMIT and
   ROLLBACK. The PGlite suite simulates contention with `RAISE ... USING ERRCODE`.
+- **Settings in BEGIN (`SqlClient.BeginTransaction`, effect 4.0.6).** `DialectTransactions.beginTransaction`
+  (optional) writes the BEGIN that carries the settings; Postgres writes
+  `BEGIN ISOLATION LEVEL ..., READ ONLY, DEFERRABLE`. When the dialect has the hook,
+  `transaction` provides the statement around `withTransaction` and sends no
+  `SET TRANSACTION`; a dialect without it keeps `SET TRANSACTION`. SQLite has neither: its
+  client keeps its own `BEGIN IMMEDIATE`, and serializable is the only level it accepts. The
+  reference is cleared inside the body: Effect applies it to every top-level transaction
+  started while it is provided, so a transaction the body starts on a second client would take
+  it too. `observe` sees the BEGIN statement, so a statement collector still sees the settings.
 
 ## 10. `afterCommit` (issue #73)
 

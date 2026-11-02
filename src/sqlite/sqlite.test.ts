@@ -188,6 +188,33 @@ it("rolls back failed SQLite transactions and nested savepoints", async () => {
 	expect(ids).toEqual([{ id: 1 }, { id: 3 }])
 })
 
+it("keeps the SQLite client's own BEGIN for a serializable transaction and refuses an access mode", async () => {
+	const seen = await Effect.runPromise(Effect.gen(function* () {
+		const sql = yield* SqlClient.SqlClient
+		const begins: Array<string | undefined> = []
+		const statements: Array<string> = []
+		// Records the BeginTransaction each transaction starts with, then runs it.
+		const recording = Object.assign(Object.create(sql) as SqlClient.SqlClient, {
+			withTransaction: <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+				Effect.flatMap(Effect.service(SqlClient.BeginTransaction), (begin) => {
+					begins.push(begin)
+					return sql.withTransaction(effect)
+				}),
+		})
+		const db = Db.fromSqlClient(recording, {
+			dialect: SQLite.sqliteDialect,
+			observe: (statement) => Effect.sync(() => void statements.push(statement.sql)),
+		})
+		yield* db.execute({ sql: "CREATE TABLE items (id INTEGER PRIMARY KEY)" })
+		yield* db.transaction(db.execute({ sql: "INSERT INTO items VALUES (1)" }), { isolationLevel: "serializable" })
+		const accessMode = yield* Effect.flip(db.transaction(Effect.void, { accessMode: "read only" }))
+		return { begins, statements, accessMode }
+	}).pipe(Effect.provide(SqliteClient.layer({ filename: ":memory:" }))))
+	expect(seen.begins).toEqual([undefined])
+	expect(seen.statements).toEqual(["CREATE TABLE items (id INTEGER PRIMARY KEY)", "INSERT INTO items VALUES (1)"])
+	expect(seen.accessMode).toBeInstanceOf(Db.TransactionOptionsRejected)
+})
+
 it("executes SQLite upserts, updates and deletes with RETURNING", async () => {
 	const rows = await withDatabase((db) => Effect.gen(function* () {
 		yield* db.run(SQLite.insertInto(Items).values([{ id: 1, note: "first", enabled: true, score: 2 }, { id: 2, note: "second", enabled: false, score: null }]))

@@ -162,9 +162,9 @@ export interface FromSqlClientOptions {
 	 */
 	readonly command?: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>
 	/**
-	 * Called with every statement before it runs, including the `SET
-	 * TRANSACTION` a transaction's settings become. For collecting statements
-	 * into one span or log line per request.
+	 * Called with every statement before it runs, including the `BEGIN ...`
+	 * (effect 4.0.6 and later) or `SET TRANSACTION` a transaction's settings
+	 * become. For collecting statements into one span or log line per request.
 	 */
 	readonly observe?: (statement: Statement) => Effect.Effect<void>
 	/**
@@ -465,7 +465,13 @@ export const fromSqlClient = (sql: SqlClient.SqlClient, options: FromSqlClientOp
 				depth === 0 || Option.isNone(outer)
 					? { depth, isolationLevel: settings.isolationLevel, accessMode: settings.accessMode }
 					: { ...outer.value, depth }
-			const setTransaction = depth === 0 ? capabilities.setTransaction(settings) : undefined
+			// Settings travel in BEGIN when the dialect can write one, else as a
+			// `SET TRANSACTION` run first. Top level only: a savepoint takes no
+			// settings. Without settings the client keeps its own BEGIN (SQLite's
+			// `BEGIN IMMEDIATE`, for one).
+			const beginHook = capabilities.beginTransaction
+			const begin = depth === 0 && beginHook !== undefined ? beginHook(settings) : undefined
+			const setTransaction = depth === 0 && beginHook === undefined ? capabilities.setTransaction(settings) : undefined
 			const state: OpenState = { open: true, client: sql }
 			let bodyExit: Exit.Exit<unknown, unknown> | undefined
 
@@ -473,6 +479,10 @@ export const fromSqlClient = (sql: SqlClient.SqlClient, options: FromSqlClientOp
 				if (setTransaction !== undefined) yield* execute({ sql: setTransaction })
 				return yield* body
 			}).pipe(
+				// The reference applies to every top-level transaction started while it
+				// is provided; clear it for the body, so a transaction on another client
+				// keeps that client's BEGIN.
+				(effect) => (begin === undefined ? effect : Effect.provideService(effect, SqlClient.BeginTransaction, undefined)),
 				Effect.provideService(Transaction, info),
 				Effect.provideService(TransactionOpen, state),
 				Effect.onExit((exit) =>
@@ -485,9 +495,16 @@ export const fromSqlClient = (sql: SqlClient.SqlClient, options: FromSqlClientOp
 				),
 			)
 
-			const exit = yield* Effect.exit(sql.withTransaction(inner).pipe(Effect.ensuring(committed(state))))
+			const transaction =
+				begin === undefined
+					? sql.withTransaction(inner)
+					: Effect.andThen(
+							observe({ sql: begin }),
+							sql.withTransaction(inner).pipe(Effect.provideService(SqlClient.BeginTransaction, begin)),
+						)
+			const exit = yield* Effect.exit(transaction.pipe(Effect.ensuring(committed(state))))
 			if (Exit.isSuccess(exit)) return exit.value
-			return yield* restoreCause<E>(exit.cause, bodyExit, depth)
+			return yield* restoreCause<E>(exit.cause, bodyExit, depth, begin)
 		}).pipe(
 			Effect.withSpan("effect_orm.transaction", {
 				// Semconv defines no transaction attributes, and `db.*` is reserved for it.
@@ -511,12 +528,14 @@ export const fromSqlClient = (sql: SqlClient.SqlClient, options: FromSqlClientOp
  * Effect fails with the `SqlError` of a failed COMMIT (or dies, when cleanup
  * after it failed too), and dies on a failed ROLLBACK, which replaces the body's
  * own exit. Body defects were carried through as `BodyDefect`, so any other
- * defect that is a `SqlError` came from transaction control.
+ * defect that is a `SqlError` came from transaction control. `begin` is the
+ * statement that started the transaction, when it was not the client's BEGIN.
  */
 const restoreCause = <E>(
 	cause: Cause.Cause<unknown>,
 	bodyExit: Exit.Exit<unknown, unknown> | undefined,
 	depth: number,
+	begin: string | undefined,
 ): Effect.Effect<never, E | DatabaseError | TransactionCommitFailed | TransactionRollbackFailed> => {
 	const failure = Cause.findError(cause)
 	if (failure._tag === "Success" && failure.success instanceof BodyDefect) {
@@ -547,7 +566,7 @@ const restoreCause = <E>(
 	if (defect._tag === "Success" && isSqlError(defect.success)) {
 		const error = defect.success
 		// The body never ran: BEGIN or SAVEPOINT died, not ROLLBACK.
-		if (bodyExit === undefined) return Effect.fail(toDatabaseError(depth === 0 ? "BEGIN" : "SAVEPOINT")(error))
+		if (bodyExit === undefined) return Effect.fail(toDatabaseError(depth === 0 ? (begin ?? "BEGIN") : "SAVEPOINT")(error))
 		// An interrupted transaction whose ROLLBACK died stays interrupted.
 		if (Cause.hasInterrupts(bodyExit.cause)) return Effect.failCause(bodyExit.cause as Cause.Cause<E>)
 		return Effect.fail(
@@ -560,7 +579,7 @@ const restoreCause = <E>(
 	}
 	// BEGIN or SAVEPOINT failed before the body ran.
 	if (bodyExit === undefined && failure._tag === "Success" && isSqlError(failure.success)) {
-		return Effect.fail(toDatabaseError(depth === 0 ? "BEGIN" : "SAVEPOINT")(failure.success))
+		return Effect.fail(toDatabaseError(depth === 0 ? (begin ?? "BEGIN") : "SAVEPOINT")(failure.success))
 	}
 	return Effect.failCause(cause as Cause.Cause<E>)
 }
