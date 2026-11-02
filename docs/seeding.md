@@ -72,11 +72,13 @@ storage range of the SQL type:
 | ------------------------------------------ | -------------------------------------------------------------- |
 | `UInt8` … `UInt64`, `Int32`, `Int64`       | Integers in the type's range, 64-bit ones as safe integers      |
 | `int2`, `int4`, `int8`                     | The same                                                       |
+| `SQLite.integer`                           | Safe integers (±2^53 − 1), what node:sqlite and D1 read back    |
 | `float4`                                   | Single-precision values                                        |
 | `DateTime`, `DateTime64`                   | 1970-01-02 to 2106-02-06 and 1900-01-02 to 2299-12-30, in every server time zone |
 | `timestamptz`                              | Years 100 to 9999                                              |
+| `SQLite.timestamp`                         | Years 0000 to 9999, what SQLite's timestamp text covers        |
 | `uuid`                                     | Lowercase version 4 UUIDs                                      |
-| `text`, `jsonb`                            | No U+0000, which Postgres cannot store                         |
+| `text`, `jsonb`                            | No U+0000, which Postgres cannot store (SQLite `text` too)     |
 | `Array`, `Map`                             | Up to 4 elements and 3 entries                                 |
 
 No string has a lone surrogate, and no number is `-0`. A database stores neither as given.
@@ -100,8 +102,8 @@ test has no row index.
 
 ## Unique columns
 
-A column in `unique` gets distinct values. A Postgres table's one-column primary key and its
-`unique: true` columns are added from its DDL. When the column's values cannot give `count`
+A column in `unique` gets distinct values. A Postgres or SQLite table's one-column primary key
+and its `unique: true` columns are added from its DDL. When the column's values cannot give `count`
 distinct ones (a `bool` key, a short `Literals` list), seeding fails with `SeedError`. Then give
 the column a function of the row index.
 

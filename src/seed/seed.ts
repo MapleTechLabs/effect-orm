@@ -106,6 +106,10 @@ const MAX_DATETIME64 = Date.UTC(2299, 11, 31, 23, 59, 59, 999) - DAY
 // as 1900 to 1999, and ISO-8601 text has four-digit years only.
 const MIN_TIMESTAMPTZ = Date.UTC(100, 0, 1)
 const MAX_TIMESTAMPTZ = Date.UTC(9999, 11, 31, 23, 59, 59, 999)
+// SQLite timestamp text has four unsigned digits of year: 0000 to 9999.
+// (`Date.UTC` reads the years 0 to 99 as 1900 to 1999, so year 0 is set apart.)
+const MIN_SQLITE_TIMESTAMP = new Date(Date.UTC(2000, 0, 1)).setUTCFullYear(0)
+const MAX_SQLITE_TIMESTAMP = MAX_TIMESTAMPTZ
 
 const integerRanges: Readonly<Record<string, readonly [number, number]>> = {
 	UInt8: [0, 2 ** 8 - 1],
@@ -117,6 +121,8 @@ const integerRanges: Readonly<Record<string, readonly [number, number]>> = {
 	int2: [-(2 ** 15), 2 ** 15 - 1],
 	int4: [-(2 ** 31), 2 ** 31 - 1],
 	int8: [Number.MIN_SAFE_INTEGER, Number.MAX_SAFE_INTEGER],
+	// SQLite INTEGER stores 64 bits, but node:sqlite and D1 read it as a JS number.
+	integer: [Number.MIN_SAFE_INTEGER, Number.MAX_SAFE_INTEGER],
 }
 
 const FLOAT4_MAX = 3.4028234663852886e38
@@ -142,6 +148,10 @@ const instant = (
 	const format = type._tag === "DateTime" ? chDateTimeLiteral : chDateTime64Literal
 	return Arbitrary.map(millis, (ms) => format(DateTime.makeUnsafe(ms)))
 }
+
+/** Whether a column decodes to values like `sample`. */
+const decodesTo = (type: CHType<string, any, any>, sample: unknown): boolean =>
+	Schema.is(Schema.toType(type.schema as Schema.Codec<unknown, unknown>))(sample)
 
 const bounded = (type: CHType<string, any, any>, checks: [SchemaAST.Check<number>, ...Array<SchemaAST.Check<number>>]) =>
 	Arbitrary.schema(Schema.toType(type.schema as Schema.Codec<number, unknown>).check(...checks))
@@ -218,6 +228,8 @@ const columnArbitrary = (type: CHType<string, any, any>): Arbitrary.Arbitrary<un
 			// Lowercase, the form Postgres reads a uuid back in.
 			return Arbitrary.map(Arbitrary.schema(Schema.String.check(Schema.isUUID(4))), (uuid) => uuid.toLowerCase())
 		case "text":
+			// `SQLite.timestamp` is stored as text: an instant in the years that text covers.
+			if (decodesTo(type, DateTime.makeUnsafe(0))) return instant(type, MIN_SQLITE_TIMESTAMP, MAX_SQLITE_TIMESTAMP, false)
 			// Postgres `text` cannot hold U+0000.
 			return Arbitrary.filter(fromSchema(type.schema), noNul)
 		case "jsonb": {
@@ -229,7 +241,9 @@ const columnArbitrary = (type: CHType<string, any, any>): Arbitrary.Arbitrary<un
 		}
 	}
 	const range = integerRanges[type._tag]
-	if (range !== undefined) return bounded(type, [Schema.isInt(), Schema.isBetween({ minimum: range[0], maximum: range[1] })])
+	// SQLite's `boolean` is an INTEGER column too, decoding to a boolean: it takes no integer range.
+	const booleans = type._tag === "integer" && (decodesTo(type, true) || decodesTo(type, false))
+	if (range !== undefined && !booleans) return bounded(type, [Schema.isInt(), Schema.isBetween({ minimum: range[0], maximum: range[1] })])
 	return fromSchema(type.schema)
 }
 
@@ -327,7 +341,7 @@ export const arbitrary = <T extends Table<string, any, any, any>>(
 		return Arbitrary.all(columns) as unknown as Arbitrary.Arbitrary<SeedRowOf<T>>
 	})
 
-/** Single-column uniques a Postgres table declares, as column keys. */
+/** Single-column uniques a Postgres or SQLite table declares, as column keys. */
 const declaredUnique = (table: AnyTable): ReadonlyArray<string> => {
 	const ddl = (table as { readonly ddl?: unknown }).ddl as
 		| {
@@ -336,7 +350,8 @@ const declaredUnique = (table: AnyTable): ReadonlyArray<string> => {
 				readonly uniques: ReadonlyArray<{ readonly columns: ReadonlyArray<string> }>
 		  }
 		| undefined
-	if (ddl?.dialect !== "postgres") return []
+	// Postgres and SQLite tables carry their keys in the DDL; a ClickHouse table has none.
+	if (ddl?.dialect !== "postgres" && ddl?.dialect !== "sqlite") return []
 	const keyOf = new Map(Object.keys(table.columns).map((key) => [table.columns[key]!.sqlName ?? key, key]))
 	return [ddl.table.primaryKey?.columns ?? [], ...ddl.uniques.map((unique) => unique.columns)]
 		.filter((columns) => columns.length === 1)
