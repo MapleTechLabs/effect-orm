@@ -132,8 +132,24 @@ const compiler = Statement.makeCompiler({
 	onCustom: () => ["", []],
 })
 
+// ClickHouse reads a scalar HTTP query parameter in the escaped (TabSeparated) format: a raw
+// newline fails to parse, and a backslash starts an escape sequence. An array parameter is
+// read as a literal instead, so only its quoted strings are escaped.
+const escapes: Record<string, string> = { "\\": "\\\\", "\0": "\\0", "\b": "\\b", "\f": "\\f", "\n": "\\n", "\r": "\\r", "\t": "\\t" }
+
+const dateValue = (value: Date): string => value.toISOString().replace("T", " ").replace("Z", "")
+
+/** An array as a ClickHouse literal: strings single-quoted, since JSON's double quotes do not parse. */
+const arrayLiteral = (value: ReadonlyArray<unknown>): string =>
+	`[${value.map((item) =>
+		item === null || item === undefined ? "NULL"
+		: Array.isArray(item) ? arrayLiteral(item)
+		: typeof item === "number" || typeof item === "bigint" || typeof item === "boolean" ? String(item)
+		: `'${(item instanceof Date ? dateValue(item) : String(item)).replace(/[\\']/g, (c) => `\\${c}`)}'`).join(",")}]`
+
 const paramValue = (value: unknown): string =>
-	value instanceof Date ? value.toISOString().replace("T", " ").replace("Z", "") : Array.isArray(value) ? JSON.stringify(value) : String(value)
+	Array.isArray(value) ? arrayLiteral(value)
+	: (value instanceof Date ? dateValue(value) : String(value)).replace(/[\\\0\b\f\n\r\t]/g, (c) => escapes[c]!)
 
 export const make = (
 	config: ClickhouseHttpClientConfig,
