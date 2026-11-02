@@ -11,6 +11,25 @@ import type { DateTime } from "effect"
 export interface SqlSyntax {
 	/** The dialect's name (`clickhouse`, `postgres`, …), for the few choices expression code makes per dialect. */
 	readonly dialect: string
+	/** False when the dialect has no ILIKE operator. */
+	readonly ilike?: boolean
+	/**
+	 * True when LIKE has no default escape character, so `\` in a pattern is
+	 * literal unless the statement says `ESCAPE '\'` (SQLite). Patterns use `\`
+	 * to escape `%`, `_` and `\` on every dialect.
+	 */
+	readonly likeEscape?: boolean
+	/**
+	 * True when the database parses some decimal literals to a neighbouring
+	 * double (SQLite), so a fraction must be bound rather than written as text.
+	 */
+	readonly inexactNumberText?: boolean
+	/**
+	 * True when an integer column compares with a fraction numerically (SQLite's
+	 * type affinity), so `integer > 9.75` writes the fraction instead of refusing
+	 * it through the column's whole-number codec.
+	 */
+	readonly integerComparesFraction?: boolean
 	/** One identifier (a column, alias, table or schema name), quoted as needed. */
 	readonly quoteIdent: (name: string) => string
 	/** A string as a quoted literal. */
