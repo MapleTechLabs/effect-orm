@@ -50,6 +50,18 @@ describe.skipIf(!endpoint)("ClickhouseHttpClient on ClickHouse", () => {
 			}),
 		)
 
+		// Issue #38: these used to fail to parse or arrive changed; string arrays did not parse at all.
+		it.effect("binds strings with newlines, tabs and backslashes unchanged", () =>
+			Effect.gen(function* () {
+				const sql = yield* SqlClient.SqlClient
+				const values = ["a\nb", "a\\nb", "a\\\\b", "tab\there", "cr\r", "nul\0", "é é 🙂\n|\t\\n"]
+				for (const value of values) {
+					const rows = yield* sql`SELECT ${value} AS value, ${[value, "it's"]} AS list`
+					expect(rows).toEqual([{ value, list: [value, "it's"] }])
+				}
+			}),
+		)
+
 		it.effect("streams rows", () =>
 			Effect.gen(function* () {
 				const sql = yield* SqlClient.SqlClient
