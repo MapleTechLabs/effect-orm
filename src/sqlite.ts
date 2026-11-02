@@ -51,6 +51,7 @@ export {
 	type TableDefinition,
 } from "./schema/sqlite-define"
 export { SchemaDefinitionError, type DefinitionProblem, type DdlExpr, type DdlKey } from "./schema/define"
+export { type Casing } from "./schema/casing"
 
 /**
  * A SQLite table. With `{ columns, primaryKey, indexes }` it carries its DDL

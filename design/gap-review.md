@@ -55,8 +55,8 @@ builder; **P1** commonly used; **P2** niche.
 
 Lateral joins, recursive and materialized CTEs, ROLLUP / CUBE, FETCH, MERGE, `db.batch`,
 TRUNCATE, DELETE USING, `DEFAULT VALUES`, expression conflict targets, schemas / namespaces, enums,
-views, relations and a relational query API, casing (has to live in the builder: decoding reads
-aliases exactly), a query cache, EXPLAIN on `Database`, controlled transactions, seeding, a studio,
+views, relations and a relational query API, ~~casing (has to live in the builder: decoding reads
+aliases exactly)~~ (built: the `casing` table option resolves names where the table is defined), a query cache, EXPLAIN on `Database`, controlled transactions, seeding, a studio,
 more dialects.
 
 ## Where effect-orm is ahead

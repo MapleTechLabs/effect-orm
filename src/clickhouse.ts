@@ -78,6 +78,7 @@ export {
 	type TableDefinition,
 	type ExternalTableDefinition,
 } from "./schema/define"
+export { type Casing } from "./schema/casing"
 
 // ClickHouse functions (from category modules)
 export {

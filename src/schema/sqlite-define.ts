@@ -15,7 +15,8 @@ import { sqliteDialect } from "../sqlite/dialect"
 import { timestamp } from "../sqlite/types"
 import { createColumnAccessor } from "../ch/query"
 import { ddlRenderer } from "./ddl-expr"
-import { externalTable, type DdlExpr, type DdlKey } from "./define"
+import type { Casing } from "./casing"
+import { externalTable, namedColumnType, type DdlExpr, type DdlKey } from "./define"
 import { sortEntities } from "./entities"
 import { checkDistinctNames, checkIdentifier, checkNoRepeats, definitionError, withRenderProblems, type DefinitionProblem, type ProblemSink, type SchemaDefinitionError } from "./problems"
 import {
@@ -93,10 +94,9 @@ export type DefaultedColumnsOf<I extends Record<string, ColumnInput>> = {
 const isColumnSpec = (input: unknown): input is ColumnSpec<CHType<string, any, any>, any> =>
 	typeof input === "object" && input !== null && "_tag" in input && input._tag === "SqliteColumnSpec"
 
-const columnTypeOfInput = (input: ColumnInput): CHType<string, any, any> => {
-	if (!isColumnSpec(input)) return input
-	return input.options.name === undefined ? input.type : { ...input.type, sqlName: input.options.name }
-}
+/** The query-side type of a column input, carrying its database name as `sqlName`. */
+const columnTypeOfInput = (key: string, input: ColumnInput, casing: Casing | undefined): CHType<string, any, any> =>
+	isColumnSpec(input) ? namedColumnType(key, input.type, input.options.name, casing) : namedColumnType(key, input, undefined, casing)
 
 // Indexes
 
@@ -198,6 +198,8 @@ export interface TableDefinition<Columns extends Record<string, ColumnInput>> {
 	readonly indexes?: ReadonlyArray<IndexSpec<ColumnsOf<Columns>>>
 	/** The column carrying row-level tenancy; see docs/tenant-scoping.md. */
 	readonly tenantColumn?: keyof Columns & string
+	/** Database names for the columns that give no `name`: `"snake_case"` stores `orgId` as `org_id`. */
+	readonly casing?: Casing
 }
 
 /** A table this schema does not own: a view, or one another tool migrates. No DDL. */
@@ -205,6 +207,7 @@ export interface ExternalTableDefinition<Columns extends Record<string, ColumnIn
 	readonly external: true
 	readonly columns: Columns
 	readonly tenantColumn?: keyof Columns & string
+	readonly casing?: Casing
 }
 
 /** The DDL a SQLite table carries, as entities. */
@@ -241,7 +244,7 @@ export const isTableDefinition = (definition: object): definition is { readonly 
 export const externalSqliteTable = <const Name extends string>(
 	name: Name,
 	definition: ExternalTableDefinition<Record<string, ColumnInput>>,
-): Table<Name, any, any, any> => externalTable(name, definition, isColumnSpec, [], (spec) => columnTypeOfInput(spec as ColumnInput))
+): Table<Name, any, any, any> => externalTable(name, definition, isColumnSpec, [])
 
 /**
  * A SQLite table with its DDL. The value IS a query `Table`.
@@ -261,7 +264,9 @@ function buildTable<const Name extends string, const Columns extends Record<stri
 	checkName(problems, name, name)
 	const inputs = Object.entries(definition.columns)
 	if (inputs.length === 0) problems.push({ object: name, message: "a table needs columns" })
-	const types = Object.fromEntries(inputs.map(([column, input]) => [column, columnTypeOfInput(input)])) as ColumnsOf<Columns>
+	const types = Object.fromEntries(
+		inputs.map(([column, input]) => [column, columnTypeOfInput(column, input, definition.casing)]),
+	) as ColumnsOf<Columns>
 	const sqlName = (column: string) => columnSqlName(types, column)
 	const has = (column: string) => Object.hasOwn(types, column)
 

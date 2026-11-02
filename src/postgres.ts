@@ -59,6 +59,7 @@ export {
 	type ExternalTableDefinition,
 } from "./schema/pg-define"
 export { SchemaDefinitionError, type DefinitionProblem, type DdlExpr, type DdlKey } from "./schema/define"
+export { type Casing } from "./schema/casing"
 
 /** The dialect a `/postgres` compile writes for: `options.dialect`, else `CurrentDialect`, else Postgres. */
 const pgOptions = <O extends { readonly dialect?: Dialect | undefined } | undefined>(options: O) => ({

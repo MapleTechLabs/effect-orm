@@ -91,6 +91,28 @@ it("adds a nullable column, and a NOT NULL one with a literal default, with ALTE
 	await expectMigratedToEqualFresh(v2)
 })
 
+it("writes the database names a table's casing and column names give, in the first migration and in ADD COLUMN", async () => {
+	const cased = (columns: string) => `
+export const Links = SQLite.table("links", {
+	casing: "snake_case",
+	columns: { linkId: SQLite.text, targetUrl: SQLite.column(SQLite.text, { name: "href" }), ${columns} },
+	primaryKey: ["linkId"],
+	indexes: [SQLite.index("links_href", ["targetUrl"])],
+})`
+	const v1 = cased(`createdAt: SQLite.timestamp`)
+	await generateFrom(v1)
+	const [first] = folders()
+	expect(migrationSql(first!)).toContain(`"link_id" text PRIMARY KEY NOT NULL`)
+	expect(migrationSql(first!)).toContain(`"created_at" text NOT NULL`)
+	expect(migrationSql(first!)).toContain(`ON "links" ("href")`)
+	expect(migrationSql(first!)).not.toMatch(/"(linkId|targetUrl|createdAt)"/)
+	const v2 = cased(`createdAt: SQLite.timestamp, lastSeenAt: SQLite.nullable(SQLite.timestamp)`)
+	const second = await generateFrom(v2)
+	expect(second.plan.flatMap((p) => p.sql)).toEqual(['ALTER TABLE "links" ADD COLUMN "last_seen_at" text'])
+	await expectMigratedToEqualFresh(v2)
+	expect((await generateFrom(v2)).written).toBeUndefined()
+})
+
 const seedLinks = [`INSERT INTO "links" ("id", "url") VALUES ('a', 'https://a'), ('b', 'https://b')`]
 
 it("drops a column only once the data loss is confirmed, and keeps the other columns' rows", async () => {
