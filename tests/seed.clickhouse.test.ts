@@ -73,7 +73,11 @@ describe("seed", () => {
 						)
 						return { seeded, read, sent }
 					}).pipe(
-						Effect.provide(ClickhouseClient.layer({ url: endpoint!, username: user, password, database })),
+						// A server with fast float parsing (`precise_float_parsing = 0`, as on ClickHouse 26.2)
+						// can read a Float64 literal one ulp off; the test checks the seed, not the parser.
+						Effect.provide(
+							ClickhouseClient.layer({ url: endpoint!, username: user, password, database, clickhouse_settings: { precise_float_parsing: 1 } }),
+						),
 						Effect.ensuring(Effect.orDie(admin.asCommand(admin.unsafe(`DROP DATABASE IF EXISTS ${database} SYNC`)))),
 					)
 				}).pipe(Effect.provide(ClickhouseClient.layer({ url: endpoint!, username: user, password, database: "default" }))),

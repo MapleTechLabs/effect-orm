@@ -82,6 +82,9 @@ storage range of the SQL type:
 | `Array`, `Map`                             | Up to 4 elements and 3 entries                                 |
 
 No string has a lone surrogate, and no number is `-0`. A database stores neither as given.
+A `Float64` gets any finite double; a ClickHouse server with `precise_float_parsing = 0` (the
+default on older releases, such as 26.2) can store one a unit in the last place off, so turn
+that setting on if a test compares seeded floats exactly.
 
 A branded or refined column (`PG.brand(PG.text, Slug)`) gets only values that its Schema accepts,
 because the Schema's checks drive the generation. A column type of your own (`custom`) gets values
