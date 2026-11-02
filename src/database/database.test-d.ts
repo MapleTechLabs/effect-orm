@@ -1,6 +1,6 @@
 // Type-level tests: rows from `run`, `requireTransaction`, `afterCommit`, and what `transaction` removes.
 
-import { Context, Effect, Schema } from "effect"
+import { type Array as Arr, Context, Effect, Option, Schema } from "effect"
 import { expectTypeOf } from "expect-type"
 import * as CH from "../ch/index"
 import * as PG from "../postgres"
@@ -23,6 +23,19 @@ expectTypeOf(Db.run(CH.unionAll(CH.from(Items).select("id", "note"), CH.from(Ite
 expectTypeOf(Db.run(PG.compileUnsafe(CH.from(Items).select("id", "note"), {}))).toEqualTypeOf<
 	Effect.Effect<ReadonlyArray<Row>, RunError, Db.Database>
 >()
+
+// The cardinality helpers keep the row type and add `ResultCardinalityError`.
+const point = CH.from(Items)
+	.select("id", "note")
+	.where(($) => [$.id.eq(CH.param.int("id"))])
+type CardinalityError = RunError | Db.ResultCardinalityError
+expectTypeOf(Db.runOne(point, { id: 1 })).toEqualTypeOf<Effect.Effect<Row, CardinalityError, Db.Database>>()
+expectTypeOf(Db.runOption(point, { id: 1 })).toEqualTypeOf<Effect.Effect<Option.Option<Row>, CardinalityError, Db.Database>>()
+expectTypeOf(Db.runNonEmpty(point, { id: 1 })).toEqualTypeOf<
+	Effect.Effect<Arr.NonEmptyReadonlyArray<Row>, CardinalityError, Db.Database>
+>()
+// @ts-expect-error the param is still required
+Db.runOne(point)
 
 // `query` is untyped without a schema and typed with one.
 expectTypeOf(Db.query(Db.sql`SELECT 1`)).toEqualTypeOf<

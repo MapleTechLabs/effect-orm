@@ -65,7 +65,7 @@ alongside `compiled.rowSchemaSource`, `compiled.untypedColumns`, and `compiled.r
 | Timestamps shifted by several hours  | The codec assumes zone-less text is UTC, but the server/column emitted another timezone. Normalize SQL output or use a matching custom codec. |
 | Microseconds/nanoseconds disappeared | Parsed `DateTime.Utc` has millisecond precision. Preserve the text with `CH.dateTime64String`.                                                 |
 | An average/percentile is NULL        | Empty/non-finite aggregate results can serialize as JSON null. Keep the nullable type or explicitly define a fallback.                        |
-| “No rows” crashes a point lookup     | Use `decodeFirstRow` and handle `Option.none`; an empty result is not a decode failure.                                                       |
+| “No rows” crashes a point lookup     | Use `Db.runOption` (or `decodeFirstRow`) and handle `Option.none`; an empty result is not a decode failure.                                    |
 
 The built-in numeric codecs are wire decoders, not full range validators. `CH.uint64` does not
 make JavaScript numbers lossless or enforce UInt64 bounds. `CH.untyped` validates nothing for its

@@ -84,6 +84,7 @@ Calling `withdraw(1, 30)` outside `transfer` does not compile: `requireTransacti
 | `layerSqlClient(options)` | A `Database` layer over the `SqlClient` in context |
 | `Database` | The service |
 | `run(query, params?)` | Compile a query for the database's dialect, run it, decode its rows |
+| `runOne`, `runOption`, `runNonEmpty` | `run`, with a check on how many rows came back ([Cardinality](#cardinality)) |
 | `sql\`...\`` | A statement with every `${value}` bound; `sql.identifier(name)` for a table or column name |
 | `query(statement, schema?)` | Run a statement and return its rows, decoded when a schema is given |
 | `execute(statement)` | Run a statement and discard its rows |
@@ -132,6 +133,32 @@ so an object parsed from request JSON is bound as a value, never spliced:
 ```ts
 Db.sql`SELECT * FROM t WHERE id IN (${Db.sql.join(ids)})${archived ? Db.sql` AND archived` : Db.sql.empty}`
 ```
+
+### Cardinality
+
+`run` returns every row. When a query must return a known number of rows, use the helper
+that says so. It takes the same arguments as `run`:
+
+| Helper | Returns | Fails with `ResultCardinalityError` when |
+| --- | --- | --- |
+| `runOne(query, params?)` | The row | Zero rows, or more than one |
+| `runOption(query, params?)` | `Option.some(row)`, or `Option.none()` for zero rows | More than one row |
+| `runNonEmpty(query, params?)` | Every row, as a `NonEmptyReadonlyArray` | Zero rows |
+
+```ts
+const user = yield* Db.runOne(
+	PG.from(Users)
+		.select("id", "email")
+		.where(($) => [$.id.eq(PG.param.string("id"))]),
+	{ id },
+)  // { id: string; email: string }, or ResultCardinalityError
+```
+
+`ResultCardinalityError` is in the error channel, not a defect: the count depends on the data.
+`expected` is `"one"`, `"atMostOne"` or `"nonEmpty"`, and `rows` is how many came back. The
+query runs as you wrote it, with no `LIMIT` added, so a duplicate row is found, not hidden.
+Add a `limit` yourself when you only want the first row; `runOption` then never fails on a
+duplicate.
 
 For SQL inside a builder query rather than a whole statement, use
 [`CH.sql`](./extending.md#chsql--sql-templates-inside-a-query).

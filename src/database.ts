@@ -17,6 +17,9 @@ export {
 	requireTransaction,
 	retryContention,
 	run,
+	runNonEmpty,
+	runOne,
+	runOption,
 	transaction,
 	type DatabaseApi,
 	type RowOf,
@@ -31,6 +34,7 @@ export {
 } from "./database/database"
 export {
 	DatabaseError,
+	ResultCardinalityError,
 	TenantScopeViolation,
 	TransactionClosed,
 	TransactionCommitFailed,
