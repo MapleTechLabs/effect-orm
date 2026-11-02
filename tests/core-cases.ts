@@ -261,8 +261,10 @@ const orgOrders = (ctx: CoreContext) =>
 	ctx.from(ctx.orders).where(($) => [$.OrgId.eq(CH.param.string("orgId"))])
 
 /**
- * Text with LIKE wildcards and a backslash in it, for the text-match cases. Its
- * own table and CTE, so the shared fixture and every other case stay as they are.
+ * Text with LIKE and GLOB wildcards and a backslash in it, for the text-match
+ * cases. Its own table and CTE, so the shared fixture and every other case stay
+ * as they are. Each matching row has a neighbour that an unescaped pattern, or
+ * one of the wrong case sensitivity, would also match.
  */
 const textRows: ReadonlyArray<readonly [number, string]> = [
 	[1, "50% off"],
@@ -271,20 +273,29 @@ const textRows: ReadonlyArray<readonly [number, string]> = [
 	[4, "aXb"],
 	[5, "C:\\dir"],
 	[6, "C:dir"],
+	[7, "A_B"],
+	[8, "[x]"],
+	[9, "x"],
+	[10, "who?"],
+	[11, "whom"],
 ]
 const texts = (ctx: CoreContext) => {
 	const table =
 		ctx.dialect === "clickhouse"
 			? CH.table("texts", { external: true, columns: { Id: CH.uint32, Body: CH.string } })
-			: PG.table("texts", { external: true, columns: { Id: PG.int4, Body: PG.text } })
-	// A ClickHouse string literal escapes a backslash; a Postgres one does not.
+			: ctx.dialect === "postgres"
+				? PG.table("texts", { external: true, columns: { Id: PG.int4, Body: PG.text } })
+				: SQLite.table("texts", { external: true, columns: { Id: SQLite.integer, Body: SQLite.text } })
+	// A ClickHouse string literal escapes a backslash; a Postgres or SQLite one does not.
 	const literal = (text: string) =>
 		`'${(ctx.dialect === "clickhouse" ? text.replaceAll("\\", "\\\\") : text).replaceAll("'", "''")}'`
 	const tuples = textRows.map(([id, body]) => `(${id}, ${literal(body)})`).join(", ")
 	const body =
 		ctx.dialect === "clickhouse"
 			? `SELECT * FROM values('Id UInt32, Body String', ${tuples})`
-			: `SELECT CAST("c0" AS int4) AS "Id", CAST("c1" AS text) AS "Body" FROM (VALUES ${tuples}) AS v("c0", "c1")`
+			: ctx.dialect === "sqlite" || ctx.dialect === "d1"
+				? `SELECT column1 AS "Id", column2 AS "Body" FROM (VALUES ${tuples})`
+				: `SELECT CAST("c0" AS int4) AS "Id", CAST("c1" AS text) AS "Body" FROM (VALUES ${tuples}) AS v("c0", "c1")`
 	return CH.from(table as CH.Table<"texts", { readonly Id: Col<number>; readonly Body: Col<string> }>).withCTE("texts", body)
 }
 
@@ -828,11 +839,15 @@ export const coreCases: readonly CoreCase[] = [
 							$.Body.contains("50%"),
 							$.Body.startsWith("a_"),
 							$.Body.endsWith("\\dir"),
+							// Case-insensitive (SQLite's LIKE), `a_` would also match "A_B". As GLOB
+							// patterns, `[x]` would match "x" and `o?` "whom".
+							$.Body.contains("[x]"),
+							$.Body.endsWith("o?"),
 						),
 					])
 					.orderBy(["id", "asc"]),
 			),
-		expected: [{ id: 1 }, { id: 3 }, { id: 5 }],
+		expected: [{ id: 1 }, { id: 3 }, { id: 5 }, { id: 8 }, { id: 10 }],
 	},
 	{
 		id: "text-match-param",
@@ -842,13 +857,19 @@ export const coreCases: readonly CoreCase[] = [
 				texts(ctx)
 					.select(($) => ({ id: $.Id }))
 					.where(($) => [
-						CH.or($.Body.contains(CH.param.string("percent")), $.Body.endsWith(CH.param.string("under")), $.Body.startsWith(CH.param.string("slash"))),
+						CH.or(
+							$.Body.contains(CH.param.string("percent")),
+							$.Body.endsWith(CH.param.string("under")),
+							$.Body.startsWith(CH.param.string("slash")),
+							$.Body.contains(CH.param.string("bracket")),
+							$.Body.endsWith(CH.param.string("question")),
+						),
 					])
 					.orderBy(["id", "asc"]),
 				// Escaped in SQL: the values reach the server as they are.
-				{ percent: "0%", under: "_b", slash: "C:\\" },
+				{ percent: "0%", under: "_b", slash: "C:\\", bracket: "[x]", question: "o?" },
 			),
-		expected: [{ id: 1 }, { id: 3 }, { id: 5 }],
+		expected: [{ id: 1 }, { id: 3 }, { id: 5 }, { id: 8 }, { id: 10 }],
 	},
 	{
 		id: "text-match-insensitive",
@@ -862,11 +883,12 @@ export const coreCases: readonly CoreCase[] = [
 							$.Body.contains("AXB", { insensitive: true }),
 							$.Body.startsWith("A_", { insensitive: true }),
 							$.Body.endsWith("% OFF", { insensitive: true }),
+							$.Body.contains("[X]", { insensitive: true }),
 						),
 					])
 					.orderBy(["id", "asc"]),
 			),
-		expected: [{ id: 1 }, { id: 3 }, { id: 4 }],
+		expected: [{ id: 1 }, { id: 3 }, { id: 4 }, { id: 7 }, { id: 8 }],
 	},
 ]
 

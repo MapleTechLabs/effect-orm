@@ -19,6 +19,7 @@ import * as CH from "./ch/index"
 import * as T from "./ch/types"
 import * as CHE from "./clickhouse"
 import * as PG from "./postgres"
+import * as SQLite from "./sqlite"
 import { parseStatement, renderStatement, withSettings } from "./sql/statement"
 import { compileCHUnsafe, compileUnionUnsafe } from "./ch/compile"
 import { raw as rawFragment, compile as compileFragment } from "./sql/sql-fragment"
@@ -290,8 +291,16 @@ describe("docs/expressions.md", () => {
 
 		const Users = PG.table("users", { columns: { id: PG.text, name: PG.text }, primaryKey: ["id"] })
 		const compiled = PG.compileUnsafe(PG.from(Users).select("id").where(($) => [$.name.startsWith("50%")]))
-		expect(oneLine(compiled.sql)).toBe(String.raw`SELECT "users"."id" AS "id" FROM "users" WHERE "users"."name" LIKE $1 ESCAPE '\'`)
+		expect(oneLine(compiled.sql)).toBe(`SELECT "users"."id" AS "id" FROM "users" WHERE "users"."name" LIKE $1`)
 		expect(compiled.parameters).toEqual([String.raw`50\%%`])
+
+		// SQLite's LIKE ignores ASCII case: a case-sensitive match is a GLOB, an insensitive one lowers both sides.
+		const Items = SQLite.table("users", { id: SQLite.text, name: SQLite.text })
+		const sqlite = SQLite.compileUnsafe(SQLite.from(Items).select("id").where(($) => [$.name.contains("50%"), $.name.startsWith("A_", { insensitive: true })]))
+		expect(oneLine(sqlite.sql)).toBe(
+			String.raw`SELECT "users"."id" AS "id" FROM "users" WHERE "users"."name" GLOB ? AND lower("users"."name") LIKE lower(?) ESCAPE '\'`,
+		)
+		expect(sqlite.parameters).toEqual(["*50%*", String.raw`A\_%`])
 
 		// `.like()` takes a pattern; escapeLike makes text safe inside one.
 		expect(CHE.escapeLike("50%_off")).toBe(String.raw`50\%\_off`)

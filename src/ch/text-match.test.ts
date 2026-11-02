@@ -1,11 +1,12 @@
 // `contains`, `startsWith` and `endsWith` match text, not a pattern: `%`, `_`
 // and the escape character in the value are escaped, on every dialect. Live
-// runs on ClickHouse and Postgres are the `text-match` core cases.
+// runs on every dialect are the `text-match` core cases.
 
 import { describe, expect, it } from "@effect/vitest"
 import { Cause, Effect, Exit } from "effect"
 import * as CH from "../clickhouse"
 import * as PG from "../postgres"
+import * as SQLite from "../sqlite"
 
 const Events = CH.table("events", {
 	columns: { Id: CH.string, Name: CH.string, Note: CH.nullable(CH.string) },
@@ -33,12 +34,12 @@ describe("text match", () => {
 		expect(compiled.sql).toContain(`Name ILIKE '%Ab%'`)
 	})
 
-	it("binds the escaped value on Postgres and writes the escape character", () => {
+	it("binds the escaped value on Postgres, whose LIKE escapes with a backslash already", () => {
 		const compiled = PG.compileUnsafe(
 			PG.from(Users).select("id").where(($) => [$.name.contains("50%_", { insensitive: true }), $.name.startsWith("x")]),
 		)
-		expect(compiled.sql).toContain(String.raw`"name" ILIKE $1 ESCAPE '\'`)
-		expect(compiled.sql).toContain(String.raw`"name" LIKE $2 ESCAPE '\'`)
+		expect(compiled.sql).toContain(`"name" ILIKE $1\n`)
+		expect(compiled.sql).toMatch(/"name" LIKE \$2$/)
 		expect(compiled.parameters).toEqual([String.raw`%50\%\_%`, "x%"])
 	})
 
@@ -46,9 +47,24 @@ describe("text match", () => {
 		const query = PG.from(Users).select("id").where(($) => [$.name.endsWith(PG.param.string("q"))])
 		const compiled = PG.compileUnsafe(query, { q: "a%" })
 		expect(compiled.sql).toContain(
-			String.raw`"name" LIKE ('%' || replace(replace(replace($1, '\', '\\'), '%', '\%'), '_', '\_')) ESCAPE '\'`,
+			String.raw`"name" LIKE ('%' || replace(replace(replace($1, '\', '\\'), '%', '\%'), '_', '\_'))`,
 		)
 		expect(compiled.parameters).toEqual(["a%"])
+	})
+
+	it("on SQLite, whose LIKE ignores ASCII case, a sensitive match is a GLOB and an insensitive one lowers both sides", () => {
+		const Items = SQLite.table("items", { id: SQLite.integer, name: SQLite.text })
+		const compiled = SQLite.compileUnsafe(
+			SQLite.from(Items).select("id").where(($) => [$.name.contains("a*[?_"), $.name.startsWith("50%", { insensitive: true })]),
+		)
+		expect(compiled.sql).toContain(`"items"."name" GLOB ?\n`)
+		expect(compiled.sql).toContain(String.raw`lower("items"."name") LIKE lower(?) ESCAPE '\'`)
+		expect(compiled.parameters).toEqual(["*a[*][[][?]_*", String.raw`50\%%`])
+		const param = SQLite.compileUnsafe(
+			SQLite.from(Items).select("id").where(($) => [$.name.endsWith(SQLite.param.string("q"))]),
+			{ q: "x" },
+		)
+		expect(param.sql).toContain(`GLOB ('*' || replace(replace(replace(?, '[', '[[]'), '*', '[*]'), '?', '[?]'))`)
 	})
 
 	it("escapeLike escapes the escape character first", () => {

@@ -183,7 +183,10 @@ written as decimal text, because SQLite reads some decimals as a neighbouring do
 fraction compared with an `integer` column (`Amount > 9.75`) compiles as on Postgres. It refuses these unsupported forms at compile time:
 
 - `DISTINCT ON`, row locks and `ILIKE`. Use `LIKE`, which on SQLite ignores ASCII case
-  (`'acme' LIKE 'ACME'` is true, unlike Postgres and ClickHouse).
+  (`'acme' LIKE 'ACME'` is true, unlike Postgres and ClickHouse). For text search,
+  `.contains()`, `.startsWith()` and `.endsWith()` match case as on the other dialects (they
+  write `GLOB`), and `{ insensitive: true }` compares `lower()` of both sides; see
+  [Text search](./expressions.md#text-search).
 - Text containing U+0000. SQLite stores it, but its drivers end text there, so the value would
   read back cut short; the builder refuses it in literals and bound params.
 - `ON CONSTRAINT` conflict targets. Name the indexed columns instead.
