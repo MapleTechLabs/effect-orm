@@ -231,11 +231,13 @@ ON CONFLICT ("key") DO UPDATE SET "count" = "excluded"."count"
   you do not write, `EXCLUDED` holds the default, and copying it would overwrite real data. It
   also skips the target's columns, which are equal in both rows.
 - `col = excluded.col` on the tenant column keeps the rows' tenant scope: it writes the value
-  the rows already gave it.
+  the rows already gave it. It says nothing about the tenant of the existing row it updates;
+  put the tenant column in `target` (which also leaves it out of `excludedAll`) so a conflict
+  can only match the same tenant's row.
 - To mix copied columns with other values (`updatedAt: now()`), use the callback form:
   `set: ($, excluded) => ({ name: excluded.name, updatedAt: PG.now() })`.
 - The dialect writes the SQL that reads the proposed row, so the same `set` value works on any
-  dialect with an upsert.
+  dialect with an upsert: Postgres, SQLite and D1 all write `"excluded"."col"`.
 
 ## Settings
 

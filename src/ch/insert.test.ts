@@ -216,7 +216,12 @@ describe("insertInto", () => {
 		it("setting the tenant column from the proposed row keeps the rows' tenant scope", () => {
 			const scope = (org: string) =>
 				PG.compileUnsafe(
-					CH.insertInto(Counters).values({ ...row, org }).onConflictDoUpdate({ target: ["key"], set: CH.excludedAll() }),
+					CH.insertInto(Counters).values({ ...row, org }).onConflictDoUpdate({
+						target: ["key"],
+						set: CH.excludedAll(),
+						// Pins the conflicting row's tenant, which the SET alone does not prove.
+						where: (existing, excluded) => existing.org.eq(excluded.org),
+					}),
 				)
 			expect(scope("o").sql).toMatch(/ DO UPDATE SET "org" = "excluded"\."org", "count" = /)
 			expect(scope("o").tenantScope).toBe("single-tenant")
