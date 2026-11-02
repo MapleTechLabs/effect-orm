@@ -25,8 +25,10 @@ import {
 	type ColumnsOf,
 	type DefaultedColumnsOf,
 	type ExternalTableDefinition,
+	type InsertRequirementsOf,
 	type SqliteSchemaTable,
 	type TableDefinition,
+	type UpdateRequirementsOf,
 } from "./schema/sqlite-define"
 import { sqliteDialect } from "./sqlite/dialect"
 import { Effect } from "effect"
@@ -61,11 +63,11 @@ export { type Casing } from "./schema/casing"
 export function table<const Name extends string, const Columns extends Record<string, ColumnInput>>(
 	name: Name,
 	definition: ExternalTableDefinition<Columns>,
-): Table<Name, ColumnsOf<Columns>, DefaultedColumnsOf<Columns>, never>
+): Table<Name, ColumnsOf<Columns>, DefaultedColumnsOf<Columns>, never, InsertRequirementsOf<Columns>, UpdateRequirementsOf<Columns>>
 export function table<const Name extends string, const Columns extends Record<string, ColumnInput>>(
 	name: Name,
 	definition: TableDefinition<Columns>,
-): SqliteSchemaTable<Name, ColumnsOf<Columns>, DefaultedColumnsOf<Columns>>
+): SqliteSchemaTable<Name, ColumnsOf<Columns>, DefaultedColumnsOf<Columns>, InsertRequirementsOf<Columns>, UpdateRequirementsOf<Columns>>
 export function table<
 	const Name extends string,
 	const Columns extends ColumnDefs,

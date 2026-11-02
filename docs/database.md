@@ -83,7 +83,7 @@ Calling `withdraw(1, 30)` outside `transfer` does not compile: `requireTransacti
 | `fromSqlClient(sql, options)` | A `DatabaseApi` over a client. `options.dialect` is required, and types it: with `postgresDialect` it is a `DatabaseApi<"postgres">`, whose `run` refuses ClickHouse and SQLite functions in the type (`d1Dialect` and `sqliteDialect` give a `DatabaseApi<"sqlite">`, which also refuses row locks) ([Checked in the type](./params-and-compilation.md#checked-in-the-type)); `options.requireTenantScope` refuses unscoped queries ([Tenant scoping](./tenant-scoping.md#enforcing-it)) |
 | `layerSqlClient(options)` | A `Database` layer over the `SqlClient` in context |
 | `Database` | The service |
-| `run(query, params?)` | Compile a query for the database's dialect, run it, decode its rows |
+| `run(query, params?)` | Compile a query for the database's dialect, run it, decode its rows. A write first runs its table's [client-side defaults](./inserts.md#client-side-defaults) and requires what they need |
 | `runOne`, `runOption`, `runNonEmpty` | `run`, with a check on how many rows came back ([Cardinality](#cardinality)) |
 | `stream(query, params?)` | `run` as a `Stream`: each row decoded as it arrives |
 | `paginate(query, options, params?)` | One page of a query, by keyset, with a cursor for the next page ([Pagination](#pagination)) |

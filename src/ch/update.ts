@@ -70,16 +70,21 @@ export interface CHUpdate<
 	Output = never,
 	Ready extends WriteReady = "ready",
 	Params = never,
+	Req = never,
 > {
 	readonly _tag: "CHUpdate"
 	/** @internal — runtime update state */
 	readonly _state: CHUpdateState
-	/** phantom. `output` is the row `Database.run` returns: none without RETURNING. */
+	/**
+	 * phantom. `output` is the row `Database.run` returns: none without
+	 * RETURNING. `requirements` is what the table's `onUpdate` defaults need.
+	 */
 	readonly _phantom?: {
 		readonly cols: Cols
 		readonly output: Output
 		readonly ready: Ready
 		readonly params: (entries: Params) => void
+		readonly requirements: Req
 	}
 
 	/** Replace the SET record. It must set at least one column, and only columns the table can write. */
@@ -87,7 +92,7 @@ export interface CHUpdate<
 		set:
 			| (S & NonEmptySet<S> & OnlyColumns<S, WritableColumns<Cols, Computed>>)
 			| (($: ColumnAccessor<Cols>) => S & NonEmptySet<S> & OnlyColumns<S, WritableColumns<Cols, Computed>>),
-	): CHUpdate<Cols, Computed, Output, Ready, Params | ParamsIn<S[keyof S]>>
+	): CHUpdate<Cols, Computed, Output, Ready, Params | ParamsIn<S[keyof S]>, Req>
 
 	/**
 	 * The rows to change, as in a query's `where`: conditions AND-joined, an
@@ -96,30 +101,30 @@ export interface CHUpdate<
 	 */
 	where<const C extends Conditions>(
 		fn: WhereFn<Cols, C>,
-	): CHUpdate<Cols, Computed, Output, "ready", Params | ParamsIn<C[number]>>
+	): CHUpdate<Cols, Computed, Output, "ready", Params | ParamsIn<C[number]>, Req>
 	/** Change every row. Without it (or `where`), the write cannot be compiled or run. */
-	allRows(): CHUpdate<Cols, Computed, Output, "ready", Params>
+	allRows(): CHUpdate<Cols, Computed, Output, "ready", Params, Req>
 	/**
 	 * ClickHouse `SETTINGS` for this write, such as `{ mutations_sync: 2 }` so an
 	 * `ALTER TABLE ... UPDATE` waits for the mutation. Postgres refuses them.
 	 */
-	settings(settings: Readonly<Record<string, InsertSettingValue>>): CHUpdate<Cols, Computed, Output, Ready, Params>
+	settings(settings: Readonly<Record<string, InsertSettingValue>>): CHUpdate<Cols, Computed, Output, Ready, Params, Req>
 
 	/** The changed rows, as for an insert: every column, the named ones, or a callback. Postgres only. */
-	returning(): CHUpdate<Cols, Computed, AllColumns<Cols>, Ready, Params>
+	returning(): CHUpdate<Cols, Computed, AllColumns<Cols>, Ready, Params, Req>
 	returning<K extends keyof Cols & string>(
 		...columns: [K, ...Array<K>]
-	): CHUpdate<Cols, Computed, { readonly [P in K]: InferTS<Cols[P]> }, Ready, Params>
+	): CHUpdate<Cols, Computed, { readonly [P in K]: InferTS<Cols[P]> }, Ready, Params, Req>
 	returning<S extends Record<string, Expr<any>>>(
 		fn: ($: ColumnAccessor<Cols>) => S,
-	): CHUpdate<Cols, Computed, InferOutput<S>, Ready, Params | ParamsIn<S[keyof S]>>
+	): CHUpdate<Cols, Computed, InferOutput<S>, Ready, Params | ParamsIn<S[keyof S]>, Req>
 
 	/**
 	 * Declare that this update deliberately spans tenants, forcing
 	 * `tenantScope: "cross-tenant"` and setting `crossTenantDeclared`. A
 	 * database with `requireTenantScope` runs it; see docs/tenant-scoping.md.
 	 */
-	crossTenant(): CHUpdate<Cols, Computed, Output, Ready, Params>
+	crossTenant(): CHUpdate<Cols, Computed, Output, Ready, Params, Req>
 }
 
 export interface CHDelete<
@@ -171,8 +176,8 @@ export interface CHDelete<
 export type NonEmptySet<S> = [keyof S] extends [never] ? { readonly setAtLeastOneColumn: true } : unknown
 
 /** An update with no SET yet: only `set`, so it cannot be compiled before it says what to write. */
-export type CHUpdateStart<Cols extends ColumnDefs = ColumnDefs, Computed extends string = never> = Pick<
-	CHUpdate<Cols, Computed, never, "needs where() or allRows()">,
+export type CHUpdateStart<Cols extends ColumnDefs = ColumnDefs, Computed extends string = never, Req = never> = Pick<
+	CHUpdate<Cols, Computed, never, "needs where() or allRows()", never, Req>,
 	"set"
 >
 
@@ -208,11 +213,15 @@ const makeDelete = (state: CHDeleteState): CHDelete<any, any, any, any> => ({
 	...writeClauses(state, makeDelete),
 })
 
-/** Start an UPDATE of `table`. Give what to write with `set`, and the rows with `where` or `allRows`. */
-export function update<Name extends string, Cols extends ColumnDefs, Computed extends string>(
-	table: Table<Name, Cols, any, Computed>,
-): CHUpdateStart<Cols, Computed> {
-	return makeUpdate({ table: table as Table<string, ColumnDefs> }) as CHUpdateStart<Cols, Computed>
+/**
+ * Start an UPDATE of `table`. Give what to write with `set`, and the rows with
+ * `where` or `allRows`. The update requires what the table's `onUpdate`
+ * defaults need (`Req`).
+ */
+export function update<Name extends string, Cols extends ColumnDefs, Computed extends string, Req = never>(
+	table: Table<Name, Cols, any, Computed, never, Req>,
+): CHUpdateStart<Cols, Computed, Req> {
+	return makeUpdate({ table: table as Table<string, ColumnDefs> }) as CHUpdateStart<Cols, Computed, Req>
 }
 
 /** Start a DELETE from `table`. Give the rows with `where` or `allRows`. */

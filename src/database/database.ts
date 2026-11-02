@@ -15,6 +15,7 @@ import { compileCH, compileUnion, type CompiledQueryDecodeError, type CompiledQu
 import { decodeErrorFromCause } from "../ch/decode-error"
 import { noTransactions, type Dialect, type IsolationLevel, type TransactionSettings } from "../ch/dialect"
 import type { QueryBuilderError } from "../ch/errors"
+import { fillDefaults, type RequirementsOf } from "../ch/client-defaults"
 import type { AnyInsert } from "../ch/insert"
 import type { CHDelete, CHUpdate } from "../ch/update"
 import type { CHQuery, NeedsSelect } from "../ch/query"
@@ -49,7 +50,7 @@ export type Runnable =
 	| CHQuery<any, any, any, any>
 	| CHUnionQuery<any>
 	| AnyInsert
-	| CHUpdate<any, any, any>
+	| CHUpdate<any, any, any, "ready", never, any>
 	| CHDelete<any, any>
 	| CompiledQuery<any, any>
 
@@ -111,7 +112,8 @@ export interface DatabaseApi<Functions extends string = string> {
 	 * Compile a query for this database's dialect, run it, and decode its rows.
 	 * A write returns its RETURNING rows, or none without `returning`.
 	 * `params` fills the query's `param.*` markers. A query compiled elsewhere
-	 * runs as it is, if it was compiled for this dialect.
+	 * runs as it is, if it was compiled for this dialect. A write first runs
+	 * its table's client defaults (`fillDefaults`), so it requires what they need.
 	 */
 	readonly run: <Q extends Runnable, const Given extends object = {}>(
 		query: Q &
@@ -120,18 +122,23 @@ export interface DatabaseApi<Functions extends string = string> {
 			DialectSatisfied<QueryParams<Q>, Functions> &
 			SourcesSatisfied<QueryParams<Q>>,
 		params?: Given,
-	) => Effect.Effect<ReadonlyArray<RowOf<Q>>, DatabaseError | QueryBuilderError | CompiledQueryDecodeError>
+	) => Effect.Effect<ReadonlyArray<RowOf<Q>>, DatabaseError | QueryBuilderError | CompiledQueryDecodeError, RequirementsOf<Q>>
 	/**
 	 * `run` as a stream: rows come out one at a time, each decoded by the
 	 * query's row schema, so a large result never has to fit in memory. The
 	 * statement is sent when the stream runs, and again each time it runs.
 	 * Rows arrive as the driver reads them: a cursor where the driver has one,
-	 * otherwise the whole result first.
+	 * otherwise the whole result first. A write runs its client defaults first,
+	 * as `run` does.
 	 */
 	readonly stream: <Q extends Runnable, const Given extends object = {}>(
-		query: Q & RunCheck<Q> & ParamsSatisfied<QueryParams<Q>, Given>,
+		query: Q &
+			RunCheck<Q> &
+			ParamsSatisfied<QueryParams<Q>, Given> &
+			DialectSatisfied<QueryParams<Q>, Functions> &
+			SourcesSatisfied<QueryParams<Q>>,
 		params?: Given,
-	) => Stream.Stream<RowOf<Q>, DatabaseError | QueryBuilderError | CompiledQueryDecodeError>
+	) => Stream.Stream<RowOf<Q>, DatabaseError | QueryBuilderError | CompiledQueryDecodeError, RequirementsOf<Q>>
 	/** Run a statement and return its rows, decoded through `schema` when given. */
 	readonly query: {
 		(statement: StatementInput): Effect.Effect<ReadonlyArray<Record<string, unknown>>, DatabaseError>
@@ -361,11 +368,13 @@ export const fromSqlClient = <Functions extends string = string>(
 	// does: through `command`, which a ClickHouse client needs for a statement
 	// with no result set.
 	const run: DatabaseApi["run"] = (runnable, params) =>
-		Effect.flatMap(Effect.flatMap(compileFor(runnable, params ?? {}), checkScope), (compiled) =>
-			compiled.kind !== "select" && compiled.returning === undefined
-				? Effect.as(execute(compiled), [])
-				: Effect.flatMap(rows(compiled), (wire) => compiled.decodeRows(wire)),
-		)
+		Effect.flatMap(fillDefaults(runnable as Runnable), (filled) =>
+			Effect.flatMap(Effect.flatMap(compileFor(filled, params ?? {}), checkScope), (compiled) =>
+				compiled.kind !== "select" && compiled.returning === undefined
+					? Effect.as(execute(compiled), [])
+					: Effect.flatMap(rows(compiled), (wire) => compiled.decodeRows(wire)),
+			),
+		) as Effect.Effect<any, any, any>
 
 	// Effect's SQLite drivers (node:sqlite, D1, …) have no streaming read: their
 	// `.stream` dies with "executeStream not implemented". A SQLite-family
@@ -412,12 +421,14 @@ export const fromSqlClient = <Functions extends string = string>(
 
 	const stream: DatabaseApi["stream"] = (runnable, params) =>
 		Stream.unwrap(
-			Effect.map(Effect.flatMap(compileFor(runnable, params ?? {}), checkScope), (compiled) =>
-				compiled.kind !== "select" && compiled.returning === undefined
-					? Stream.fromEffectDrain(execute(compiled))
-					: decodeStream(compiled, wireStream(compiled)),
+			Effect.flatMap(fillDefaults(runnable as Runnable), (filled) =>
+				Effect.map(Effect.flatMap(compileFor(filled, params ?? {}), checkScope), (compiled) =>
+					compiled.kind !== "select" && compiled.returning === undefined
+						? Stream.fromEffectDrain(execute(compiled))
+						: decodeStream(compiled, wireStream(compiled)),
+				),
 			),
-		) as Stream.Stream<never, DatabaseError | QueryBuilderError | CompiledQueryDecodeError>
+		) as Stream.Stream<any, any, any>
 
 	const retryContention = <A, E, R>(effect: Effect.Effect<A, E, R>, retry?: RetryOptions) =>
 		Effect.flatMap(Effect.serviceOption(sql.transactionService), (open): Effect.Effect<A, E | TransactionOptionsRejected, R> =>
@@ -617,8 +628,11 @@ export const run = <Q extends Runnable, const Given extends object = {}>(
 		DialectSatisfied<QueryParams<Q>, string> &
 		SourcesSatisfied<QueryParams<Q>>,
 	params?: Given,
-): Effect.Effect<ReadonlyArray<RowOf<Q>>, DatabaseError | QueryBuilderError | CompiledQueryDecodeError, Database> =>
-	Effect.flatMap(Effect.service(Database), (db) => db.run(query, params))
+): Effect.Effect<
+	ReadonlyArray<RowOf<Q>>,
+	DatabaseError | QueryBuilderError | CompiledQueryDecodeError,
+	Database | RequirementsOf<Q>
+> => Effect.flatMap(Effect.service(Database), (db) => db.run(query, params))
 
 /** What `run` can fail with. */
 type RunError = DatabaseError | QueryBuilderError | CompiledQueryDecodeError
@@ -636,9 +650,13 @@ const cardinalityError = (expected: ResultCardinalityError["expected"], rows: nu
  * is found, not hidden.
  */
 export const runOne = <Q extends Runnable, const Given extends object = {}>(
-	query: Q & RunCheck<Q> & ParamsSatisfied<QueryParams<Q>, Given>,
+	query: Q &
+		RunCheck<Q> &
+		ParamsSatisfied<QueryParams<Q>, Given> &
+		DialectSatisfied<QueryParams<Q>, string> &
+		SourcesSatisfied<QueryParams<Q>>,
 	params?: Given,
-): Effect.Effect<RowOf<Q>, RunError | ResultCardinalityError, Database> =>
+): Effect.Effect<RowOf<Q>, RunError | ResultCardinalityError, Database | RequirementsOf<Q>> =>
 	Effect.flatMap(run(query, params), (rows) =>
 		Arr.isReadonlyArrayNonEmpty(rows) && rows.length === 1 ? Effect.succeed(rows[0]) : Effect.fail(cardinalityError("one", rows.length)),
 	)
@@ -649,9 +667,13 @@ export const runOne = <Q extends Runnable, const Given extends object = {}>(
  * `ResultCardinalityError`. No `LIMIT` is added.
  */
 export const runOption = <Q extends Runnable, const Given extends object = {}>(
-	query: Q & RunCheck<Q> & ParamsSatisfied<QueryParams<Q>, Given>,
+	query: Q &
+		RunCheck<Q> &
+		ParamsSatisfied<QueryParams<Q>, Given> &
+		DialectSatisfied<QueryParams<Q>, string> &
+		SourcesSatisfied<QueryParams<Q>>,
 	params?: Given,
-): Effect.Effect<Option.Option<RowOf<Q>>, RunError | ResultCardinalityError, Database> =>
+): Effect.Effect<Option.Option<RowOf<Q>>, RunError | ResultCardinalityError, Database | RequirementsOf<Q>> =>
 	Effect.flatMap(run(query, params), (rows) =>
 		rows.length > 1 ? Effect.fail(cardinalityError("atMostOne", rows.length)) : Effect.succeed(Arr.head(rows)),
 	)
@@ -662,18 +684,26 @@ export const runOption = <Q extends Runnable, const Given extends object = {}>(
  * non-empty array.
  */
 export const runNonEmpty = <Q extends Runnable, const Given extends object = {}>(
-	query: Q & RunCheck<Q> & ParamsSatisfied<QueryParams<Q>, Given>,
+	query: Q &
+		RunCheck<Q> &
+		ParamsSatisfied<QueryParams<Q>, Given> &
+		DialectSatisfied<QueryParams<Q>, string> &
+		SourcesSatisfied<QueryParams<Q>>,
 	params?: Given,
-): Effect.Effect<Arr.NonEmptyReadonlyArray<RowOf<Q>>, RunError | ResultCardinalityError, Database> =>
+): Effect.Effect<Arr.NonEmptyReadonlyArray<RowOf<Q>>, RunError | ResultCardinalityError, Database | RequirementsOf<Q>> =>
 	Effect.flatMap(run(query, params), (rows) =>
 		Arr.isReadonlyArrayNonEmpty(rows) ? Effect.succeed(rows) : Effect.fail(cardinalityError("nonEmpty", 0)),
 	)
 
 /** `stream` on the `Database` in context. */
 export const stream = <Q extends Runnable, const Given extends object = {}>(
-	query: Q & RunCheck<Q> & ParamsSatisfied<QueryParams<Q>, Given>,
+	query: Q &
+		RunCheck<Q> &
+		ParamsSatisfied<QueryParams<Q>, Given> &
+		DialectSatisfied<QueryParams<Q>, string> &
+		SourcesSatisfied<QueryParams<Q>>,
 	params?: Given,
-): Stream.Stream<RowOf<Q>, DatabaseError | QueryBuilderError | CompiledQueryDecodeError, Database> =>
+): Stream.Stream<RowOf<Q>, DatabaseError | QueryBuilderError | CompiledQueryDecodeError, Database | RequirementsOf<Q>> =>
 	Stream.unwrap(Effect.map(Effect.service(Database), (db) => db.stream(query, params)))
 
 /** `query` on the `Database` in context. */

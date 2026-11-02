@@ -7,7 +7,9 @@
 // `sqliteEntitiesOf` fails with it.
 
 import { Effect } from "effect"
-import type { Table } from "../ch/table"
+import { clientDefaultsOf } from "../ch/client-defaults"
+import type { InsertValue } from "../ch/insert"
+import type { ClientDefaults, Table } from "../ch/table"
 import { withDialect } from "../ch/dialect"
 import { encodeColumnLiteral } from "../ch/literal"
 import { columnSqlName, type CHType, type ColumnDefs, type InferTS } from "../ch/types"
@@ -32,7 +34,7 @@ const ddl = ddlRenderer(sqliteDialect)
 
 // Columns
 
-export interface ColumnOptions<T extends CHType<string, any, any>> {
+export interface ColumnOptions<T extends CHType<string, any, any>, DefaultR = never, UpdateR = never> {
 	/**
 	 * The column's name in the database, when it differs from its key in
 	 * `columns`: `orgId: SQLite.column(SQLite.text, { name: "org_id" })` is read
@@ -53,37 +55,59 @@ export interface ColumnOptions<T extends CHType<string, any, any>> {
 	 * string names it. SQLite keeps no constraint name; the snapshot does.
 	 */
 	readonly unique?: true | string
+	/**
+	 * A client-side default: an Effect that `Database.run` runs for each row
+	 * an insert leaves the column out of, such as `DateTime.now` or an id from
+	 * a service. Its requirements become the insert's. No DDL.
+	 */
+	readonly defaultFn?: Effect.Effect<InsertValue<T>, never, DefaultR>
+	/**
+	 * A client-side value for every update: an Effect that `Database.run` runs
+	 * once for an update that does not set the column, such as `DateTime.now`
+	 * for an `updatedAt`. An insert that leaves the column out runs it too,
+	 * when the column has no database default. Its requirements become the
+	 * update's. No DDL.
+	 */
+	readonly onUpdate?: Effect.Effect<InsertValue<T>, never, UpdateR>
 }
 
-/** `Given` records which options were set, so the table knows which columns an insert may leave out. */
+/**
+ * `Given` records which options were set, so the table knows which columns an
+ * insert may leave out. `DefaultR` and `UpdateR` are what its `defaultFn` and
+ * `onUpdate` need.
+ */
 export interface ColumnSpec<
 	T extends CHType<string, any, any>,
 	Given extends keyof ColumnOptions<T> = keyof ColumnOptions<T>,
+	DefaultR = never,
+	UpdateR = never,
 > {
 	readonly _tag: "SqliteColumnSpec"
 	readonly type: T
-	readonly options: ColumnOptions<T>
+	readonly options: ColumnOptions<T, DefaultR, UpdateR>
 	readonly _given?: Given
 }
 
 /** A column with options. A bare column type works too where none is needed. */
-export const column = <T extends CHType<string, any, any>, Given extends keyof ColumnOptions<T> = never>(
+export const column = <T extends CHType<string, any, any>, Given extends keyof ColumnOptions<T> = never, DefaultR = never, UpdateR = never>(
 	type: T,
 	// A default must be a value: `default: undefined` would make the column optional on insert
-	// while writing no DEFAULT, so the insert would fail on NOT NULL.
-	options: ColumnOptions<T> & { readonly [K in Given]: K extends "default" | "defaultExpr" ? {} : unknown } = {} as never,
-): ColumnSpec<T, Given> => ({ _tag: "SqliteColumnSpec", type, options })
+	// while writing no DEFAULT, so the insert would fail on NOT NULL. The same holds for the client defaults.
+	options: ColumnOptions<T, DefaultR, UpdateR> & {
+		readonly [K in Given]: K extends "default" | "defaultExpr" | "defaultFn" | "onUpdate" ? {} : unknown
+	} = {} as never,
+): ColumnSpec<T, Given, NoInfer<DefaultR>, NoInfer<UpdateR>> => ({ _tag: "SqliteColumnSpec", type, options })
 
-export type ColumnInput = CHType<string, any, any> | ColumnSpec<CHType<string, any, any>, any>
+export type ColumnInput = CHType<string, any, any> | ColumnSpec<CHType<string, any, any>, any, any, any>
 
 /** The query-side column types of a `columns` record. */
 export type ColumnsOf<I extends Record<string, ColumnInput>> = {
-	readonly [K in keyof I]: I[K] extends ColumnSpec<infer T, any> ? T : I[K] extends CHType<string, any, any> ? I[K] : never
+	readonly [K in keyof I]: I[K] extends ColumnSpec<infer T, any, any, any> ? T : I[K] extends CHType<string, any, any> ? I[K] : never
 }
 
-/** Columns declared with `default` or `defaultExpr`: an insert may leave them out. */
+/** Columns declared with `default`, `defaultExpr`, `defaultFn` or `onUpdate`: an insert may leave them out. */
 export type DefaultedColumnsOf<I extends Record<string, ColumnInput>> = {
-	[K in keyof I]: I[K] extends ColumnSpec<any, infer Given>
+	[K in keyof I]: I[K] extends ColumnSpec<any, infer Given, any, any>
 		? [Exclude<Given, "name" | "unique">] extends [never]
 			? never
 			: K
@@ -91,7 +115,24 @@ export type DefaultedColumnsOf<I extends Record<string, ColumnInput>> = {
 }[keyof I] &
 	string
 
-const isColumnSpec = (input: unknown): input is ColumnSpec<CHType<string, any, any>, any> =>
+/**
+ * What an insert into a table with these columns requires: each `defaultFn`'s
+ * requirements, or the `onUpdate`'s of a column without one.
+ */
+export type InsertRequirementsOf<I extends Record<string, ColumnInput>> = {
+	[K in keyof I]: I[K] extends ColumnSpec<any, infer Given, infer DefaultR, infer UpdateR>
+		? "defaultFn" extends Given
+			? DefaultR
+			: UpdateR
+		: never
+}[keyof I]
+
+/** What an update of a table with these columns requires: each `onUpdate`'s requirements. */
+export type UpdateRequirementsOf<I extends Record<string, ColumnInput>> = {
+	[K in keyof I]: I[K] extends ColumnSpec<any, any, any, infer UpdateR> ? UpdateR : never
+}[keyof I]
+
+const isColumnSpec = (input: unknown): input is ColumnSpec<CHType<string, any, any>, any, any, any> =>
 	typeof input === "object" && input !== null && "_tag" in input && input._tag === "SqliteColumnSpec"
 
 /** The query-side type of a column input, carrying its database name as `sqlName`. */
@@ -133,7 +174,7 @@ const isTimestamp = (type: CHType<string, any, any>): boolean =>
  * datetime(), unixepoch() and a strftime with another format write another
  * form, which misorders against the column's values.
  */
-const checkTimestampDefault = (problems: ProblemSink, table: string, name: string, spec: ColumnSpec<CHType<string, any, any>>, sql: string): void => {
+const checkTimestampDefault = (problems: ProblemSink, table: string, name: string, spec: ColumnSpec<CHType<string, any, any>, any, any, any>, sql: string): void => {
 	if (!isTimestamp(spec.type)) return
 	const otherForm =
 		/\bcurrent_(timestamp|date|time)\b|\b(datetime|date|time|julianday|unixepoch)\s*\(/i.test(sql) ||
@@ -150,7 +191,7 @@ const columnDefault = (
 	problems: ProblemSink,
 	table: string,
 	name: string,
-	spec: ColumnSpec<CHType<string, any, any>>,
+	spec: ColumnSpec<CHType<string, any, any>, any, any, any>,
 	columns: ColumnDefs,
 ): string | null => {
 	const { options } = spec
@@ -219,8 +260,13 @@ export interface TableDdl {
 	readonly uniques: ReadonlyArray<SqliteUniqueEntity>
 }
 
-export interface SqliteSchemaTable<Name extends string, Cols extends ColumnDefs, Defaulted extends string = string>
-	extends Table<Name, Cols, Defaulted, never> {
+export interface SqliteSchemaTable<
+	Name extends string,
+	Cols extends ColumnDefs,
+	Defaulted extends string = string,
+	InsertR = never,
+	UpdateR = never,
+> extends Table<Name, Cols, Defaulted, never, InsertR, UpdateR> {
 	readonly ddl: TableDdl
 	/** What is wrong with the definition; `sqliteEntitiesOf` fails when any table has one. */
 	readonly problems: ReadonlyArray<DefinitionProblem>
@@ -244,7 +290,21 @@ export const isTableDefinition = (definition: object): definition is { readonly 
 export const externalSqliteTable = <const Name extends string>(
 	name: Name,
 	definition: ExternalTableDefinition<Record<string, ColumnInput>>,
-): Table<Name, any, any, any> => externalTable(name, definition, isColumnSpec, [])
+): Table<Name, any, any, any> => {
+	const external = externalTable(name, definition, isColumnSpec, [])
+	const clientDefaults = clientDefaultsOfColumns(definition.columns)
+	return clientDefaults === undefined ? external : { ...external, clientDefaults }
+}
+
+/** The client defaults of a `columns` record; see `clientDefaultsOf`. */
+const clientDefaultsOfColumns = (columns: Record<string, ColumnInput>): ClientDefaults | undefined =>
+	clientDefaultsOf(
+		Object.entries(columns).flatMap(([column, input]) => {
+			if (!isColumnSpec(input)) return []
+			const { defaultFn, onUpdate, default: literal, defaultExpr } = input.options
+			return [[column, { defaultFn, onUpdate, databaseDefault: literal !== undefined || defaultExpr !== undefined }] as const]
+		}),
+	)
 
 /**
  * A SQLite table with its DDL. The value IS a query `Table`.
@@ -272,7 +332,7 @@ function buildTable<const Name extends string, const Columns extends Record<stri
 
 	const columnEntities = inputs.map(([column, input], position): SqliteColumnEntity => {
 		checkIdentifier(problems, `${name}.${column}`, sqlName(column))
-		const spec: ColumnSpec<CHType<string, any, any>> = isColumnSpec(input)
+		const spec: ColumnSpec<CHType<string, any, any>, any, any, any> = isColumnSpec(input)
 			? input
 			: { _tag: "SqliteColumnSpec", type: input as CHType<string, any, any>, options: {} }
 		return {
@@ -332,12 +392,14 @@ function buildTable<const Name extends string, const Columns extends Record<stri
 		primaryKey: definition.primaryKey === undefined ? null : { columns: pkColumns.filter(has).map(sqlName) },
 	}
 	const defaults = inputs.filter((_, position) => columnEntities[position]!.default !== null).map(([column]) => column)
+	const clientDefaults = clientDefaultsOfColumns(definition.columns)
 	return {
 		_tag: "Table",
 		name,
 		columns: types,
 		...(definition.tenantColumn !== undefined ? { tenantColumn: definition.tenantColumn } : undefined),
 		...(defaults.length > 0 ? { defaults: defaults as unknown as Array<DefaultedColumnsOf<Columns>> } : undefined),
+		...(clientDefaults !== undefined ? { clientDefaults } : undefined),
 		ddl: { dialect: "sqlite", table: tableEntity, columns: columnEntities, indexes: indexEntities, uniques: uniqueEntities },
 		problems,
 	}

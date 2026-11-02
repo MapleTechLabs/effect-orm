@@ -201,12 +201,21 @@ export interface CHInsert<
 	Computed extends string = never,
 	Output = never,
 	Params = never,
+	Req = never,
 > {
 	readonly _tag: "CHInsert"
 	/** @internal — runtime insert state */
 	readonly _state: CHInsertState
-	/** phantom. `output` is the row `Database.run` returns: none without RETURNING. */
-	readonly _phantom?: { readonly cols: Cols; readonly output: Output; readonly params: (entries: Params) => void }
+	/**
+	 * phantom. `output` is the row `Database.run` returns: none without
+	 * RETURNING. `requirements` is what the table's client defaults need.
+	 */
+	readonly _phantom?: {
+		readonly cols: Cols
+		readonly output: Output
+		readonly params: (entries: Params) => void
+		readonly requirements: Req
+	}
 
 	/**
 	 * The rows to insert: one row or an array. Calling it again replaces the
@@ -215,7 +224,7 @@ export interface CHInsert<
 	 */
 	values<const R extends InsertRow<Cols, Defaulted, Computed>>(
 		rows: (R | ReadonlyArray<R>) & OnlyColumns<R, WritableColumns<Cols, Computed>>,
-	): CHInsert<Cols, Defaulted, Computed, Output, Params | ParamsIn<R[keyof R]>>
+	): CHInsert<Cols, Defaulted, Computed, Output, Params | ParamsIn<R[keyof R]>, Req>
 
 	/**
 	 * `INSERT ... SELECT`: insert the rows a query (or union) selects. Each
@@ -225,7 +234,7 @@ export interface CHInsert<
 	 */
 	select<Q extends CHQuery<any, any, any, any> | CHUnionQuery<any>>(
 		query: Q & SelectFits<SelectedRow<Q>, Cols, Defaulted, Computed> & NeedsSelect<SelectedRow<Q>>,
-	): CHInsert<Cols, Defaulted, Computed, Output, Params | QueryParams<Q>>
+	): CHInsert<Cols, Defaulted, Computed, Output, Params | QueryParams<Q>, Req>
 
 	/**
 	 * ClickHouse `SETTINGS` for this insert, such as
@@ -233,7 +242,7 @@ export interface CHInsert<
 	 * identifiers; values are written as literals. Calling it again replaces
 	 * them. On a dialect without insert settings (Postgres) compiling is a defect.
 	 */
-	settings(settings: Readonly<Record<string, InsertSettingValue>>): CHInsert<Cols, Defaulted, Computed, Output, Params>
+	settings(settings: Readonly<Record<string, InsertSettingValue>>): CHInsert<Cols, Defaulted, Computed, Output, Params, Req>
 
 	/**
 	 * Return the inserted rows: every column with no arguments (Drizzle's bare
@@ -242,20 +251,20 @@ export interface CHInsert<
 	 * derived row schema. Postgres only; on a dialect without RETURNING
 	 * (ClickHouse) compiling is a defect. Calling it again replaces the list.
 	 */
-	returning(): CHInsert<Cols, Defaulted, Computed, { readonly [P in keyof Cols & string]: InferTS<Cols[P]> }, Params>
+	returning(): CHInsert<Cols, Defaulted, Computed, { readonly [P in keyof Cols & string]: InferTS<Cols[P]> }, Params, Req>
 	returning<K extends keyof Cols & string>(
 		...columns: [K, ...Array<K>]
-	): CHInsert<Cols, Defaulted, Computed, { readonly [P in K]: InferTS<Cols[P]> }, Params>
+	): CHInsert<Cols, Defaulted, Computed, { readonly [P in K]: InferTS<Cols[P]> }, Params, Req>
 	returning<S extends Record<string, Expr<any>>>(
 		fn: ($: ColumnAccessor<Cols>) => S,
-	): CHInsert<Cols, Defaulted, Computed, InferOutput<S>, Params | ParamsIn<S[keyof S]>>
+	): CHInsert<Cols, Defaulted, Computed, InferOutput<S>, Params | ParamsIn<S[keyof S]>, Req>
 
 	/**
 	 * `ON CONFLICT DO NOTHING`: skip a row that conflicts. With `returning`, a
 	 * skipped row returns nothing. Postgres only; replaces any earlier
 	 * `onConflict*`.
 	 */
-	onConflictDoNothing(options?: OnConflictDoNothing<Cols>): CHInsert<Cols, Defaulted, Computed, Output, Params>
+	onConflictDoNothing(options?: OnConflictDoNothing<Cols>): CHInsert<Cols, Defaulted, Computed, Output, Params, Req>
 
 	/**
 	 * `ON CONFLICT (target) DO UPDATE SET ...`: an upsert. Postgres only;
@@ -263,14 +272,14 @@ export interface CHInsert<
 	 */
 	onConflictDoUpdate<S extends ConflictSet<Cols, Computed>, W = never>(
 		options: OnConflictDoUpdate<Cols, Computed, S, W>,
-	): CHInsert<Cols, Defaulted, Computed, Output, Params | ParamsIn<S[keyof S]> | W>
+	): CHInsert<Cols, Defaulted, Computed, Output, Params | ParamsIn<S[keyof S]> | W, Req>
 
 	/**
 	 * Declare that this insert, such as a batch of rows from many tenants, deliberately spans tenants, forcing
 	 * `tenantScope: "cross-tenant"` and setting `crossTenantDeclared`. A
 	 * database with `requireTenantScope` runs it; see docs/tenant-scoping.md.
 	 */
-	crossTenant(): CHInsert<Cols, Defaulted, Computed, Output, Params>
+	crossTenant(): CHInsert<Cols, Defaulted, Computed, Output, Params, Req>
 }
 
 /**
@@ -281,11 +290,11 @@ export interface CHInsert<
  * `onConflictDoUpdate` does not survive that (`ConflictTarget<any>` is any
  * `string`; `any` is not `never`). TypeScript 7 accepts either.
  */
-export interface AnyInsert<Output = any, Params = never> {
+export interface AnyInsert<Output = any, Params = never, Req = any> {
 	readonly _tag: "CHInsert"
 	/** @internal — runtime insert state */
 	readonly _state: CHInsertState
-	readonly _phantom?: { readonly output: Output; readonly params: (entries: Params) => void }
+	readonly _phantom?: { readonly output: Output; readonly params: (entries: Params) => void; readonly requirements?: Req }
 }
 
 const makeInsert = <Cols extends ColumnDefs, Defaulted extends string, Computed extends string, Output>(
@@ -325,13 +334,26 @@ export type CHInsertStart<
 	Cols extends ColumnDefs = ColumnDefs,
 	Defaulted extends string = never,
 	Computed extends string = never,
-> = Pick<CHInsert<Cols, Defaulted, Computed>, "values" | "select">
+	Req = never,
+> = Pick<CHInsert<Cols, Defaulted, Computed, never, never, Req>, "values" | "select">
 
-/** Start an INSERT into `table`. Give its rows with `values` or `select`. */
-export function insertInto<Name extends string, Cols extends ColumnDefs, Defaulted extends string, Computed extends string>(
-	table: Table<Name, Cols, Defaulted, Computed>,
-): CHInsertStart<Cols, Defaulted, Computed> {
-	return makeInsert<Cols, Defaulted, Computed, never>({ table: table as Table<string, ColumnDefs> })
+/**
+ * Start an INSERT into `table`. Give its rows with `values` or `select`. The
+ * insert requires what the table's client defaults need (`Req`).
+ */
+export function insertInto<
+	Name extends string,
+	Cols extends ColumnDefs,
+	Defaulted extends string,
+	Computed extends string,
+	Req = never,
+>(table: Table<Name, Cols, Defaulted, Computed, Req, never>): CHInsertStart<Cols, Defaulted, Computed, Req> {
+	return makeInsert<Cols, Defaulted, Computed, never>({ table: table as Table<string, ColumnDefs> }) as CHInsertStart<
+		Cols,
+		Defaulted,
+		Computed,
+		Req
+	>
 }
 
 export const isInsert = (value: unknown): value is CHInsert<any, any, any, any, any> =>

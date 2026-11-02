@@ -113,6 +113,16 @@ export const Links = SQLite.table("links", {
 	expect((await generateFrom(v2)).written).toBeUndefined()
 })
 
+it("writes no DEFAULT for a client default, and adding one to a column is no migration", async () => {
+	const v1 = links(`id: SQLite.text, url: SQLite.text, at: SQLite.timestamp`)
+	await generateFrom(v1)
+	const v2 = `import { DateTime } from "effect"\n` + links(
+		`id: SQLite.column(SQLite.text, { defaultFn: Effect.sync(() => "x") }), url: SQLite.text, at: SQLite.column(SQLite.timestamp, { defaultFn: DateTime.now, onUpdate: DateTime.now })`,
+	)
+	expect((await generateFrom(`import { Effect } from "effect"\n${v2}`)).written).toBeUndefined()
+	expect(migrationSql(folders()[0]!)).not.toContain("DEFAULT")
+})
+
 const seedLinks = [`INSERT INTO "links" ("id", "url") VALUES ('a', 'https://a'), ('b', 'https://b')`]
 
 it("drops a column only once the data loss is confirmed, and keeps the other columns' rows", async () => {

@@ -49,6 +49,7 @@ Everything in this section is exported, identically, from `/clickhouse`, `/postg
 | `deleteFrom` | `(table) => CHDelete`: `.where(fn)` or `.allRows()`, `.returning(...)`, `.settings(record)` |
 | `tableSchemas` | `(table) => TableSchemas`: the `select`, `insert`, `update`, `json`, `jsonCreate` and `jsonUpdate` row Schemas. See [Row Schemas](./tables-and-types.md#row-schemas) |
 | `insertInto` | `(table) => CHInsertStart`, then `CHInsert`; `.values(row \| rows)` or `.select(query)` sets its rows, `.settings(record)` ClickHouse `SETTINGS`, `.returning(...)` the RETURNING list, `.onConflictDoNothing(options?)` / `.onConflictDoUpdate(options)` the ON CONFLICT clause (Postgres and SQLite). See [Inserting rows](./inserts.md) |
+| `fillDefaults` | `(write) => Effect<write, never, RequirementsOf<write>>`: runs the `defaultFn` / `onUpdate` Effects of an insert's or update's table into its rows or SET. `Database.run` calls it; call it before `compile` when you compile a write yourself. See [client-side defaults](./inserts.md#client-side-defaults) |
 
 Tables come from the dialect's `table`: [`CH.table`](#tables-and-ddl) or
 [`PG.table`](#tables-and-ddl-1).
@@ -219,6 +220,10 @@ decoded type of a column), `InferEncoded` (its wire type), `ColumnDefs`, `Nullab
 **Inference** — `InferOutput`, `InferQueryOutput`, `InferUnionOutput`, `SelectRowOf`,
 `InsertRow`, `InsertRowOf`, `UpdateSet`, `UpdateSetOf`, `TableSchemas` (what `tableSchemas`
 returns for a table).
+
+**Client-side defaults** — `RequirementsOf<W>` (what a write's client defaults need; `never` for
+anything else), `ClientDefaults` (the `insert` and `update` Effects per column, on
+`Table.clientDefaults`).
 
 **What `compile` checks** — `NeedsSelect<Output>` (the query has a SELECT list),
 `ParamsSatisfied<Params, Given>` (the params object fills every required param),
@@ -523,7 +528,11 @@ const Users = PG.table("users", {
 `/clickhouse`: a view, a catalog table, one another tool migrates. No DDL.
 
 **`ColumnOptions`** — one of `default`, `defaultExpr`, `identity` (`"always"` or
-`"by default"`); any of them lets an insert leave the column out (`DefaultedColumnsOf`). Also
+`"by default"`); any of them lets an insert leave the column out (`DefaultedColumnsOf`).
+`defaultFn` and `onUpdate` are client-side defaults: an `Effect` of a value of the column's type
+that cannot fail, run by `Database.run` for an insert that leaves the column out and an update
+that does not set it. Either one lets an insert leave the column out, and its requirements
+become the write's ([client-side defaults](./inserts.md#client-side-defaults)). Also
 `name` (the column's name in SQL) and `unique` (`true`, a constraint name, or
 `UniqueColumnOptions`: `{ name?, nullsNotDistinct? }`), which names a one-column constraint
 `<table>_<column>_unique` by default.
@@ -661,7 +670,9 @@ the bare-columns form.
 **`ColumnOptions`** — one of `default` (a literal, encoded through the column type; a boolean
 is written `true` / `false`) or `defaultExpr` (SQL as written, so add SQLite's parentheses, or a
 DSL callback, parenthesized for you); either lets an insert leave the column out
-(`DefaultedColumnsOf`). Also `name` (the column's name in SQL) and `unique` (`true` or a
+(`DefaultedColumnsOf`). `defaultFn` and `onUpdate` are client-side defaults, as on `/postgres`:
+Effects `Database.run` runs, with no DDL ([client-side defaults](./inserts.md#client-side-defaults)).
+Also `name` (the column's name in SQL) and `unique` (`true` or a
 constraint name), an inline `UNIQUE` constraint named `<table>_<column>_unique` by default, as
 drizzle-kit 1.0 writes and names it.
 

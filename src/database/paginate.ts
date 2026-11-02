@@ -178,7 +178,7 @@ export const paginate = <Q extends CHQuery<any, any, any, any>, const Given exte
 			.limit(options.limit + 1)
 
 		const db = yield* Database
-		const rows = (yield* db.run(paged as any, params)) as ReadonlyArray<RowOf<Q>>
+		const rows = (yield* db.run(paged as never, params as never)) as ReadonlyArray<RowOf<Q>>
 		if (rows.length <= options.limit) return { rows, nextCursor: Option.none() }
 		const page = rows.slice(0, options.limit)
 		const last = page[page.length - 1] as Record<string, unknown>

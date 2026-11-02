@@ -677,7 +677,7 @@ export interface CompileUnsafe<Default extends string> {
 /** A write statement: what `compile` takes besides a query. */
 export type CHWrite<Output, Params = never> =
 	| AnyInsert<Output, Params>
-	| CHUpdate<any, any, Output, "ready", Params>
+	| CHUpdate<any, any, Output, "ready", Params, any>
 	| CHDelete<any, Output, "ready", Params>
 
 /**
@@ -2040,6 +2040,14 @@ const insertSelectSource = (
 			}), undefined)
 		}
 	}
+	// No row exists before the SELECT runs, so a client default cannot fill a
+	// column the query leaves out; it would be NULL or the database default.
+	const unselected = Object.keys(table.clientDefaults?.insert ?? {}).filter((column) => !columns.includes(column))
+	if (unselected.length > 0) {
+		fail(new QueryBuilderDefect({
+			message: `insertInto(${table.name}): the query does not select ${unselected.join(", ")}, which ${unselected.length === 1 ? "has" : "have"} a client default (defaultFn / onUpdate) that INSERT ... SELECT cannot run; select the column`,
+		}), undefined)
+	}
 	const inner = isUnion
 		? compileUnionInner(query as CHUnionQuery<any>, values, { nested: true })
 		: compileInner(query as CHQuery<any, any, any, any>, values, { skipFormat: true, nested: true })
@@ -2082,6 +2090,10 @@ function compileInsert(insert: CHInsert<any, any, any, any>, params: Record<stri
 	const where = `insertInto(${table.name})`
 	if (rows === undefined && selectQuery === undefined) {
 		return fail(new QueryBuilderDefect({ message: `${where}: values() or select() is required` }),failedQuery<any, undefined>())
+	}
+	const unfilled = rows?.flatMap((row, index) => missingClientDefaults(table.clientDefaults?.insert, row).map((column) => `${column} in row ${index}`))
+	if (unfilled !== undefined && unfilled.length > 0) {
+		return fail(new QueryBuilderDefect({ message: clientDefaultsMessage(where, "insert", unfilled) }), failedQuery<any, undefined>())
 	}
 	const dialect = currentDialect()
 	const { values, cell } = valueCells(table, params, where)
@@ -2190,6 +2202,15 @@ function compileInsert(insert: CHInsert<any, any, any, any>, params: Record<stri
 	return writeCompiledQuery(rendered, "insert", own.scope, own.bound, returning, insert._state.crossTenant, table.name)
 }
 
+/** The columns with a client default that a row or SET record leaves out. */
+const missingClientDefaults = (
+	defaults: Readonly<Record<string, unknown>> | undefined,
+	record: Readonly<Record<string, unknown>>,
+): ReadonlyArray<string> => (defaults === undefined ? [] : Object.keys(defaults).filter((column) => record[column] === undefined))
+
+const clientDefaultsMessage = (where: string, kind: "insert" | "update", columns: ReadonlyArray<string>): string =>
+	`${where}: ${columns.join(", ")} ${columns.length === 1 ? "has" : "have"} a client default (defaultFn / onUpdate) that has not run; run the ${kind} with Database.run, or pass it through fillDefaults before compile`
+
 /** The VALUES rows' columns, in table order, after checking every key. */
 const valuesColumns = (
 	table: CHInsert<any, any, any, any>["_state"]["table"],
@@ -2267,6 +2288,10 @@ function compileUpdateOrDelete(
 				const set = (write as CHUpdate<any, any, any>)._state.set
 				if (set === undefined) return fail(new QueryBuilderDefect({ message: `${where}: set() is required` }), [assignments, ""] as const)
 				const record = typeof set === "function" ? set($) : set
+				const unfilled = missingClientDefaults(table.clientDefaults?.update, record as Record<string, unknown>)
+				if (unfilled.length > 0) {
+					return fail(new QueryBuilderDefect({ message: clientDefaultsMessage(where, "update", unfilled) }), [assignments, ""] as const)
+				}
 				assignments = setAssignments(table, record as Record<string, unknown>, cell, (column, value, sql) => {
 					if (column === tenant) setWrites.push({ value, sql })
 				}, where, "update")
