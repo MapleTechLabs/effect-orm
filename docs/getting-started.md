@@ -10,13 +10,13 @@ Effect application: `Effect.runPromise` lets you use it from ordinary async code
 CommonJS code can `require()` every entry point too, on Node 20.19+ or 22.12+, which
 load ES modules synchronously (`require(esm)`). That is the same way such code loads Effect 4,
 which is also ESM-only, so the library and its caller share one Effect.
-These examples are checked against Effect `4.0.0` and the builder in this repository.
-The package declares `effect ^4.0.0` as a peer dependency; Effect 3 is incompatible.
+These examples are checked against Effect `4.0.6` and the builder in this repository.
+The package declares `effect ^4.0.6` as a peer dependency; Effect 3 is incompatible.
 
 Install from npm with its Effect 4 peer dependency:
 
 ```sh
-npm install @maple-dev/effect-orm "effect@^4.0.0"
+npm install @maple-dev/effect-orm "effect@^4.0.6"
 ```
 
 The recommended range accepts stable Effect 4 releases. It excludes Effect 3, the
@@ -36,7 +36,7 @@ bun pm pack
 Install the resulting `.tgz` into your own project with its peer dependency:
 
 ```sh
-npm install /absolute/path/to/the-generated-package.tgz "effect@^4.0.0"
+npm install /absolute/path/to/the-generated-package.tgz "effect@^4.0.6"
 ```
 
 Keep the Effect 4 range explicit when installing. Use an ESM project
