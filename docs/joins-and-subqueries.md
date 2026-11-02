@@ -34,6 +34,39 @@ in the output row. Derived codecs accept NULL when `join_use_nulls=1` and the co
 defaults ClickHouse emits with `join_use_nulls=0`. This applies to `leftJoinQuery` too.
 An explicitly declared `rowSchema` must also accept the nullable joined columns.
 
+### Narrowing a joined column with `where`
+
+A `where` condition can prove that a joined column is not NULL. Then a `select` after that
+`where` reads the column without `| null`, in the row type and in the derived row schema:
+
+```ts
+const query = CH.from(Events, "e")
+	.leftJoin(Services, "s", (main, joined) => main.Name.eq(joined.Name).and(main.OrgId.eq(joined.OrgId)))
+	.where(($) => [$.OrgId.eq("org_123"), $.s.Team.isNotNull()])
+	.select(($) => ({ name: $.Name, team: $.s.Team }))
+
+// Row: { readonly name: string; readonly team: string }
+```
+
+These conditions prove a column not NULL:
+
+- `$.s.Team.isNotNull()`.
+- `$.s.Team.eq(value)`: `NULL = value` is never true.
+- An AND of them: `.and(…)`, `CH.and(…)`, the items of a `where` list, or a second `where`.
+
+These conditions prove nothing, so the column stays `T | null`:
+
+- `or`, `.or`, `not`, `when` and `whenTrue`.
+- An item typed `Condition | undefined`, or a list of unknown length.
+- A condition on a column of the FROM source.
+
+Call `where` before `select`. A `select` made before the `where` keeps `| null`, because its
+row type is fixed when you call it. The row schema follows the same rule, so the type and the
+schema agree. On ClickHouse without `join_use_nulls=1`, a missing join row has the column
+default, which is not NULL: `isNotNull()` keeps that row.
+
+_(Backed by `docs/joins-and-subqueries.md > A where before select narrows a joined column`.)_
+
 ## Joining a subquery
 
 `innerJoinQuery`, `leftJoinQuery`, and `crossJoinQuery` take a `CHQuery` instead of a table.
