@@ -259,6 +259,10 @@ await db.close()
   optional keys and `Schema.suspend`. A path through a field whose stored form is not its
   type (`Schema.encodeKeys`, a class) is refused when the query compiles. A `jsonb()` column
   with no schema takes any keys and reads `unknown`.
+- These are Postgres functions. Compiled for ClickHouse, SQLite or D1 they die with a
+  `QueryBuilderDefect` ("is a Postgres function") instead of sending SQL the server would
+  reject. SQLite and D1 have no typed JSON paths yet: a `SQLite.json(schema)` column is read and
+  written whole.
 
 ## Functions
 

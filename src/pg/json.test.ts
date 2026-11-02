@@ -7,6 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from "@effect/vitest"
 import { Effect, Schema } from "effect"
 import type { CompiledQuery } from "../ch/compile"
 import { clickhouseDialect } from "../ch/dialect"
+import { d1Dialect, sqliteDialect } from "../sqlite/dialect"
 import * as PG from "../postgres"
 
 const db = new PGlite()
@@ -137,13 +138,21 @@ describe("jsonb path filters", () => {
 })
 
 describe("jsonb path failures", () => {
-	it("is a defect for a path the schema does not have, and for a ClickHouse compile", () => {
+	it("is a defect for a path the schema does not have, and for a ClickHouse, SQLite or D1 compile", () => {
 		// @ts-expect-error -- not a field of the profile
 		const wrong = PG.from(docs).select(($) => ({ v: PG.jsonPath($.payload, "profile", "town") }))
 		expect(() => PG.compileUnsafe(wrong, {})).toThrow(/jsonPath \["profile","town"\]: the column's schema has no such path \(at \["profile","town"\]: no field "town"\)/)
 
 		const ok = PG.from(docs).select(($) => ({ v: PG.jsonPath($.payload, "profile", "city") }))
 		expect(() => PG.compileUnsafe(ok, {}, { dialect: clickhouseDialect })).toThrow(/jsonPath\(\) is a Postgres function/)
+		// SQLite and D1 have their own function set: no typed paths there yet, so refuse, not send `->` SQL.
+		for (const dialect of [sqliteDialect, d1Dialect]) {
+			expect(() => PG.compileUnsafe(ok, {}, { dialect })).toThrow(/jsonPath\(\) is a Postgres function .* no meaning for the (sqlite|d1) dialect/)
+			const set = PG.update(docs).set(($) => ({ payload: PG.jsonSet($.payload, ["tags", 0], "z") })).where(($) => [$.id.eq(1)])
+			expect(() => PG.compileUnsafe(set, {}, { dialect })).toThrow(/jsonSet\(\) is a Postgres function/)
+			const contains = PG.from(docs).select("id").where(($) => [PG.jsonContains($.payload, { tags: ["a"] })])
+			expect(() => PG.compileUnsafe(contains, {}, { dialect })).toThrow(/jsonContains\(\) is a Postgres function/)
+		}
 	})
 
 	it("refuses a path through a field whose stored form is not its type", () => {
