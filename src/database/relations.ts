@@ -7,7 +7,7 @@
 // See design/relations.md for why this and not JSON aggregation.
 
 import { Effect } from "effect"
-import type { CompiledQueryDecodeError } from "../ch/compile"
+import { compileCH, type CompiledQueryDecodeError } from "../ch/compile"
 import type { QueryBuilderError } from "../ch/errors"
 import type { Condition, Expr } from "../ch/expr"
 import { from, type ColumnAccessor, type CHQuery } from "../ch/query"
@@ -181,6 +181,12 @@ const distinct = (values: ReadonlyArray<unknown>): Array<unknown> => [
 	...new Set(values.filter((value) => value !== null && value !== undefined)),
 ]
 
+const chunks = <A>(values: ReadonlyArray<A>, size: number): Array<ReadonlyArray<A>> => {
+	const out: Array<ReadonlyArray<A>> = []
+	for (let i = 0; i < values.length; i += size) out.push(values.slice(i, i + size))
+	return out
+}
+
 const levelQuery = (
 	table: AnyTable,
 	level: Level,
@@ -232,16 +238,31 @@ const attach = (
 						? distinct(rows.map((row) => row[parent.tenantColumn!]))
 						: []
 				const tenantColumn = target.tenantColumn
-				const query = levelQuery(
-					target,
-					nested,
-					($) => [
-						$[relation.to].in_(...keys),
-						tenantColumn !== undefined && tenants.length === 1 ? $[tenantColumn].eq(tenants[0]) : undefined,
-					],
-					crossTenant,
-				)
-				const decoded = (yield* db.run(query as any)) as ReadonlyArray<Row>
+				const queryFor = (batch: ReadonlyArray<unknown>) =>
+					levelQuery(
+						target,
+						nested,
+						($) => [
+							$[relation.to].in_(...batch),
+							tenantColumn !== undefined && tenants.length === 1 ? $[tenantColumn].eq(tenants[0]) : undefined,
+						],
+						crossTenant,
+					)
+				// A dialect with a bound-value limit (D1: 100) would refuse a long
+				// `IN` list. Split the keys so each statement fits next to the
+				// level's other bindings; each parent key lands in one batch, so
+				// per-parent order is kept.
+				let batches: ReadonlyArray<ReadonlyArray<unknown>> = [keys]
+				const limit = db.dialect.params._tag === "bind" ? db.dialect.params.maxParameters : undefined
+				if (limit !== undefined && keys.length > 1) {
+					const one = yield* compileCH(queryFor(keys.slice(0, 1)) as any, undefined, { dialect: db.dialect })
+					const size = Math.max(1, limit - (one.parameters.length - 1))
+					if (keys.length > size) batches = chunks(keys, size)
+				}
+				const decoded: Array<Row> = []
+				for (const batch of batches) {
+					decoded.push(...((yield* db.run(queryFor(batch) as any)) as ReadonlyArray<Row>))
+				}
 				children = yield* attach(tables, relations, relation.target, decoded, nested, crossTenant)
 			}
 			const byKey = new Map<unknown, Array<Row>>()
