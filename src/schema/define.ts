@@ -25,7 +25,7 @@ import type {
 	TableEntity,
 } from "./entities"
 import { casedName, type Casing } from "./casing"
-import { checkIdentifier, withRenderProblems, type DefinitionProblem, type ProblemSink } from "./problems"
+import { checkDistinctNames, checkIdentifier, withRenderProblems, type DefinitionProblem, type ProblemSink } from "./problems"
 
 export { SchemaDefinitionError, type DefinitionProblem } from "./problems"
 
@@ -387,6 +387,8 @@ function buildTable<const Name extends string, const Columns extends Record<stri
 			comment: spec.options.comment ?? null,
 		}
 	})
+	// A `name` or the casing can map two keys to one column: `OrgId` and `orgId` are both `org_id`.
+	checkDistinctNames(problems, name, inputs.map(([column]) => [column, sqlName(column)] as const), { ignoreCase: false })
 
 	const orderBy =
 		definition.orderBy === undefined

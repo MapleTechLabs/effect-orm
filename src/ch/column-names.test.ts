@@ -146,4 +146,17 @@ describe("ClickHouse casing", () => {
 		])
 		expect(CH.compileUnsafe(CH.from(Cased).select("HTTPStatus")).sql).toContain("cased.http_status AS HTTPStatus")
 	})
+
+	it("records a problem when a name or the casing gives two keys one database name", () => {
+		const Clash = CH.table("clash", {
+			casing: "snake_case",
+			columns: { orgId: CH.string, OrgId: CH.string, other: CH.column(CH.string, { name: "org_id" }) },
+			engine: CH.engine.mergeTree(),
+			orderBy: ["orgId"],
+		})
+		expect(Clash.problems.map((problem) => problem.message)).toEqual([
+			"org_id has the same SQL name as orgId",
+			"org_id has the same SQL name as orgId",
+		])
+	})
 })

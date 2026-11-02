@@ -72,8 +72,10 @@ key is its name in SQL unless the column or the table gives it another:
 
 - `name` on `column` sets one column's database name, as Prisma's `@map` and drizzle's
   `text("org_id")` do. `orgId: PG.column(PG.text, { name: "org_id" })` (or `CH.column(CH.string,
-  { name: "org_id" })`) is stored as `org_id`, and read, written, filtered and indexed as `orgId`.
-- `casing` on the table names every column that gives no `name`. `"snake_case"` stores `orgId` as
+  { name: "org_id" })`, `SQLite.column(SQLite.text, { name: "org_id" })`) is stored as `org_id`,
+  and read, written, filtered and indexed as `orgId`.
+- `casing` on the table (`CH.table`, `PG.table` or `SQLite.table`) names every column that gives
+  no `name`. `"snake_case"` stores `orgId` as
   `org_id` and `HTTPStatus` as `http_status`, by drizzle-orm's rule, so a schema drizzle-kit made
   with `casing: "snake_case"` keeps its names. `"camelCase"` goes the other way.
 
@@ -95,7 +97,9 @@ update, upsert target and `returning` takes the key; the SQL, the DDL and the mi
 `generate` writes use the database name. Rows decode under the key: a select writes
 `"org_id" AS "orgId"`, so decoding reads the alias it wrote. The names are fixed where the table
 is defined, so there is no global casing; a project that wants one wraps `table` in its own
-function. A ClickHouse materialized view fills its target by database name, so its target table
+function. Two keys that end up with one database name (`orgId` and `OrgId` under `"snake_case"`)
+are a definition problem; SQLite compares names without case, so there `Org_Id` and `org_id`
+clash too. A ClickHouse materialized view fills its target by database name, so its target table
 cannot rename a column: the view records a problem if it does.
 
 _(Backed by `docs/tables-and-types.md > Column names`.)_

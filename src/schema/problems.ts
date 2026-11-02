@@ -31,6 +31,32 @@ export const checkIdentifier = (problems: ProblemSink, object: string, name: str
 }
 
 /** Build a definition, adding any failure its rendering recorded to its `problems`. */
+/**
+ * Two columns of one table with the same SQL name. `ignoreCase` where the
+ * database compares names without case (SQLite), so `Id` and `id` collide.
+ */
+export const checkDistinctNames = (
+	problems: ProblemSink,
+	table: string,
+	columns: ReadonlyArray<readonly [key: string, sqlName: string]>,
+	options: { readonly ignoreCase: boolean },
+): void => {
+	const seen = new Map<string, string>()
+	for (const [key, sqlName] of columns) {
+		const folded = options.ignoreCase ? sqlName.toLowerCase() : sqlName
+		const other = seen.get(folded)
+		if (other !== undefined) {
+			problems.push({ object: `${table}.${key}`, message: `${sqlName} has the same SQL name as ${other}${options.ignoreCase ? " (names compare without case)" : ""}` })
+		} else seen.set(folded, key)
+	}
+}
+
+/** A key (primary key, index) that lists a column more than once. */
+export const checkNoRepeats = (problems: ProblemSink, object: string, keys: ReadonlyArray<string>): void => {
+	const repeats = keys.filter((key, i) => keys.indexOf(key) !== i)
+	if (repeats.length > 0) problems.push({ object, message: `${[...new Set(repeats)].join(", ")} is listed more than once` })
+}
+
 export const withRenderProblems = <O extends { readonly problems: ReadonlyArray<DefinitionProblem> }>(object: string, build: () => O): O => {
 	const { value, failures } = collectFailures(build)
 	return failures.length === 0
