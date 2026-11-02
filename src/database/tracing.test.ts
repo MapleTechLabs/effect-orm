@@ -35,7 +35,7 @@ const traced = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
 	})
 
 const dbSpan = (recorded: ReadonlyArray<Tracer.NativeSpan>) => {
-	const span = recorded.find((s) => s.attributes.has("db.system.name") && s.name !== "sql.execute")
+	const span = recorded.find((s) => s.attributes.has("db.system.name") && !s.attributes.has("effect.sql.method"))
 	assert(span !== undefined, `no statement span among ${recorded.map((s) => s.name).join(", ")}`)
 	return span
 }
@@ -62,7 +62,7 @@ layer(Live)("Database statement spans", (it) => {
 				"db.response.returned_rows": 0,
 			})
 			// Effect's own span runs inside it, carrying the query text.
-			const execute = spans.find((s) => s.name === "sql.execute")
+			const execute = spans.find((s) => s.attributes.has("effect.sql.method"))
 			assert(execute !== undefined)
 			expect(Option.getOrUndefined(execute.parent)).toBe(span)
 		}),
