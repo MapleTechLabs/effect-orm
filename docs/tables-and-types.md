@@ -268,6 +268,8 @@ the ones `Model.Class` uses:
 
 The JSON variants are `Schema.toCodecJson` of each row's type, so a `DateTime` is an ISO string
 and a branded column keeps its brand. An optional key also takes `undefined`, as in an insert row.
+`tableSchemas` is on every entry; on a SQLite table `select` and `insert` read SQLite's wire forms
+(`0`/`1` booleans, timestamp and JSON text), and the JSON variants read plain JSON.
 
 ```ts
 const { select, jsonCreate } = CH.tableSchemas(Requests)
