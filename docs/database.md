@@ -397,9 +397,18 @@ a lightweight delete with `lightweight_deletes_sync = 2`: both wait, so a `findB
 reads what they wrote. Mutations rewrite whole parts, so keep `updateVoid` for occasional
 corrections, as [Updating and deleting rows](./updates-and-deletes.md#clickhouse) says.
 `findById` reads without `FINAL`, so on a `ReplacingMergeTree` it can return an older version.
+A `ReplacingMergeTree` keeps one row per sorting key whatever its tenant, so put the tenant
+column in `ORDER BY`. Otherwise an `insertVoid` for one tenant with another tenant's id
+replaces that tenant's row when the parts merge.
 
-_(Backed by `src/database/repository.test.ts`, `src/database/repository.test-d.ts` and
-`tests/repository.clickhouse.test.ts`.)_
+### SQLite and D1
+
+Both have `RETURNING`, so every method works as on Postgres. A column SQLite fills in (an
+`INTEGER PRIMARY KEY` or a `DEFAULT`) goes in the table's `defaults`, so `insert` can leave it
+out.
+
+_(Backed by `src/database/repository.test.ts`, `src/database/repository.test-d.ts`,
+`src/database/repository.sqlite.test.ts` and `tests/repository.clickhouse.test.ts`.)_
 
 ## Writes
 
