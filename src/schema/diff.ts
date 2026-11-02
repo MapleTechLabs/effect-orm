@@ -33,11 +33,15 @@ export const Hint = Schema.Union([
 		/** `table`, `table.column`, or the enum's name. */
 		entity: Schema.String,
 	}),
-	/** A Postgres enum label renamed in place (`ALTER TYPE ... RENAME VALUE`): rows holding it now hold `to`. */
+	/**
+	 * A rename. `enum_value`: a Postgres enum label renamed in place (`ALTER
+	 * TYPE ... RENAME VALUE`), so rows holding it now hold `to`. `table` and
+	 * `column` (SQLite): `ALTER TABLE ... RENAME`, instead of a drop and a create.
+	 */
 	Schema.Struct({
 		type: Schema.Literal("confirm_rename"),
-		kind: Schema.Literal("enum_value"),
-		/** `<enum>.<old label>`. */
+		kind: Schema.Literals(["enum_value", "table", "column"]),
+		/** `<enum>.<old label>`, the old table name, or `<table>.<old column>` with the table's new name. */
 		entity: Schema.String,
 		to: Schema.String,
 	}),

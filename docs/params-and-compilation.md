@@ -239,7 +239,7 @@ CH.compileUnsafe(query, params, options?)  // CompiledQuery, throws
 | `options.rowSchema`   | Effect `Schema` used by `decodeRows` / `decodeFirstRow`              |
 | `options.skipFormat`  | Omit a trailing `FORMAT` clause (used internally for subqueries)     |
 | `options.deferParams` | Leave placeholders unresolved, for SQL spliced into an outer compile |
-| `options.dialect`     | Overrides `CurrentDialect` and the entry's dialect (`clickhouseDialect` from `/clickhouse`, `postgresDialect` from `/postgres`) |
+| `options.dialect`     | Overrides `CurrentDialect` and the entry's dialect (`clickhouseDialect` from `/clickhouse`, `postgresDialect` from `/postgres`, `sqliteDialect` from `/sqlite`) |
 
 Each dialect entry exports its own `compile`, defaulting to that dialect. Unions use
 `compileUnion(union, params)`.
