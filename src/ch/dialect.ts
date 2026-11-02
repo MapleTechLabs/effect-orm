@@ -259,6 +259,7 @@ const checkedSyntax = (dialect: Dialect): SqlSyntax => ({
 	dialect: dialect.name,
 	ilike: dialect.ilike,
 	likeEscape: dialect.likeEscape,
+	likeIgnoresCase: dialect.likeIgnoresCase,
 	inexactNumberText: dialect.inexactNumberText,
 	integerComparesFraction: dialect.integerComparesFraction,
 	quoteIdent: dialect.quoteIdent,

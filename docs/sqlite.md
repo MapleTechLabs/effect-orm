@@ -184,7 +184,10 @@ written as decimal text, because SQLite reads some decimals as a neighbouring do
 fraction compared with an `integer` column (`Amount > 9.75`) compiles as on Postgres. It refuses these unsupported forms at compile time:
 
 - `DISTINCT ON`, row locks and `ILIKE`. Use `LIKE`, which on SQLite ignores ASCII case
-  (`'acme' LIKE 'ACME'` is true, unlike Postgres and ClickHouse). A row lock is refused in the
+  (`'acme' LIKE 'ACME'` is true, unlike Postgres and ClickHouse). For text search,
+  `.contains()`, `.startsWith()` and `.endsWith()` match case as on the other dialects (they
+  write `GLOB`), and `{ insensitive: true }` compares `lower()` of both sides; see
+  [Text search](./expressions.md#text-search). A row lock is refused in the
   type as well: `SQLite.compile(q.forUpdate())` and `run` on a SQLite or D1 `Database` do not
   typecheck. Claim a row with a conditional `update(…).where(…).returning(…)` instead. A
   Postgres or ClickHouse function in a SQLite query, and a SQLite function in a Postgres or

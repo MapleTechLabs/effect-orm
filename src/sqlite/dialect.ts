@@ -35,6 +35,7 @@ export const sqliteDialect: Dialect<"sqlite"> = {
 	functions: "sqlite",
 	ilike: false,
 	likeEscape: true,
+	likeIgnoresCase: true,
 	inexactNumberText: true,
 	integerComparesFraction: true,
 	quoteIdent: (name) => `"${name.replace(/"/g, '""')}"`,

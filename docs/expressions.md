@@ -81,6 +81,37 @@ list is written as the constant it means, `1 = 0` for `in_()` and `1 = 1` for `n
 `.like(pattern)`, `.notLike(pattern)`, `.ilike(pattern)` are constrained by `this` to
 `Expr<string>`, so calling them on a numeric column is a type error.
 
+### Text search
+
+`.contains(value)`, `.startsWith(value)` and `.endsWith(value)` match text, not a pattern. `%`,
+`_` and `\` in the value match themselves: the helper escapes them with a backslash and adds the
+wildcards. Use them for a search box; use `.like()` only for a pattern you wrote.
+
+```ts
+.where(($) => [$.OrgId.eq("org_123"), $.Name.contains("50%_off", { insensitive: true })])
+// ClickHouse: … AND events.Name ILIKE '%50\\%\\_off%'
+// Postgres:   … AND "events"."Name" ILIKE $1                              -- $1 = '%50\%\_off%'
+// SQLite, D1: … AND lower("events"."Name") LIKE lower(?) ESCAPE '\'       -- ? = '%50\%\_off%'
+```
+
+- The value is a string, or a param or expression of one. A string is escaped before it is bound.
+  A param or expression is escaped in SQL (`replace(…)` three times), because its value is known
+  only when the query runs.
+- The backslash is the escape character on every dialect: ClickHouse and Postgres use it by
+  default, and SQLite gets `ESCAPE '\'`, as `.like()` does there.
+- Case-sensitive by default, also on SQLite and D1, whose `LIKE` ignores ASCII case. There the
+  helpers write `GLOB` instead (`"Name" GLOB ?` with `? = '*50%*'`), escaping GLOB's `*`, `?` and `[` the same
+  way.
+- `{ insensitive: true }` writes `ILIKE`, or on SQLite and D1 (which have no `ILIKE`) a `LIKE`
+  of `lower()` on both sides. Which characters fold is the database's choice. ClickHouse folds
+  UTF-8 (`'ÉCOLE' ILIKE 'é%'` is true). Postgres folds by the database's `LC_CTYPE`: a `C` locale
+  (PGlite's default) folds ASCII only. SQLite's `lower()` folds ASCII only (without the ICU
+  extension).
+- An empty value matches every non-NULL row. A NULL column never matches.
+- `escapeLike(text)` is the escape step on its own, for a pattern you build for `.like()`.
+
+_(Backed by `docs/expressions.md > Text search escapes LIKE wildcards`.)_
+
 ## Combining conditions
 
 ```ts
@@ -139,7 +170,7 @@ unbounded read. The [optional-filter recipe](./recipes.md#optional-filters-and-e
 an explicit choice.
 
 Escaping SQL strings does not escape LIKE wildcards. `%` and `_` in a `.like()` argument are
-patterns; use `.eq()` for exact text. Keep table names, aliases, and raw SQL under application
+patterns; use `.eq()` for exact text and [`.contains()`](#text-search) to search for it. Keep table names, aliases, and raw SQL under application
 control: value escaping is not an allowlist for identifiers.
 
 ## Arithmetic

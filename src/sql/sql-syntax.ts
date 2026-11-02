@@ -21,6 +21,12 @@ export interface SqlSyntax {
 	 */
 	readonly likeEscape?: boolean
 	/**
+	 * True when LIKE ignores (ASCII) case by default (SQLite), so a
+	 * case-sensitive text match cannot be a LIKE. `contains` and friends write
+	 * GLOB there instead.
+	 */
+	readonly likeIgnoresCase?: boolean
+	/**
 	 * True when the database parses some decimal literals to a neighbouring
 	 * double (SQLite), so a fraction must be bound rather than written as text.
 	 */

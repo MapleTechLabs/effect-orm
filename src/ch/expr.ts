@@ -313,6 +313,14 @@ export interface Expr<TSType, P = never> {
 	like<Q = never>(this: Expr<string | null>, pattern: string | Expr<string, Q>): Condition<P | Q>
 	notLike<Q = never>(this: Expr<string | null>, pattern: string | Expr<string, Q>): Condition<P | Q>
 	ilike<Q = never>(this: Expr<string | null>, pattern: string | Expr<string, Q>): Condition<P | Q>
+	/**
+	 * Text search. The value is text, not a pattern: `%`, `_` and `\` in it
+	 * match themselves. `{ insensitive: true }` ignores case (`ILIKE`). A value
+	 * is a string or a param or expression of one.
+	 */
+	contains<Q = never>(this: Expr<string | null>, value: string | Expr<string, Q>, options?: TextMatchOptions): Condition<P | Q>
+	startsWith<Q = never>(this: Expr<string | null>, value: string | Expr<string, Q>, options?: TextMatchOptions): Condition<P | Q>
+	endsWith<Q = never>(this: Expr<string | null>, value: string | Expr<string, Q>, options?: TextMatchOptions): Condition<P | Q>
 
 	// NULL and ranges
 	/** `expr IS NULL`. */
@@ -345,6 +353,12 @@ export interface Expr<TSType, P = never> {
 		n: R | Expr<R, Q>,
 	): Expr<number | Extract<TSType | R, null>, P | Q>
 	mod<R extends number | null, Q = never>(this: Expr<number | null>, n: R | Expr<R, Q>): Expr<Quotient<TSType, R>, P | Q>
+}
+
+/** Options of `contains`, `startsWith` and `endsWith`. */
+export interface TextMatchOptions {
+	/** Ignore case: `ILIKE` instead of `LIKE`. Which characters fold is the database's choice; see docs/expressions.md. */
+	readonly insensitive?: boolean | undefined
 }
 
 /**
@@ -594,6 +608,67 @@ const likePattern = (pattern: string | Expr<string, any>): string => {
 /** `ESCAPE '\'` where LIKE has no default escape, so `\%` means a literal `%` on every dialect. */
 const likeEscape = (): string => (activeSqlSyntax()?.likeEscape === true ? " ESCAPE '\\'" : "")
 
+/** The LIKE escape character of every text match. */
+const LIKE_ESCAPE = "\\"
+
+/**
+ * `value` with `%`, `_` and `\` escaped by a backslash, so a LIKE pattern
+ * built from it matches the text itself. Every dialect reads `\` as the LIKE
+ * escape: ClickHouse and Postgres by default, SQLite through the `ESCAPE '\'`
+ * that `like` writes there.
+ */
+export const escapeLike = (value: string): string => value.replace(/[\\%_]/g, (char) => `${LIKE_ESCAPE}${char}`)
+
+/** `value` with GLOB's `[`, `*` and `?` each in brackets, so a GLOB pattern built from it matches the text itself. */
+const escapeGlob = (value: string): string => value.replace(/[[*?]/g, (char) => `[${char}]`)
+
+type TextMatch = "contains" | "startsWith" | "endsWith"
+
+/** `value` escaped and wrapped in the wildcards of `match`, as SQL: LIKE's `%`, or GLOB's `*`. */
+const textPattern = (value: string | Expr<string, any>, match: TextMatch, glob: boolean): string => {
+	const any = glob ? "*" : "%"
+	const before = match === "contains" || match === "endsWith" ? any : ""
+	const after = match === "contains" || match === "startsWith" ? any : ""
+	if (typeof value === "string") return compile(boundString(`${before}${(glob ? escapeGlob : escapeLike)(value)}${after}`))
+	if (isExprLike(value)) {
+		// The value is only known at run time: escape it in SQL, the same
+		// characters, the escaping one (`\`, or GLOB's `[`) first.
+		const q = (text: string) => compile(str(text))
+		const replacements = glob
+			? ["[", "*", "?"].map((char) => [char, `[${char}]`] as const)
+			: [LIKE_ESCAPE, "%", "_"].map((char) => [char, LIKE_ESCAPE + char] as const)
+		let escaped = compile(value.toFragment())
+		for (const [char, replacement] of replacements) escaped = `replace(${escaped}, ${q(char)}, ${q(replacement)})`
+		return `(${[before && q(before), escaped, after && q(after)].filter(Boolean).join(" || ")})`
+	}
+	return fail(
+		new QueryBuilderError({
+			code: "InvalidLiteral",
+			message: `a ${match} value must be a string or a string expression, not ${describeUntyped(value)}`,
+		}),
+		"NULL",
+	)
+}
+
+/**
+ * A text match that means the same on every dialect: `LIKE`, or `ILIKE` when
+ * insensitive. Where LIKE ignores case and there is no ILIKE (SQLite, whose
+ * LIKE folds ASCII unless `PRAGMA case_sensitive_like` is on), a sensitive
+ * match is a `GLOB` and an insensitive one a LIKE of `lower()` on both sides.
+ */
+const textMatch = (fragment: SqlFragment, value: string | Expr<string, any>, match: TextMatch, options?: TextMatchOptions): Condition<any> =>
+	makeCond(
+		known(() => {
+			const insensitive = options?.insensitive === true
+			if (activeSqlSyntax()?.likeIgnoresCase !== true) {
+				return `${compile(fragment)} ${insensitive ? "ILIKE" : "LIKE"} ${textPattern(value, match, false)}${likeEscape()}`
+			}
+			return insensitive
+				? `lower(${compile(fragment)}) LIKE lower(${textPattern(value, match, false)})${likeEscape()}`
+				: `${compile(fragment)} GLOB ${textPattern(value, match, true)}`
+		}),
+	)
+
 const dateTimeLiteral = (value: DateTime.Utc): string =>
 	activeSqlSyntax()?.dateTimeLiteral(value) ?? compile(str(chDateTimeLiteral(value)))
 
@@ -743,6 +818,9 @@ export function makeExpr<T>(
 		ilike: (pattern) => makeCond(known(() => activeSqlSyntax()?.ilike === false
 			? fail(new QueryBuilderDefect({ message: `ILIKE is not supported by the ${activeSqlSyntax()?.dialect} dialect; use LIKE with SQLite's own case rules` }), "FALSE")
 			: `${compile(fragment)} ILIKE ${likePattern(pattern)}`)),
+		contains: (value, options) => textMatch(fragment, value, "contains", options),
+		startsWith: (value, options) => textMatch(fragment, value, "startsWith", options),
+		endsWith: (value, options) => textMatch(fragment, value, "endsWith", options),
 
 		in_: (...values) => inCond(fragment, "IN", values.map((v) => () => operand(v))),
 		notIn: (...values) => inCond(fragment, "NOT IN", values.map((v) => () => operand(v))),
