@@ -19,7 +19,7 @@ import type { MigrateSourceError, MigrateSqlError } from "./errors"
 import { LEDGER_TABLES, readApplied } from "./ledger"
 import { readPgApplied } from "./pg-ledger"
 import { verifyPg, type PgVerifyOptions } from "./pg-verify"
-import { dialectOf, type LoadedMigration } from "./source"
+import { dialectOf, refuseSqlite, type LoadedMigration } from "./source"
 
 export interface Drift {
 	readonly entity: string
@@ -116,6 +116,7 @@ export const verify = (
 	options: VerifyOptions = {},
 ): Effect.Effect<VerifyResult, MigrateSqlError | MigrateSourceError, MigrationDriver> =>
 	Effect.gen(function* () {
+		yield* refuseSqlite(migrations, options.dialect)
 		const postgres = (options.dialect ?? dialectOf(migrations)) === "postgres"
 		const appliedRows = yield* (postgres ? readPgApplied : readApplied).pipe(Effect.orElseSucceed(() => []))
 		const appliedNames = new Set(appliedRows.map((row) => row.name))
@@ -123,6 +124,7 @@ export const verify = (
 		const snapshot = against?.snapshot
 		if (against === undefined || snapshot === undefined) return { against: undefined, drift: [] }
 		if (snapshot.dialect === "postgres") return { against: against.name, drift: yield* verifyPg(snapshot, against.name, options) }
+		if (snapshot.dialect === "sqlite") return yield* refuseSqlite(migrations, "sqlite").pipe(Effect.as({ against: undefined, drift: [] }))
 		return { against: against.name, drift: yield* verifyClickHouse(snapshot) }
 	})
 

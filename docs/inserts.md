@@ -71,8 +71,10 @@ declare a default, so a forgotten value is a type error rather than a silent zer
 
 ### Client-side defaults
 
-A `PG.column` can take a default that the client computes: `defaultFn` and `onUpdate` are
-Effects, so they can read the `Clock`, `Random` or a service. They write no DDL.
+A `PG.column` or `SQLite.column` can take a default that the client computes: `defaultFn` and
+`onUpdate` are Effects, so they can read the `Clock`, `Random` or a service. They write no DDL,
+so neither the rendered schema nor a migration from `generate` carries them. ClickHouse columns
+do not take them yet.
 
 ```ts
 import { Context, DateTime, Effect } from "effect"
@@ -99,7 +101,7 @@ const add = Db.run(PG.insertInto(Notes).values({ body: "hello" }))
   `undefined`). A value the row gives, `null` included, is kept, and the Effect does not run.
 - `onUpdate` runs once for each update that does not set its column (see
   [Updating](./updates-and-deletes.md#set)). An insert that leaves the column out runs it too,
-  when the column has no `defaultFn`, `default`, `defaultExpr` or `identity`.
+  when the column has no `defaultFn`, `default`, `defaultExpr` or `identity` (Postgres).
 - What the Effects need is in the type of the write: the insert above requires `IdGen`, and
   `Db.run` passes the requirement on. `DateTime.now` needs only the `Clock`, which every Effect
   has, so it adds nothing. In a test, `TestClock` and a test `IdGen` layer give exact values.
@@ -108,10 +110,12 @@ const add = Db.run(PG.insertInto(Notes).values({ body: "hello" }))
 - `compile` does not run Effects. To compile such a write yourself, pass it through
   `fillDefaults` first: `Effect.flatMap(PG.fillDefaults(insert), (filled) => PG.compile(filled))`.
   `compile` refuses (`QueryBuilderDefect`) a write that still leaves out a client default.
-- An `INSERT ... SELECT` and `onConflictDoUpdate`'s SET get no client defaults; select or set
-  the column yourself.
+- An `INSERT ... SELECT` cannot run a client default, since no row exists before the SELECT
+  runs: `compile` refuses one that does not select every column with an insert client default.
+  `onConflictDoUpdate`'s SET gets none either; set the column there yourself.
 
-_(Backed by `src/database/client-defaults.test.ts` and `src/database/client-defaults.test-d.ts`.)_
+_(Backed by `src/database/client-defaults.test.ts`, `src/database/client-defaults.test-d.ts` and
+`src/sqlite/client-defaults.test.ts`.)_
 
 ## What it compiles to
 

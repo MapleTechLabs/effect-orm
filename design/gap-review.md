@@ -46,7 +46,7 @@ builder; **P1** commonly used; **P2** niche.
 - Writes: UPDATE ... FROM with a typed VALUES source; ClickHouse `ALTER TABLE ... UPDATE/DELETE`
   and lightweight DELETE; JSONEachRow bulk insert (`encodeInsertRows`); a set-all-from-`excluded`
   helper; ~~client-side default hooks like `$defaultFn` / `$onUpdate`~~ (built: `defaultFn` /
-  `onUpdate` on `PG.column`, as Effects).
+  `onUpdate` on `PG.column` and `SQLite.column`, as Effects).
 - Runtime: `runFirst` / `runSingle` / `stream`; `observe` with duration, rows and error; replica
   routing for `route()`; a `SET LOCAL` helper for RLS; a mock `Database` for users' tests.
 - Types: select, insert and update row types and Schemas per table.

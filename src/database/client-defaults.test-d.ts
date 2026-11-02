@@ -4,6 +4,7 @@
 import { Context, DateTime, Effect } from "effect"
 import { expectTypeOf } from "expect-type"
 import * as PG from "../postgres"
+import * as SQLite from "../sqlite"
 import * as Db from "../database"
 
 class IdGen extends Context.Service<IdGen, { readonly next: Effect.Effect<string> }>()("test/IdGen") {}
@@ -65,3 +66,22 @@ services(Db.run(auditedInsert)).toEqualTypeOf<Db.Database | Audit>()
 PG.column(PG.text, { defaultFn: Effect.succeed(1) })
 // @ts-expect-error -- a default that can fail has no place to send its error
 PG.column(PG.text, { defaultFn: Effect.fail("no id") })
+
+// SQLite columns take the same options, with the same requirements.
+const SqliteNotes = SQLite.table("notes", {
+	columns: {
+		id: SQLite.column(SQLite.text, { defaultFn: nextId }),
+		body: SQLite.text,
+		at: SQLite.column(SQLite.timestamp, { onUpdate: auditNow }),
+	},
+	primaryKey: ["id"],
+})
+expectTypeOf<SQLite.InsertRowOf<typeof SqliteNotes>>().toEqualTypeOf<{
+	readonly body: SQLite.InsertValue<typeof SQLite.text>
+	readonly id?: SQLite.InsertValue<typeof SQLite.text> | undefined
+	readonly at?: SQLite.InsertValue<typeof SQLite.timestamp> | undefined
+}>()
+services(Db.run(SQLite.insertInto(SqliteNotes).values({ body: "a" }))).toEqualTypeOf<Db.Database | IdGen | Audit>()
+services(Db.run(SQLite.update(SqliteNotes).set({ body: "b" }).allRows())).toEqualTypeOf<Db.Database | Audit>()
+// @ts-expect-error -- a number is not a text value
+SQLite.column(SQLite.text, { defaultFn: Effect.succeed(1) })

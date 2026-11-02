@@ -1,10 +1,11 @@
 // Client-side defaults
 //
-// A Postgres column's `defaultFn` and `onUpdate` are Effects. `fillDefaults`
-// runs them into an insert's rows or an update's SET, so the write that
-// `compile` sees already has every value. `Database.run` calls it first; a
-// write compiled without it, that still lacks a client default, is a defect.
-// Running here, and not in `compile`, keeps `compile` free of requirements.
+// A Postgres or SQLite column's `defaultFn` and `onUpdate` are Effects.
+// `fillDefaults` runs them into an insert's rows or an update's SET, so the
+// write that `compile` sees already has every value. `Database.run` calls it
+// first; a write compiled without it, that still lacks a client default, is a
+// defect. Running here, and not in `compile`, keeps `compile` free of
+// requirements.
 
 import { Effect } from "effect"
 import { isInsert, type AnyInsert, type CHInsert } from "./insert"
@@ -15,6 +16,30 @@ import { isUpdate, type CHUpdate } from "./update"
 export type RequirementsOf<W> = W extends { readonly _phantom?: { readonly requirements: infer R } } ? R : never
 
 type Row = Readonly<Record<string, unknown>>
+
+/** The column options a dialect's `column` keeps that decide its client defaults. */
+export interface ClientDefaultOptions {
+	readonly defaultFn?: Effect.Effect<unknown, never, any> | undefined
+	readonly onUpdate?: Effect.Effect<unknown, never, any> | undefined
+	/** Whether the database fills the column itself (`default`, `defaultExpr`, `identity`). */
+	readonly databaseDefault: boolean
+}
+
+/**
+ * The Effects behind `defaultFn` and `onUpdate`, or `undefined` when no column
+ * has one. An insert runs a column's `defaultFn`, or its `onUpdate` when the
+ * database has no default for it (Drizzle does the same).
+ */
+export const clientDefaultsOf = (columns: ReadonlyArray<readonly [string, ClientDefaultOptions]>): ClientDefaults | undefined => {
+	const insert: Record<string, Effect.Effect<unknown, never, any>> = {}
+	const update: Record<string, Effect.Effect<unknown, never, any>> = {}
+	for (const [column, { defaultFn, onUpdate, databaseDefault }] of columns) {
+		if (defaultFn !== undefined) insert[column] = defaultFn
+		else if (onUpdate !== undefined && !databaseDefault) insert[column] = onUpdate
+		if (onUpdate !== undefined) update[column] = onUpdate
+	}
+	return Object.keys(insert).length === 0 && Object.keys(update).length === 0 ? undefined : { insert, update }
+}
 
 /** The values a row leaves out, each from its Effect, in table order. */
 const fillRow = (row: Row, defaults: ClientDefaults["insert"]): Effect.Effect<Row, never, any> => {

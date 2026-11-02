@@ -10,6 +10,7 @@ import * as SqlClient from "effect/sql/SqlClient"
 import * as PG from "../postgres"
 import { postgresDialect } from "../pg/dialect"
 import * as Db from "../database"
+import * as S from "../schema"
 
 class IdGen extends Context.Service<IdGen, { readonly next: Effect.Effect<string> }>()("test/IdGen") {}
 
@@ -167,6 +168,33 @@ layer(Live)("client-side defaults on PGlite", (it) => {
 				expect(yield* PG.fillDefaults(insert)).toBe(insert)
 				const update = yield* PG.fillDefaults(PG.update(Stamped).set({ id: "y" }).allRows())
 				expect((yield* PG.compile(update)).sql).toBe(`UPDATE "stamped" SET "id" = $1, "at" = $2`)
+			}),
+		)
+
+		it.effect("refuses an INSERT ... SELECT that does not select a client-defaulted column", () =>
+			Effect.gen(function* () {
+				const Notes = yield* freshNotes
+				const Drafts = PG.table("drafts", { columns: { id: PG.text, body: PG.text }, primaryKey: ["id"] })
+				const exit = yield* Effect.exit(PG.compile(PG.insertInto(Notes).select(PG.from(Drafts).select("id", "body"))))
+				assert(Exit.isFailure(exit) && Cause.hasDies(exit.cause))
+				expect(String((Cause.squash(exit.cause) as Error).message)).toContain("does not select createdAt, updatedAt")
+			}),
+		)
+
+		it.effect("writes no DEFAULT into the DDL for a client default", () =>
+			Effect.gen(function* () {
+				const Stamped = PG.table("stamped", {
+					columns: {
+						id: PG.column(PG.text, { defaultFn: nextId }),
+						at: PG.column(PG.timestamptz, { defaultExpr: "now()", onUpdate: DateTime.now }),
+						seen: PG.column(PG.timestamptz, { onUpdate: DateTime.now }),
+					},
+					primaryKey: ["id"],
+				})
+				const ddl = S.renderPgSchema(yield* S.pgEntitiesOf([Stamped])).join("\n")
+				expect(ddl).toContain(`"id" text NOT NULL`)
+				expect(ddl).toContain(`"seen" timestamp with time zone NOT NULL`)
+				expect(ddl.match(/DEFAULT/g)).toEqual(["DEFAULT"])
 			}),
 		)
 	})
