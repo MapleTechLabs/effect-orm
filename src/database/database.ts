@@ -383,10 +383,12 @@ export const fromSqlClient = (sql: SqlClient.SqlClient, options: FromSqlClientOp
 				decode(row).pipe(
 					Effect.mapError(
 						(cause) =>
-							new CompiledQueryDecodeError({
-								message: `Compiled query row ${rowIndex} did not match its declared output schema`,
+							decodeErrorFromCause({
+								prefix: `Compiled query row ${rowIndex} did not match its declared output schema`,
 								rowIndex,
 								cause,
+								dialect: dialect.name,
+								collection: compiled.collection,
 							}),
 					),
 				),
