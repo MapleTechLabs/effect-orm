@@ -47,6 +47,7 @@ Everything in this section is exported, identically, from `/clickhouse`, `/postg
 | `unionAll`  | `(...queries) => CHUnionQuery`            |
 | `update`     | `(table) => CHUpdateStart`, then `CHUpdate`: `.set(record \| fn)`, `.where(fn)` or `.allRows()`, `.returning(...)`, `.settings(record)`. See [Updating and deleting](./updates-and-deletes.md) |
 | `deleteFrom` | `(table) => CHDelete`: `.where(fn)` or `.allRows()`, `.returning(...)`, `.settings(record)` |
+| `tableSchemas` | `(table) => TableSchemas`: the `select`, `insert`, `update`, `json`, `jsonCreate` and `jsonUpdate` row Schemas. See [Row Schemas](./tables-and-types.md#row-schemas) |
 | `insertInto` | `(table) => CHInsertStart`, then `CHInsert`; `.values(row \| rows)` or `.select(query)` sets its rows, `.settings(record)` ClickHouse `SETTINGS`, `.returning(...)` the RETURNING list, `.onConflictDoNothing(options?)` / `.onConflictDoUpdate(options)` the ON CONFLICT clause (Postgres and SQLite). See [Inserting rows](./inserts.md) |
 
 Tables come from the dialect's `table`: [`CH.table`](#tables-and-ddl) or
@@ -216,7 +217,8 @@ decoded type of a column), `InferEncoded` (its wire type), `ColumnDefs`, `Nullab
 `OutputToColumnDefs`.
 
 **Inference** — `InferOutput`, `InferQueryOutput`, `InferUnionOutput`, `SelectRowOf`,
-`InsertRow`, `InsertRowOf`, `UpdateSet`, `UpdateSetOf`.
+`InsertRow`, `InsertRowOf`, `UpdateSet`, `UpdateSetOf`, `TableSchemas` (what `tableSchemas`
+returns for a table).
 
 **What `compile` checks** — `NeedsSelect<Output>` (the query has a SELECT list),
 `ParamsSatisfied<Params, Given>` (the params object fills every required param),

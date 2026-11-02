@@ -17,6 +17,7 @@ export {
 
 // Tables, as the query builder sees them. Define one with the dialect's `table`.
 export { type SelectRowOf, type Table } from "./ch/table"
+export { type TableSchemas, tableSchemas } from "./ch/table-schemas"
 
 // Core expression primitives
 export {
