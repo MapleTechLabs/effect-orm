@@ -49,7 +49,7 @@ Roughly in reading order.
 | ----------------------------------------------------- | ----------------------------------------------------------------------------------- |
 | [Getting started](./getting-started.md)               | Install, define a table, build → compile → decode                                   |
 | [Tables and column types](./tables-and-types.md)      | `table()`, column options, external tables, the column-type constructors            |
-| [Building queries](./queries.md)                      | `select`, `where`, `groupBy`, `orderBy`, `limit`, `format`, immutability            |
+| [Building queries](./queries.md)                      | `select`, `where`, `groupBy`, `orderBy`, `limit`, `format`, immutability, `pipe`    |
 | [Expressions and conditions](./expressions.md)        | Comparisons, arithmetic, optional predicates, aggregates                            |
 | [Joins and subqueries](./joins-and-subqueries.md)     | The join family, `fromQuery`, correlated subqueries                                 |
 | [Unions and CTEs](./unions-and-ctes.md)               | `unionAll`, `fromUnion`, `withCTE`                                                  |

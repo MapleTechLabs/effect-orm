@@ -61,6 +61,7 @@ const exemptions = {
 	"query:forNoKeyUpdate": "Postgres row lock; ClickHouse refuses it at compile (core case `locking`), so there is no live ClickHouse run.",
 	"query:forShare": "Postgres row lock; ClickHouse refuses it at compile (core case `locking`), so there is no live ClickHouse run.",
 	"query:forKeyShare": "Postgres row lock; ClickHouse refuses it at compile (core case `locking`), so there is no live ClickHouse run.",
+	"query:pipe": "Dialect-neutral: it only calls the functions it is given. Live on every dialect in core case `pipe-data-last`.",
 }
 
 export const dialectInventory = [

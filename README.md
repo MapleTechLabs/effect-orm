@@ -200,7 +200,7 @@ Full guides live in [`docs/`](./docs/README.md):
 | ---------------------------------------------------------- | --------------------------------------------------------------- |
 | [Getting started](./docs/getting-started.md)               | Install, define a table, build → compile → decode               |
 | [Tables and column types](./docs/tables-and-types.md)      | `table()`, column options, external tables, column types        |
-| [Building queries](./docs/queries.md)                      | `select`, `where`, `groupBy`, `orderBy`, `limit`, immutability  |
+| [Building queries](./docs/queries.md)                      | `select`, `where`, `groupBy`, `orderBy`, `limit`, immutability, `pipe` |
 | [Expressions and conditions](./docs/expressions.md)        | Comparisons, arithmetic, optional predicates, aggregates        |
 | [Joins and subqueries](./docs/joins-and-subqueries.md)     | The join family, `fromQuery`, correlated subqueries             |
 | [Unions and CTEs](./docs/unions-and-ctes.md)               | `unionAll`, `fromUnion`, `withCTE`                              |

@@ -29,6 +29,7 @@ import type { Table } from "./table"
 import type { AllFacts, ClauseEntry, Expr, Condition, ColumnRef, ParamsIn, SourceEntry, Widen } from "./expr"
 import { makeColumnRef } from "./expr"
 import type { TenantScope } from "./compile"
+import { type Pipeable, pipeArguments } from "effect/Pipeable"
 
 // Type utilities
 
@@ -76,10 +77,10 @@ export type JoinedColumnAccessor<
 export type BindSources<P, Sources extends string> = Exclude<P, SourceEntry<Sources>>
 
 /** The sources a query provides: its FROM source and its join aliases. */
-type OwnSources<Source extends string, Joins> = Source | (keyof Joins & string)
+export type OwnSources<Source extends string, Joins> = Source | (keyof Joins & string)
 
 /** A query's entries after a join under `Alias`: the join provides `Alias`, also to refs used before it. */
-type JoinParams<Params, OnParams, Source extends string, Joins, Alias extends string> =
+export type JoinParams<Params, OnParams, Source extends string, Joins, Alias extends string> =
 	| BindSources<Params, Alias>
 	| BindSources<OnParams, OwnSources<Source, Joins> | Alias>
 
@@ -103,7 +104,7 @@ export type NarrowJoins<Joins extends Record<string, ColumnDefs>, F> = {} extend
 			}
 		}
 
-type SelectRecord = Record<string, Expr<any>>
+export type SelectRecord = Record<string, Expr<any>>
 
 /**
  * Read each selected expression's output type off its `_phantom` property
@@ -293,7 +294,7 @@ export interface CHQuery<
 	 * one, which takes a query of any source.
 	 */
 	Source extends string = never,
-> {
+> extends Pipeable {
 	/** @internal — runtime query state */
 	readonly _state: CHQueryState
 	/** phantom */
@@ -660,6 +661,10 @@ function makeQuery<
 >(state: CHQueryState): CHQuery<Cols, Output, Joins, Route, any, any> {
 	return {
 		_state: state,
+
+		pipe() {
+			return pipeArguments(this, arguments)
+		},
 
 		select(...args: any[]): any {
 			const selected = { ...state, selectWhereFn: state.whereFn }

@@ -517,6 +517,26 @@ SELECT
 }
 `;
 
+exports[`core SQL (clickhouse) > pipe-data-last 1`] = `
+{
+  "parameters": [],
+  "sql": "WITH orders AS (
+<orders fixture>
+),
+customers AS (
+<customers fixture>
+)
+SELECT
+          orders.Id AS id,
+          c.Tier AS tier
+        FROM orders
+        INNER JOIN customers AS c ON (orders.Customer = c.Name AND orders.OrgId = c.OrgId)
+        WHERE orders.OrgId = 'org_1'
+        ORDER BY id ASC
+        LIMIT 2",
+}
+`;
+
 exports[`core SQL (clickhouse) > route-and-cross-tenant 1`] = `
 {
   "parameters": [],
@@ -1219,6 +1239,28 @@ SELECT
           AND "orders"."Id" NOT IN (?)
           AND NOT ("orders"."Id" = ?)
         ORDER BY "id" ASC",
+}
+`;
+
+exports[`core SQL (d1) > pipe-data-last 1`] = `
+{
+  "parameters": [
+    "org_1",
+  ],
+  "sql": "WITH "orders" AS (
+<orders fixture>
+),
+"customers" AS (
+<customers fixture>
+)
+SELECT
+          "orders"."Id" AS "id",
+          "c"."Tier" AS "tier"
+        FROM "orders"
+        INNER JOIN "customers" AS "c" ON ("orders"."Customer" = "c"."Name" AND "orders"."OrgId" = "c"."OrgId")
+        WHERE "orders"."OrgId" = ?
+        ORDER BY "id" ASC
+        LIMIT 2",
 }
 `;
 
@@ -1975,6 +2017,28 @@ SELECT
 }
 `;
 
+exports[`core SQL (postgres) > pipe-data-last 1`] = `
+{
+  "parameters": [
+    "org_1",
+  ],
+  "sql": "WITH "orders" AS (
+<orders fixture>
+),
+"customers" AS (
+<customers fixture>
+)
+SELECT
+          "orders"."Id" AS "id",
+          "c"."Tier" AS "tier"
+        FROM "orders"
+        INNER JOIN "customers" AS "c" ON ("orders"."Customer" = "c"."Name" AND "orders"."OrgId" = "c"."OrgId")
+        WHERE "orders"."OrgId" = $1
+        ORDER BY "id" ASC
+        LIMIT 2",
+}
+`;
+
 exports[`core SQL (postgres) > route-and-cross-tenant 1`] = `
 {
   "parameters": [],
@@ -2666,6 +2730,28 @@ SELECT
           AND "orders"."Id" NOT IN (?)
           AND NOT ("orders"."Id" = ?)
         ORDER BY "id" ASC",
+}
+`;
+
+exports[`core SQL (sqlite) > pipe-data-last 1`] = `
+{
+  "parameters": [
+    "org_1",
+  ],
+  "sql": "WITH "orders" AS (
+<orders fixture>
+),
+"customers" AS (
+<customers fixture>
+)
+SELECT
+          "orders"."Id" AS "id",
+          "c"."Tier" AS "tier"
+        FROM "orders"
+        INNER JOIN "customers" AS "c" ON ("orders"."Customer" = "c"."Name" AND "orders"."OrgId" = "c"."OrgId")
+        WHERE "orders"."OrgId" = ?
+        ORDER BY "id" ASC
+        LIMIT 2",
 }
 `;
 
