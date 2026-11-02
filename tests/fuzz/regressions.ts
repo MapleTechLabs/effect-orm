@@ -79,6 +79,16 @@ export const pinned: Record<string, ReadonlyArray<unknown>> = {
 			customers: [],
 		},
 		plan: rows({ k: "rows", select: [["id", { k: "col", col: "Id" }]], distinct: true, orderBy: [["id", "asc"]], offset: 1 }),
+	}, {
+		// An empty ClickHouse source must not fold `Id % Id` over constant placeholder columns.
+		fixture: { orders: [], customers: [] },
+		plan: {
+			orgId: "org_1", join: undefined, where: [], wrap: false, crossTenant: false,
+			shape: {
+				k: "agg", keys: [["k0", { k: "col", col: "Status" }]], aggs: [["a0", { k: "count" }]], orderBy: [],
+				having: [{ agg: { k: "sum", e: { k: "arith", op: "mod", l: { k: "col", col: "Id" }, r: { k: "col", col: "Id" } } }, op: "eq", v: 0 }],
+			},
+		},
 	}],
 
 	// Literals.
