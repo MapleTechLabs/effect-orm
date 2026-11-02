@@ -1725,6 +1725,7 @@ const onConflictClause = (
 	insert: CHInsert<any, any, any, any>,
 	cell: (column: string, value: unknown, context: string) => string,
 	wrote: (column: string, value: unknown, sql: string) => void,
+	checked: (predicates: ReadonlyArray<TenantPredicate>) => void,
 ): string => {
 	const { table, conflict } = insert._state
 	if (conflict === undefined) return ""
@@ -1763,11 +1764,12 @@ const onConflictClause = (
 	}
 	if (conflict.action === "nothing") return `\nON CONFLICT${target} DO NOTHING`
 
-	const existing = createQualifiedColumnAccessor(table.name, undefined, table.columns)
-	const excluded = createQualifiedColumnAccessor("excluded", undefined, table.columns)
+	const existing = createQualifiedColumnAccessor(table.name, table.tenantColumn, table.columns)
+	const excluded = createQualifiedColumnAccessor("excluded", table.tenantColumn, table.columns)
 	const set = typeof conflict.set === "function" ? conflict.set(existing, excluded) : conflict.set
 	const assignments = setAssignments(table, set as Record<string, unknown>, cell, wrote, where, "onConflictDoUpdate")
 	const condition = conflict.where?.(existing, excluded)
+	checked(condition === undefined ? [] : tenantPredicatesOf(condition))
 	return `\nON CONFLICT${target} DO UPDATE SET ${assignments.join(", ")}${
 		condition === undefined ? "" : ` WHERE ${compileSqlFragment(condition.toFragment())}`
 	}`
@@ -1976,9 +1978,8 @@ function compileInsert(insert: CHInsert<any, any, any, any>, params: Record<stri
 	const dialect = currentDialect()
 	const { values, cell } = valueCells(table, params, where)
 
-	// A tenant table's insert is single-tenant when every row it writes (and an
-	// upsert's SET, if it writes the column) pins the tenant column to the same
-	// value or param. Any other expression, a NULL or a default could be anything.
+	// Every inserted row and any SET of its tenant must pin the same value.
+	// An upsert must also prove the tenant of the existing conflict row below.
 	const tenant = table.tenantColumn
 	const bounds = new Set<string>()
 	let pinned = tenant !== undefined
@@ -1990,6 +1991,7 @@ function compileInsert(insert: CHInsert<any, any, any, any>, params: Record<stri
 
 	const reads: Array<TenantSource> = []
 	let readBound: string | undefined
+	let conflictPredicates: ReadonlyArray<TenantPredicate> = []
 	const [columns, source, conflictSql, readScope] = withSubqueryCompiler(
 		recordingSubqueries(values, reads),
 		() => {
@@ -2034,9 +2036,10 @@ function compileInsert(insert: CHInsert<any, any, any, any>, params: Record<stri
 					else bounds.add(bound)
 				}
 			}
-			const conflictSql = onConflictClause(insert, cell, (column, value, sql) => {
-				if (column === tenant) pin(value, sql)
-			})
+			const conflictSql = onConflictClause(insert, cell,
+				(column, value, sql) => { if (column === tenant) pin(value, sql) },
+				(predicates) => { conflictPredicates = predicates },
+			)
 			return [columns, source, conflictSql, readScope] as const
 		},
 	)
@@ -2047,12 +2050,28 @@ function compileInsert(insert: CHInsert<any, any, any, any>, params: Record<stri
 		values,
 		dialect,
 	)
-	const tenantScope: TenantScope =
+	let tenantScope: TenantScope =
 		tenant === undefined
 			? (readScope ?? "untenanted")
 			: pinned && bounds.size === 1
 				? "single-tenant"
 				: "cross-tenant"
+	const conflict = insert._state.conflict
+	if (tenant !== undefined && tenantScope === "single-tenant" && conflict?.action === "update") {
+		const bound = [...bounds][0]!
+		const existingColumn = `${table.name}.${tenant}`
+		const excludedColumn = `excluded.${tenant}`
+		// A column target containing the tenant can only conflict on that same
+		// tenant. A constraint name alone says nothing about its columns.
+		const targetPins = conflict.target !== undefined && !("constraint" in conflict.target) && conflict.target.includes(tenant)
+		const updateScope = deriveTenantScope([
+			{ column: existingColumn, scope: "cross-tenant", bound: targetPins ? bound : undefined },
+			{ column: excludedColumn, scope: "single-tenant", bound },
+		], [{ predicates: conflictPredicates }], (value) => inlineParams(compileSqlFragment(value), values))
+		// SQLite resolves identifiers without case; a table named excluded can
+		// make the apparent existing/excluded equality a tautology.
+		if (table.name.split(".").at(-1)?.toLowerCase() === "excluded" || updateScope.scope !== "single-tenant" || updateScope.bound !== bound) tenantScope = "cross-tenant"
+	}
 	const own = withReads(
 		{
 			scope: tenantScope,

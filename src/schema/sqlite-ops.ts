@@ -9,6 +9,7 @@
 // indexes again (dropping the table dropped them).
 
 import { Schema } from "effect"
+import { sqliteDialect } from "../sqlite/dialect"
 import { SqliteColumnEntity, SqliteIndexEntity, SqliteTableEntity, SqliteUniqueEntity } from "./sqlite-entities"
 import { renderSqliteColumnDefinition, renderSqliteCreateIndex, renderSqliteCreateTable, sqliteIdent } from "./sqlite-render"
 
@@ -67,6 +68,24 @@ const copied = (column: SqliteColumnEntity | undefined, name: string): string =>
 		? `COALESCE(${sqliteIdent(name)}, ${column.default})`
 		: sqliteIdent(name)
 
+/**
+ * An offline schema cannot see foreign keys created by another tool. Check
+ * the live catalog before the rebuild can drop their parent. NOT NULL still
+ * applies with ignore_check_constraints enabled, unlike a CHECK assertion.
+ * No IF NOT EXISTS: a name collision must fail without touching that table.
+ */
+const rebuildGuard = (table: string): ReadonlyArray<string> => {
+	const guard = sqliteIdent(`__effect_orm_rebuild_guard_${table}`)
+	const column = sqliteIdent("foreign_key_references_prevent_rebuild")
+	return [
+		`CREATE TABLE ${guard} (${column} integer NOT NULL)`,
+		// Every FK declaration contains REFERENCES. Besides saving catalog work,
+		// this avoids inspecting D1's protected, FK-free _cf_METADATA table.
+		`INSERT INTO ${guard} (${column}) SELECT NULL FROM sqlite_schema AS s, pragma_foreign_key_list(s.name) AS fk WHERE s.type = 'table' AND instr(upper(s.sql), 'REFERENCES') > 0 AND fk."table" = ${sqliteDialect.quoteString(table)} COLLATE NOCASE LIMIT 1`,
+		`DROP TABLE ${guard}`,
+	]
+}
+
 /** The statements one op runs, in order. */
 export const renderSqliteOp = (op: SqliteMigrationOp): ReadonlyArray<string> => {
 	switch (op.op) {
@@ -89,6 +108,7 @@ export const renderSqliteOp = (op: SqliteMigrationOp): ReadonlyArray<string> => 
 			const temporary = rebuildName(op.table.name)
 			const created = renderSqliteCreateTable({ ...op.table, name: temporary }, op.columns.map((c) => ({ ...c, table: temporary })), op.uniques, { ifNotExists: false })
 			return [
+				...rebuildGuard(op.table.name),
 				"PRAGMA foreign_keys=OFF",
 				created,
 				// With no column in common the rows still carry over, every column taking its default:

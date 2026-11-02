@@ -124,6 +124,9 @@ it.each(rebuilds)("rebuilds the table for %s, keeps its rows and recreates its i
 	const second = await generateFrom(v2, { hints })
 	expect(second.plan.map((p) => p.label)).toEqual(["rebuild", "metadata"])
 	expect(second.plan[0]!.sql).toEqual([
+		expect.stringMatching(/^CREATE TABLE "__effect_orm_rebuild_guard_links"/),
+		expect.stringContaining("pragma_foreign_key_list"),
+		'DROP TABLE "__effect_orm_rebuild_guard_links"',
 		"PRAGMA foreign_keys=OFF",
 		expect.stringMatching(/^CREATE TABLE "__new_links" \(/),
 		// A NOT NULL column with a default copies through COALESCE, so old NULLs take the default.
@@ -186,7 +189,7 @@ it("asks to confirm a column a rebuild leaves behind", async () => {
 		],
 	})
 	expect(second.plan.map((p) => p.label)).toEqual(["rebuild"])
-	expect(second.plan[0]!.sql[2]).toBe('INSERT INTO "__new_links"("id", "url") SELECT "id", "url" FROM "links"')
+	expect(second.plan[0]!.sql).toContain('INSERT INTO "__new_links"("id", "url") SELECT "id", "url" FROM "links"')
 	await expectMigratedToEqualFresh(v2)
 })
 
