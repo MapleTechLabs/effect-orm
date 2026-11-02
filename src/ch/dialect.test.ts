@@ -5,6 +5,7 @@ import { compileCHUnsafe, compileUnionUnsafe } from "./compile"
 import type { Dialect } from "./dialect"
 import * as CH from "./index"
 import * as PG from "../postgres"
+import * as SQLite from "../sqlite"
 
 const numbered: Dialect = {
 	...CH.clickhouseDialect,
@@ -249,6 +250,23 @@ describe("dialect from Effect context", () => {
 			const inContext = yield* PG.compile(query).pipe(Effect.provideService(PG.CurrentDialect, standard))
 			expect(inContext.sql).toContain("email = 'a@x'")
 			expect(PG.compileUnsafe(query).sql).toContain(`"email" = $1`)
+		}),
+	)
+
+	it.effect("the /sqlite compile defaults to SQLite, and reads CurrentDialect (D1's binding limit)", () =>
+		Effect.gen(function* () {
+			const users = SQLite.table("users", { email: SQLite.text })
+			const query = SQLite.from(users).select("email").where(($) => [$.email.eq("a@x")])
+			expect((yield* SQLite.compile(query)).sql).toContain(`"email" = ?`)
+			const inContext = yield* SQLite.compile(query).pipe(Effect.provideService(SQLite.CurrentDialect, standard))
+			expect(inContext.sql).toContain("email = 'a@x'")
+			const union = yield* SQLite.compileUnion(SQLite.unionAll(query, query)).pipe(Effect.provideService(SQLite.CurrentDialect, standard))
+			expect(union.sql).toContain("email = 'a@x'")
+			// D1 from context: more than 100 bindings is refused before dispatch.
+			const wide = SQLite.from(users).select("email").where(($) => [$.email.in_(...Array.from({ length: 101 }, (_, index) => `u${index}`))])
+			expect((yield* SQLite.compile(wide)).parameters).toHaveLength(101)
+			const refused = yield* SQLite.compile(wide).pipe(Effect.provideService(SQLite.CurrentDialect, SQLite.d1Dialect), Effect.flip)
+			expect(refused.message).toMatch(/100/)
 		}),
 	)
 

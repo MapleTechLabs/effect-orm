@@ -153,7 +153,8 @@ export const d1DatabaseLayer = (db: D1Client.D1ClientConfig["db"]) =>
 ```
 
 Use `d1Dialect` when compiling a query separately as well:
-`SQLite.compile(query, params, { dialect: SQLite.d1Dialect })`. A query compiled for `sqlite`
+`SQLite.compile(query, params, { dialect: SQLite.d1Dialect })`, or provide it once for an Effect
+with `Effect.provideService(SQLite.CurrentDialect, SQLite.d1Dialect)`. A query compiled for `sqlite`
 cannot later run on a database configured as `d1`; pass the builder to `Db.run` instead.
 
 D1 compilation refuses more than [100 bound parameters per statement](https://developers.cloudflare.com/d1/platform/limits/).

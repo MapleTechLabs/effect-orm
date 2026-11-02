@@ -538,8 +538,8 @@ conditions).
 ## SQLite and D1
 
 `@maple-dev/effect-orm/sqlite` exports the shared query builder and the four compile functions.
-`sqliteDialect` is the default; `d1Dialect` uses the same SQL with a 100-binding limit and no
-interactive transactions. See [SQLite and D1](./sqlite.md) for driver wiring and limits.
+`sqliteDialect` is the default; a `CurrentDialect` in context, or `options.dialect`, overrides it.
+`d1Dialect` uses the same SQL with a 100-binding limit and no interactive transactions. See [SQLite and D1](./sqlite.md) for driver wiring and limits.
 
 | Export | Purpose |
 | --- | --- |
