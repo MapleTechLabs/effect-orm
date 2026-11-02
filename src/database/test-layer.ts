@@ -27,7 +27,7 @@ export interface TestStatement {
 export type TestReply = ReadonlyArray<Record<string, unknown>> | SqlError
 
 export interface TestDatabaseOptions {
-	/** The dialect to compile for: `postgresDialect` or `clickhouseDialect`. */
+	/** The dialect to compile for: `postgresDialect`, `clickhouseDialect`, `sqliteDialect` or `d1Dialect`. */
 	readonly dialect: Dialect
 	/** The answer when no reply is queued. Default: no rows. */
 	readonly respond?: (statement: TestStatement) => TestReply
@@ -112,6 +112,7 @@ const makeTest = (
 		const client = yield* SqlClient.make({
 			acquirer: Effect.succeed(connection),
 			compiler,
+			driver: "effect-orm-test",
 			// `Database` names the system on its own span.
 			spanAttributes: [],
 		}).pipe(Effect.provide(Reactivity.layer))

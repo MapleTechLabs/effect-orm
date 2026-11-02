@@ -7,6 +7,7 @@ import { Cause, Effect, Exit } from "effect"
 import { SqlError, UniqueViolation } from "effect/sql/SqlError"
 import * as CH from "../ch/index"
 import * as PG from "../postgres"
+import * as SQLite from "../sqlite"
 import * as Db from "../database"
 
 const Accounts = PG.table("accounts", { columns: { id: PG.int4, org: PG.text, balance: PG.int8 }, primaryKey: ["id"] })
@@ -96,6 +97,42 @@ describe("layerTest", () => {
 			expect(error).toBeInstanceOf(Db.TransactionUnsupported)
 			expect(yield* test.statements).toEqual([])
 		}).pipe(Effect.provide(Db.layerTest({ dialect: CH.clickhouseDialect }))),
+	)
+
+	it.effect("on SQLite it compiles with ? placeholders and decodes SQLite's integer booleans", () =>
+		Effect.gen(function* () {
+			const test = yield* Db.TestDatabase
+			const Flags = SQLite.table("flags", { id: SQLite.integer, enabled: SQLite.boolean })
+			yield* test.reply([{ id: 1, enabled: 1 }])
+			const rows = yield* Db.transaction(
+				Db.run(SQLite.from(Flags).select().where(($) => [$.id.eq(SQLite.param.int("id"))]), { id: 1 }),
+			)
+			expect(rows).toEqual([{ id: 1, enabled: true }])
+			const sent = yield* test.statements
+			expect(sent.map((statement) => statement.sql.split(/\s/)[0])).toEqual(["BEGIN", "SELECT", "COMMIT"])
+			expect(sent[1]).toMatchObject({ parameters: [1] })
+			expect(sent[1]?.sql).toContain("= ?")
+		}).pipe(Effect.provide(Db.layerTest({ dialect: SQLite.sqliteDialect }))),
+	)
+	it.effect("on D1 a transaction fails with TransactionUnsupported and sends nothing", () =>
+		Effect.gen(function* () {
+			const test = yield* Db.TestDatabase
+			const error = yield* Effect.flip(Db.transaction(Db.execute(Db.sql`SELECT 1`)))
+			expect(error).toBeInstanceOf(Db.TransactionUnsupported)
+			expect(yield* test.statements).toEqual([])
+		}).pipe(Effect.provide(Db.layerTest({ dialect: SQLite.d1Dialect }))),
+	)
+	it.effect("afterCommit hooks run after COMMIT and never after ROLLBACK", () =>
+		Effect.gen(function* () {
+			const test = yield* Db.TestDatabase
+			const ran: Array<string> = []
+			const hook = (name: string) => Db.afterCommit(Effect.sync(() => ran.push(name)))
+			yield* Db.transaction(Effect.andThen(hook("committed"), Db.execute(Db.sql`UPDATE accounts SET balance = 1`)))
+			yield* Effect.flip(Db.transaction(Effect.andThen(hook("rolled back"), Effect.fail("refused" as const))))
+			expect(ran).toEqual(["committed"])
+			const sent = (yield* test.statements).map((statement) => statement.sql.split(/\s/)[0])
+			expect(sent).toEqual(["BEGIN", "UPDATE", "COMMIT", "BEGIN", "ROLLBACK"])
+		}).pipe(Effect.provide(Db.layerTest({ dialect: PG.postgresDialect }))),
 	)
 
 	it.effect("reset forgets the recorded statements and the queued replies", () =>

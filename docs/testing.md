@@ -192,12 +192,14 @@ export const result = await Effect.runPromise(
 Only the server is replaced. The layer is `fromSqlClient` over a fake `SqlClient`, so the rest
 runs as in production:
 
-- `run` compiles for the dialect you give. `statements` holds the SQL and `parameters` exactly
+- `run` compiles for the dialect you give (`postgresDialect`, `clickhouseDialect`, `sqliteDialect`
+  or `d1Dialect`). `statements` holds the SQL and `parameters` exactly
   as a server would get them.
 - Rows are decoded by the query's own row schema. A row that does not match fails with
   `CompiledQueryDecodeError`, as it would from a server.
 - `transaction` records `BEGIN`, `COMMIT`, `ROLLBACK` and savepoints in `statements`. They
-  take no reply. On `clickhouseDialect` it fails with `TransactionUnsupported`.
+  take no reply. `afterCommit` hooks run after the recorded `COMMIT`. On `clickhouseDialect` and
+  `d1Dialect` it fails with `TransactionUnsupported`.
 - `requireTenantScope: true` refuses an unscoped query, as on `fromSqlClient`.
 
 Each statement takes the next queued reply. With no reply queued, it gets `respond(statement)`
