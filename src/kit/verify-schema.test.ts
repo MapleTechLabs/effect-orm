@@ -10,6 +10,7 @@ import { Effect, Layer } from "effect"
 import * as SqlClient from "effect/sql/SqlClient"
 import { runCli, verifySchema, type KitConfig } from "../kit"
 import * as Migrate from "../migrate"
+import { makeSnapshot, ORIGIN_ID } from "../schema"
 
 const src = resolve(import.meta.dirname, "..")
 
@@ -73,6 +74,25 @@ describe("verifySchema", () => {
 				expect(drift.find((d) => d.problem === "type")).toMatchObject({ expected: "text", actual: "character varying(10)" })
 			}),
 		),
+	)
+
+	it.effect("refuses a SQLite config before building its driver, with no catalog reader to compare with", () =>
+		Effect.gen(function* () {
+			// A driver that would fail to build: the refusal must come first.
+			const config: KitConfig = { dialect: "sqlite", schema: "./schema.ts", out: "./migrations", driver: Layer.effectContext(Effect.die("built")) }
+			const error = yield* Effect.flip(verifySchema(config, dir))
+			expect(error).toMatchObject({ _tag: "@maple-dev/effect-orm/KitError", code: "unsupported" })
+			expect(error.message).toMatch(/SQLite or D1/)
+		}),
+	)
+
+	it.effect("verifySnapshot refuses a SQLite snapshot rather than comparing it as ClickHouse", () =>
+		Effect.gen(function* () {
+			const snapshot = yield* makeSnapshot([], [ORIGIN_ID], "sqlite")
+			const error = yield* Effect.flip(Migrate.verifySnapshot(snapshot).pipe(Effect.provide(Migrate.layerSqlClient()), Effect.provide(PgliteClient.layer({}))))
+			expect(error).toBeInstanceOf(Migrate.MigrateSourceError)
+			expect(error.message).toMatch(/SQLite databases cannot be verified/)
+		}),
 	)
 })
 

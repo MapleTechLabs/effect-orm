@@ -1,0 +1,19 @@
+// The drizzle-orm 1.0.0-rc.5 schema drizzle-kit 1.0.0-rc.5 `generate --name init` read to write this folder.
+import { sqliteTable, text, integer, real, blob, numeric, index, uniqueIndex, primaryKey } from "drizzle-orm/sqlite-core"
+import { sql } from "drizzle-orm"
+export const shortLink = sqliteTable("short_link", {
+  id: text("id").primaryKey().notNull(), code: text("code").notNull(), targetUrl: text("target_url").notNull(),
+  targetHash: text("target_hash").notNull(), orgId: text("org_id"), createdBy: text("created_by"),
+  subjectType: text("subject_type").notNull(), subjectId: text("subject_id").notNull(), purpose: text("purpose").notNull(),
+  prospectId: text("prospect_id"), clickCount: integer("click_count").notNull(),
+  firstAccessedAt: text("first_accessed_at"), lastAccessedAt: text("last_accessed_at"),
+  createdAt: text("created_at").notNull(), updatedAt: text("updated_at").notNull(),
+}, (t) => [uniqueIndex("short_link_code").on(t.code), index("short_link_org").on(t.orgId)])
+export const membership = sqliteTable("membership", {
+  orgId: text("org_id").notNull(), userId: text("user_id").notNull(),
+  role: text("role").notNull().default("member"), weight: real("weight").notNull().default(1.5),
+  active: integer("active", { mode: "boolean" }).notNull().default(true),
+  avatar: blob("avatar"), amount: numeric("amount"),
+  email: text("email").unique(),
+  createdAt: text("created_at").notNull().default(sql`(CURRENT_TIMESTAMP)`),
+}, (t) => [primaryKey({ columns: [t.orgId, t.userId] }), index("membership_user_role").on(t.userId, t.role)])
