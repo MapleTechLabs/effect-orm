@@ -103,7 +103,7 @@ type IsUnion<T, U = T> = [T] extends [never] ? false : T extends unknown ? ([U] 
 /** `P` with every entry made optional. */
 export type OptionalParams<P> = P extends ParamEntry<infer N, infer V>
 	? OptionalParamEntry<N, V>
-	: P extends DialectEntry | SourceEntry
+	: P extends DialectEntry | SourceEntry | ClauseEntry
 		? P
 		: never
 
@@ -156,39 +156,83 @@ export type ParamsIn<X> = 0 extends 1 & X
 	: X extends { readonly _params?: (entries: infer P) => void }
 		? 0 extends 1 & P
 			? never
-			: [P] extends [ParamEntry | DialectEntry | SourceEntry]
+			: [P] extends [ParamEntry | DialectEntry | SourceEntry | ClauseEntry]
 				? P
 				: never
 		: never
 
+/**
+ * A clause only the dialects whose function set is in `Sets` can write, carried
+ * beside a query's params: `forUpdate()` adds `ClauseEntry<"FOR UPDATE", "postgres">`,
+ * as ClickHouse, SQLite and D1 have no row locks. `DialectSatisfied` refuses it
+ * for another target, as the compile refuses it at run time.
+ */
+export interface ClauseEntry<Clause extends string = string, Sets extends string = string> {
+	readonly clause: Clause
+	readonly sets: Sets
+}
+
 /** The function sets the entries `P` need: `never` when they need none. */
 export type DialectsIn<P> = P extends DialectEntry<infer Set> ? Set : never
 
-type FunctionSetLabel<Set extends string> = Set extends "clickhouse" ? "ClickHouse" : Set extends "postgres" ? "Postgres" : Set
+/** The clauses of `P` a dialect of set `Target` cannot write. */
+type UnsupportedClauses<P, Target extends string> = P extends ClauseEntry<infer Clause, infer Sets>
+	? Target extends Sets
+		? never
+		: Clause
+	: never
+
+type FunctionSetLabel<Set extends string> = Set extends "clickhouse"
+	? "ClickHouse"
+	: Set extends "postgres"
+		? "Postgres"
+		: Set extends "sqlite"
+			? "SQLite"
+			: Set
 
 /**
  * `unknown` when the entries `P` can compile for a dialect whose function set
  * is `Target`; otherwise a property saying why. A `Target` of `string` is a
  * dialect that does not name its set, and is not checked. Functions of two sets
- * in one query are refused for every target: no dialect renders both.
+ * in one query are refused for every target: no dialect renders both. A clause
+ * the target cannot write (a row lock outside Postgres) is refused as well.
  */
 export type DialectSatisfied<P, Target extends string> =
 	IsUnion<DialectsIn<P>> extends true
 		? {
-				readonly mixedDialects: `this query uses both ${JoinLabels<DialectsIn<P>>} functions; no dialect can compile it`
+				readonly mixedDialects: `this query uses ${JoinLabels<DialectsIn<P>>} functions; no dialect can compile it`
 			}
 		: string extends Target
 			? unknown
 			: [DialectsIn<P>] extends [Target]
-				? unknown
+				? [UnsupportedClauses<P, Target>] extends [never]
+					? unknown
+					: {
+							readonly unsupportedClause: `${UnsupportedClauses<P, Target>} has no meaning for the ${Target} dialect`
+						}
 				: {
 						readonly wrongDialect: `this query uses ${FunctionSetLabel<DialectsIn<P>>} functions; it cannot compile for the ${Target} dialect`
 					}
 
-/** `"ClickHouse and Postgres"` for a two-set union, in a fixed order. */
-type JoinLabels<Sets extends string> = [Sets] extends ["clickhouse" | "postgres"]
-	? "ClickHouse and Postgres"
-	: FunctionSetLabel<Sets>
+/**
+ * `"both ClickHouse and Postgres"`, `"ClickHouse, Postgres and SQLite"`: the
+ * built-in sets of a union, in a fixed order. A custom set is named as it is.
+ */
+type JoinLabels<Sets extends string> = [Exclude<Sets, "clickhouse" | "postgres" | "sqlite">] extends [never]
+	? JoinWithAnd<
+			[
+				...("clickhouse" extends Sets ? ["ClickHouse"] : []),
+				...("postgres" extends Sets ? ["Postgres"] : []),
+				...("sqlite" extends Sets ? ["SQLite"] : []),
+			]
+		>
+	: `both ${FunctionSetLabel<Sets>}`
+
+type JoinWithAnd<Labels extends ReadonlyArray<string>> = Labels extends readonly [infer A extends string, infer B extends string]
+	? `both ${A} and ${B}`
+	: Labels extends readonly [infer A extends string, infer B extends string, infer C extends string]
+		? `${A}, ${B} and ${C}`
+		: Labels[number]
 
 /** The value a param needs: every entry's type for that name, intersected
  *  per entry (a `boolean` entry stays `boolean`, not `true & false`). */

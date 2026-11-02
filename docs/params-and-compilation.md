@@ -61,12 +61,13 @@ compiling, as below.
 
 ## Checked in the type
 
-The same channel carries two more facts, and `compile`, `compileUnion` and `run` check them
+The same channel carries three more facts, and `compile`, `compileUnion` and `run` check them
 before the query runs.
 
 **The dialect of a function.** A built-in function of one dialect marks its result:
-`CH.countIf` with `ClickHouseOnly`, `PG.countIf` with `PostgresOnly`. A query that uses one is
-a type error where it is compiled or run for the other dialect:
+`CH.countIf` with `ClickHouseOnly`, `PG.countIf` with `PostgresOnly`, `SQLite.count` with
+`SqliteOnly` (SQLite and D1 share the `"sqlite"` set). A query that uses one is a type error
+where it is compiled or run for another dialect:
 
 ```ts
 const slow = CH.from(Events).select(($) => ({ n: CH.countIf($.DurationMs.gt(500)) }))
@@ -80,10 +81,20 @@ The target is `options.dialect` when it is given, else the entry's dialect. A `D
 with `fromSqlClient(client, { dialect: postgresDialect })` is a `DatabaseApi<"postgres">`, and
 its `run` checks the same way. A dialect typed as a plain `Dialect` (a custom one, or the
 `Database` in context) is not checked against one set, but a query with functions of both
-dialects is refused everywhere (`mixedDialects`): no dialect can compile it. Portable functions
+dialects is refused everywhere (`mixedDialects`): no dialect can compile it. `/sqlite`'s
+`compile` checks against `"sqlite"`, and so does a `DatabaseApi<"sqlite">` from
+`fromSqlClient(client, { dialect: d1Dialect })`. Portable functions
 (`nullIf`, `/clickhouse`'s `lower`) and the shared operators add nothing. `CurrentDialect` is
 read at run time, so the type cannot see it: under a `CurrentDialect` of another dialect, pass
 `options.dialect` too. The compile-time `QueryBuilderDefect` stays, for a caller past the types.
+
+**A clause only some dialects write.** A row lock (`forUpdate`, `forNoKeyUpdate`, `forShare`,
+`forKeyShare`) adds a `RowLock` (`ClauseEntry<"FOR UPDATE", "postgres">`): only Postgres has row
+locks, so compiling or running the query for ClickHouse, SQLite or D1 is a type error
+(`unsupportedClause "FOR UPDATE has no meaning for the sqlite dialect"`). On SQLite and D1, claim a
+row with a conditional update instead (`update(…).set(…).where(($) => [$.status.eq("pending")]).returning(…)`),
+or keep the writer single (a Durable Object). As with functions, a dialect typed as a plain `Dialect`
+is not checked, and the compile still refuses the lock at run time.
 
 **The source of a column.** A column ref names its source: the FROM alias, else the table
 name, or the join alias. A query provides its own sources, so a column of a source it does not

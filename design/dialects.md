@@ -90,6 +90,8 @@ What we deliberately do not copy:
   result carries a `DialectEntry` beside its params, which `compile` and
   `DatabaseApi<Functions>.run` check against the target. The `Database` in context has no
   dialect in its type, so it checks only that a query does not mix two. A `CompiledQuery` does
-  not carry its dialect in the type yet.
+  not carry its dialect in the type yet. A clause only some dialects write rides the same
+  channel as a `ClauseEntry` (the row locks, `RowLock`, Postgres only). `format` and
+  `distinctOn` could use it too; they are refused only at compile time for now.
 - MySQL or SQLite would need `?` placeholders (`reuse: false` already exists) and their own
   types and functions; nothing in the core should need to change.

@@ -64,7 +64,7 @@ Tables come from the dialect's `table`: [`CH.table`](#tables-and-ddl) or
 | `limit(n)` / `offset(n)`                                | Rounded before emission                                               |
 | `format(fmt)`                                           | `"JSON"` \| `"JSONEachRow"`                                           |
 | `distinct()` / `distinctOn(...aliases)`                 | `SELECT DISTINCT` / `SELECT DISTINCT ON (…)`                          |
-| `forUpdate` / `forNoKeyUpdate` / `forShare` / `forKeyShare` | Postgres row locks; options `LockOptions` (`skipLocked`, `noWait`, `of`) |
+| `forUpdate` / `forNoKeyUpdate` / `forShare` / `forKeyShare` | Postgres row locks; options `LockOptions` (`skipLocked`, `noWait`, `of`). Refused in the type when compiled or run for another dialect |
 | `innerJoin` / `leftJoin` / `crossJoin`                  | `(table, alias, on?)`                                                 |
 | `innerJoinQuery` / `leftJoinQuery` / `crossJoinQuery`   | `(query, alias, on?)`                                                 |
 | `withCTE(name, query)` / `withCTE(name, sql, options?)` | Typed query derives scope; SQL form can declare `options.tenantScope` |
@@ -198,8 +198,9 @@ to `compile`.
 `OptionalParamEntry<Name, Value>` and `OptionalParams<P>` (the same for a param under `when` /
 `whenTrue`, or one whose name is a union, which the params object may leave out) and
 `ParamsIn<X>` (the params an expression or argument list carries). Beside the params, the same
-channel carries `DialectEntry<Set>` (a built-in function of one dialect: `ClickHouseOnly` or
-`PostgresOnly`; `DialectsIn<P>` reads the sets) and `SourceEntry<Name>` (a column of source
+channel carries `DialectEntry<Set>` (a built-in function of one dialect: `ClickHouseOnly`,
+`PostgresOnly` or `SqliteOnly`; `DialectsIn<P>` reads the sets), `ClauseEntry<Clause, Sets>` (a
+clause only some dialects write: `RowLock<Clause>` for the Postgres row locks) and `SourceEntry<Name>` (a column of source
 `Name`; `SourceOf<Name>` is the entry of a ref, `BindSources<P, Sources>` removes the ones a query
 provides). You rarely write them, but `tsc --declaration` names them when a package exports a
 query with a param or a `defineFn` helper, so they are public.

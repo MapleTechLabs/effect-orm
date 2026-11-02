@@ -30,6 +30,8 @@ export type SetEntry<Set extends FunctionSet | "portable"> = Set extends Functio
 export type ClickHouseOnly = DialectEntry<"clickhouse">
 /** What a Postgres function adds to its result's params: see `DialectEntry`. */
 export type PostgresOnly = DialectEntry<"postgres">
+/** What a SQLite function adds to its result's params: see `DialectEntry`. */
+export type SqliteOnly = DialectEntry<"sqlite">
 
 const setLabel: Record<FunctionSet, string> = {
 	sqlite: "a SQLite function (from @maple-dev/effect-orm/sqlite)",

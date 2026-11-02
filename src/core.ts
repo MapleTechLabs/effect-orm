@@ -90,6 +90,7 @@ export {
 	type InferOutput,
 	type InferQueryOutput,
 	type LockOptions,
+	type RowLock,
 	// What `compile` asks of a query, for a wrapper generic over its output.
 	type NeedsSelect,
 	from,
@@ -100,6 +101,7 @@ export {
 // declarations. Without them public, `tsc --declaration` fails with TS4023 /
 // TS2742 pointing into a hashed internal chunk.
 export {
+	type ClauseEntry,
 	type DialectEntry,
 	type DialectSatisfied,
 	type DialectsIn,
@@ -112,7 +114,7 @@ export {
 	type SourceOf,
 	type SourcesSatisfied,
 } from "./ch/expr"
-export type { ClickHouseOnly, PostgresOnly } from "./ch/functions/builtin"
+export type { ClickHouseOnly, PostgresOnly, SqliteOnly } from "./ch/functions/builtin"
 
 export {
 	type CHInsert,

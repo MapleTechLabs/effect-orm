@@ -4,7 +4,15 @@
 // DDL, SQLite functions, the query builder and a `compile` that defaults to
 // the SQLite dialect. Migrations stay with the caller for now. See
 // docs/sqlite.md.
-import { compileCH, compileCHRaw, compileCHUnsafe, compileUnion as compileUnionCH, compileUnionUnsafe as compileUnionUnsafeCH } from "./ch/compile"
+import {
+	compileCHRaw,
+	compileUnion as compileUnionCH,
+	compileUnionUnsafe as compileUnionUnsafeCH,
+	type Compile,
+	type CompileUnion,
+	type CompileUnionUnsafe,
+	type CompileUnsafe,
+} from "./ch/compile"
 import { activeDialect, type Dialect } from "./ch/dialect"
 import { compiled, compiledUnsafe } from "./ch/failure"
 import { table as queryTable, type Table, type TableOptions } from "./ch/table"
@@ -79,22 +87,18 @@ const sqliteOptions = <O extends { readonly dialect?: Dialect | undefined } | un
 /**
  * The shared compiler, for SQLite unless `options.dialect` or `CurrentDialect`
  * says otherwise. Pass (or provide) d1Dialect for D1's limits. The dialect is
- * read when the Effect runs, from the fiber that runs it.
+ * read when the Effect runs, from the fiber that runs it. Its type checks a
+ * query's functions and clauses against SQLite (see `DialectSatisfied`).
  */
-export const compile: typeof compileCH = (
-	query: Parameters<typeof compileCHRaw>[0],
-	params?: Record<string, unknown>,
-	options?: Parameters<typeof compileCHRaw>[2],
-) => compiled(() => compileCHRaw(query, params, sqliteOptions(options)))
+// Typed through `any` and cast, as in `/postgres`: `Compile` is overloaded.
+export const compile = ((query: any, params?: any, options?: any) =>
+	compiled(() => compileCHRaw(query, params, sqliteOptions(options)))) as Compile<"sqlite">
 
 /** Compile immediately, throwing on a failed compile. */
-export const compileUnsafe: typeof compileCHUnsafe = (
-	query: Parameters<typeof compileCHRaw>[0],
-	params?: Record<string, unknown>,
-	options?: Parameters<typeof compileCHRaw>[2],
-) => compiledUnsafe(() => compileCHRaw(query, params, sqliteOptions(options)))
+export const compileUnsafe = ((query: any, params?: any, options?: any) =>
+	compiledUnsafe(() => compileCHRaw(query, params, sqliteOptions(options)))) as CompileUnsafe<"sqlite">
 
-export const compileUnion: typeof compileUnionCH = (query, params, options) =>
+export const compileUnion: CompileUnion<"sqlite"> = (query, params, options) =>
 	Effect.suspend(() => compileUnionCH(query, params, sqliteOptions(options)))
-export const compileUnionUnsafe: typeof compileUnionUnsafeCH = (query, params, options) =>
+export const compileUnionUnsafe: CompileUnionUnsafe<"sqlite"> = (query, params, options) =>
 	compileUnionUnsafeCH(query, params, sqliteOptions(options))

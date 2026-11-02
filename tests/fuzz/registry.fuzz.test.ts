@@ -22,7 +22,8 @@ const sourceFiles = (dir: string): Array<string> =>
 	})
 
 const defined = sourceFiles(join(import.meta.dirname, "../../src")).flatMap((file) =>
-	[...readFileSync(file, "utf8").matchAll(/export const \w+: Dialect = \{[\s\S]*?\bname: "([^"]+)"/g)].map((m) => m[1]!),
+	// `Dialect<"postgres">`: a built-in dialect names its function set in the type.
+	[...readFileSync(file, "utf8").matchAll(/export const \w+: Dialect(?:<[^>]*>)? = \{[\s\S]*?\bname: "([^"]+)"/g)].map((m) => m[1]!),
 )
 
 it("every dialect in src/ is registered with the fuzzer", () => {

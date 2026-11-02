@@ -26,7 +26,7 @@
 
 import type { ColumnDefs, CHType, InferTS, OutputToColumnDefs, NullableColumnDefs } from "./types"
 import type { Table } from "./table"
-import type { Expr, Condition, ColumnRef, ParamsIn, SourceEntry, Widen } from "./expr"
+import type { ClauseEntry, Expr, Condition, ColumnRef, ParamsIn, SourceEntry, Widen } from "./expr"
 import { makeColumnRef } from "./expr"
 import type { TenantScope } from "./compile"
 
@@ -95,6 +95,13 @@ export type InferOutput<S extends SelectRecord> = {
 }
 
 type OrderBySpec<Output> = [keyof Output & string, "asc" | "desc"]
+
+/**
+ * What a row lock adds to a query's params: only Postgres writes it, so
+ * `compile` and `run` for ClickHouse, SQLite or D1 refuse the query in the
+ * type (see `DialectSatisfied`), as the compile does at run time.
+ */
+export type RowLock<Clause extends string> = ClauseEntry<Clause, "postgres">
 
 /** How a locking clause waits for rows another transaction holds. */
 export interface LockOptions {
@@ -338,13 +345,13 @@ export interface CHQuery<
 	 * `FOR UPDATE`: lock the selected rows until the transaction ends. Run it
 	 * inside `Database.transaction`. Postgres only; replaces any earlier lock.
 	 */
-	forUpdate(options?: LockOptions): CHQuery<Cols, Output, Joins, Route, Params, Source>
+	forUpdate(options?: LockOptions): CHQuery<Cols, Output, Joins, Route, Params | RowLock<"FOR UPDATE">, Source>
 	/** `FOR NO KEY UPDATE`: as `forUpdate`, without blocking inserts that reference the rows. */
-	forNoKeyUpdate(options?: LockOptions): CHQuery<Cols, Output, Joins, Route, Params, Source>
+	forNoKeyUpdate(options?: LockOptions): CHQuery<Cols, Output, Joins, Route, Params | RowLock<"FOR NO KEY UPDATE">, Source>
 	/** `FOR SHARE`: a shared lock, which blocks writers but not other sharers. */
-	forShare(options?: LockOptions): CHQuery<Cols, Output, Joins, Route, Params, Source>
+	forShare(options?: LockOptions): CHQuery<Cols, Output, Joins, Route, Params | RowLock<"FOR SHARE">, Source>
 	/** `FOR KEY SHARE`: the weakest lock, blocking only deletes and key updates. */
-	forKeyShare(options?: LockOptions): CHQuery<Cols, Output, Joins, Route, Params, Source>
+	forKeyShare(options?: LockOptions): CHQuery<Cols, Output, Joins, Route, Params | RowLock<"FOR KEY SHARE">, Source>
 
 	/**
 	 * Tag this query with an execution route, carried through to the compiled

@@ -6,6 +6,7 @@ import { expectTypeOf } from "expect-type"
 import type * as SqlClient from "effect/sql/SqlClient"
 import * as CH from "./index"
 import * as PG from "../postgres"
+import * as SQLite from "../sqlite"
 import * as Db from "../database"
 import type { Dialect } from "./dialect"
 import type { DialectSatisfied, DialectEntry } from "./expr"
@@ -121,3 +122,71 @@ void Db.run(pgQuery)
 void Db.run(mixed)
 // A typed `Database` still provides the `Database` in context.
 expectTypeOf(Layer.succeed(Db.Database, pg)).toEqualTypeOf<Layer.Layer<Db.Database>>()
+
+// SQLite and D1: one function set, "sqlite", for both dialects.
+const Items = SQLite.table("items", { id: SQLite.integer, note: SQLite.text })
+expectTypeOf(SQLite.count()).toEqualTypeOf<CH.Expr<number, DialectEntry<"sqlite">>>()
+expectTypeOf(SQLite.sqliteDialect).toEqualTypeOf<Dialect<"sqlite">>()
+expectTypeOf(SQLite.d1Dialect).toEqualTypeOf<Dialect<"sqlite">>()
+const sqliteQuery = SQLite.from(Items).select(($) => ({ n: SQLite.count(), note: SQLite.lower($.note) }))
+const sqlitePortable = SQLite.from(Items).select(($) => ({ note: CH.nullIf($.note, "") }))
+SQLite.compileUnsafe(sqliteQuery)
+SQLite.compileUnsafe(sqliteQuery, {}, { dialect: SQLite.d1Dialect })
+void SQLite.compile(sqliteQuery)
+SQLite.compileUnsafe(sqlitePortable)
+// @ts-expect-error -- countIf() is a ClickHouse function
+SQLite.compileUnsafe(chQuery)
+// @ts-expect-error -- countIf(*) FILTER is a Postgres function
+SQLite.compileUnsafe(pgQuery, {}, { dialect: SQLite.d1Dialect })
+// @ts-expect-error -- count(*) is a SQLite function
+CH.compileUnsafe(sqliteQuery)
+// @ts-expect-error -- count(*) is a SQLite function
+PG.compileUnsafe(sqliteQuery)
+// @ts-expect-error -- count(*) is a SQLite function
+CH.compileUnsafe(sqliteQuery, {}, { dialect: CH.clickhouseDialect })
+CH.compileUnsafe(sqliteQuery, {}, { dialect: SQLite.d1Dialect })
+const sqliteUnion = SQLite.unionAll(sqliteQuery, SQLite.from(Items).select(($) => ({ n: SQLite.count(), note: $.note })))
+SQLite.compileUnionUnsafe(sqliteUnion)
+// @ts-expect-error -- the union uses SQLite functions
+PG.compileUnionUnsafe(sqliteUnion)
+expectTypeOf<DialectSatisfied<DialectEntry<"sqlite">, "postgres">>().toEqualTypeOf<{
+	readonly wrongDialect: "this query uses SQLite functions; it cannot compile for the postgres dialect"
+}>()
+expectTypeOf<DialectSatisfied<DialectEntry<"sqlite"> | DialectEntry<"clickhouse">, string>>().toEqualTypeOf<{
+	readonly mixedDialects: "this query uses both ClickHouse and SQLite functions; no dialect can compile it"
+}>()
+expectTypeOf<DialectSatisfied<DialectEntry<"sqlite"> | DialectEntry<"clickhouse"> | DialectEntry<"postgres">, "sqlite">>().toEqualTypeOf<{
+	readonly mixedDialects: "this query uses ClickHouse, Postgres and SQLite functions; no dialect can compile it"
+}>()
+const d1 = Db.fromSqlClient(client, { dialect: SQLite.d1Dialect })
+expectTypeOf(d1).toEqualTypeOf<Db.DatabaseApi<"sqlite">>()
+void d1.run(sqliteQuery)
+void d1.run(sqlitePortable)
+// @ts-expect-error -- countIf() is a ClickHouse function
+void d1.run(chQuery)
+
+// Row locks: only Postgres writes them, so the type refuses them elsewhere.
+const locked = SQLite.from(Items).select("id").forUpdate()
+const shared = SQLite.from(Items).select("id").forShare({ skipLocked: true })
+PG.compileUnsafe(locked)
+void PG.compile(shared)
+void pg.run(locked)
+// @ts-expect-error -- FOR UPDATE has no meaning for the sqlite dialect
+SQLite.compileUnsafe(locked)
+// @ts-expect-error -- FOR SHARE has no meaning for the sqlite dialect (D1 included)
+SQLite.compileUnsafe(shared, {}, { dialect: SQLite.d1Dialect })
+// @ts-expect-error -- FOR UPDATE has no meaning for the sqlite dialect
+void d1.run(locked)
+// @ts-expect-error -- FOR UPDATE has no meaning for the clickhouse dialect
+CH.compileUnsafe(locked)
+// @ts-expect-error -- FOR KEY SHARE has no meaning for the clickhouse dialect
+void CH.compile(CH.from(Events).select("Id").forKeyShare())
+// A lock inside a subquery still counts.
+// @ts-expect-error -- FOR NO KEY UPDATE has no meaning for the sqlite dialect
+SQLite.compileUnsafe(SQLite.from(Items).select("id").where(() => [SQLite.exists(SQLite.from(Items).select("id").forNoKeyUpdate())]))
+// A dialect that names no set is not checked; the compile refuses it at run time if it cannot lock.
+CH.compileUnsafe(locked, {}, { dialect: custom })
+expectTypeOf<DialectSatisfied<CH.RowLock<"FOR UPDATE">, "sqlite">>().toEqualTypeOf<{
+	readonly unsupportedClause: "FOR UPDATE has no meaning for the sqlite dialect"
+}>()
+expectTypeOf<DialectSatisfied<CH.RowLock<"FOR UPDATE"> | DialectEntry<"postgres">, "postgres">>().toEqualTypeOf<unknown>()

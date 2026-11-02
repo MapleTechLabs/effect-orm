@@ -109,6 +109,8 @@ describe("row locking", () => {
 			const defect = function* (q: Effect.Effect<unknown, unknown>) {
 				expect(failure(yield* Effect.exit(q))).toBeInstanceOf(QueryBuilderDefect)
 			}
+			// The type refuses it too (see `RowLock`); this is the run-time net.
+			// @ts-expect-error -- FOR UPDATE has no meaning for the clickhouse dialect
 			yield* defect(CH.compile(base.forUpdate(), {}))
 			yield* defect(PG.compile(base.forUpdate({ skipLocked: true, noWait: true }), {}))
 			yield* defect(PG.compile(base.forUpdate({ of: ["public.jobs"] }), {}))
