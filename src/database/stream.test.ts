@@ -5,7 +5,7 @@
 
 import { PgliteClient } from "@effect/sql-pglite"
 import { assert, expect, layer } from "@effect/vitest"
-import { DateTime, Effect, Layer, Option, Stream, Tracer } from "effect"
+import { DateTime, Effect, Layer, Stream, Tracer } from "effect"
 import * as CH from "../ch/index"
 import * as SqlClient from "effect/sql/SqlClient"
 import * as PG from "../postgres"
