@@ -49,4 +49,4 @@ export {
 	type ResolveStepOptions,
 	type RunOptions,
 } from "./migrate/run"
-export { verify, type Drift, type VerifyOptions, type VerifyResult } from "./migrate/verify"
+export { verify, verifySnapshot, type Drift, type VerifyOptions, type VerifyResult } from "./migrate/verify"

@@ -348,6 +348,10 @@ CREATE TABLE IF NOT EXISTS _effect_orm_migration_steps (
 `Migrate.verify` introspects (`system.tables`, `system.columns`, `system.data_skipping_indices`,
 `create_table_query` through `formatQuery()`) and diffs the live schema against the snapshot **of
 the last applied migration**, not the code's HEAD. That reports drift and partial applies honestly.
+`verify --schema` (`Kit.verifySchema`) is the other question: do the definitions at HEAD match
+this database? It builds a snapshot from the schema modules and runs the same comparison
+(`Migrate.verifySnapshot`), with no folder and no ledger, for a database another tool migrates
+and for a CI check after deploy.
 
 ### 4.6 CLI
 
@@ -359,7 +363,7 @@ One bin, `effect-orm` (next to `ch-bench`):
 | `check`                  | no             | DAG validity, recomputed ids, name/DAG order, commutativity, backfill convergence lint, shipped-migration immutability against a git base (`--base origin/main`) |
 | `migrate`                | yes            | Runs `Migrate.run` with a `SqlClient` layer exported from the config file |
 | `status` / `plan`        | yes            | Pending migrations and their rendered steps, no execution  |
-| `verify`                 | yes            | 4.5                                                         |
+| `verify [--schema]`      | yes            | 4.5; `--schema` compares with the definitions, not the ledger |
 | `push`                   | yes            | Dev only: introspect, diff, apply, no files                |
 | `pull [--init]`          | yes            | Introspect into `defineTable` source; `--init` baselines   |
 
