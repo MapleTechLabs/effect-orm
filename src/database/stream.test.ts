@@ -135,7 +135,8 @@ layer(Live, { excludeTestServices: true })("Database.stream on PGlite", (it) => 
 				"db.collection.name": "stream_events",
 				"db.response.returned_rows": 3,
 			})
-			const execute = spans.find((s) => s.name === "sql.execute")
+			// Effect's own span runs inside it, carrying the query text.
+			const execute = spans.find((s) => s.attributes.has("effect.sql.method"))
 			assert(execute !== undefined)
 			expect(Option.getOrUndefined(execute.parent)).toBe(span)
 		}),
