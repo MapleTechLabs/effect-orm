@@ -2,9 +2,9 @@
 // database semantic conventions describe:
 // https://opentelemetry.io/docs/specs/semconv/database/database-spans/
 //
-// Effect's own `sql.execute` span still runs inside it with the query text, but
-// it cannot carry these: it names the operation after the client method
-// (`execute`), and only a compiled query knows its table.
+// Effect's own span still runs inside it with the query text, but it cannot
+// carry these: it is named after the database, not the operation, and only a
+// compiled query knows its table.
 import { Context, Effect } from "effect"
 import type { CompiledQuery } from "../ch/compile"
 import type { Dialect } from "../ch/dialect"

@@ -240,6 +240,24 @@ SELECT
 }
 `;
 
+exports[`core SQL (clickhouse) > ilike 1`] = `
+{
+  "parameters": [],
+  "sql": "WITH orders AS (
+<orders fixture>
+),
+customers AS (
+<customers fixture>
+)
+SELECT
+          orders.Id AS id
+        FROM orders
+        WHERE orders.OrgId = 'org_1'
+          AND orders.Status ILIKE 'PA%'
+        ORDER BY id ASC",
+}
+`;
+
 exports[`core SQL (clickhouse) > inner-join 1`] = `
 {
   "parameters": [],
@@ -340,6 +358,42 @@ SELECT
 }
 `;
 
+exports[`core SQL (clickhouse) > like-case 1`] = `
+{
+  "parameters": [],
+  "sql": "WITH orders AS (
+<orders fixture>
+),
+customers AS (
+<customers fixture>
+)
+SELECT
+          orders.Id AS id
+        FROM orders
+        WHERE orders.OrgId = 'org_1'
+          AND orders.Customer LIKE 'ACME'
+        ORDER BY id ASC",
+}
+`;
+
+exports[`core SQL (clickhouse) > like-escape 1`] = `
+{
+  "parameters": [],
+  "sql": "WITH orders AS (
+<orders fixture>
+),
+customers AS (
+<customers fixture>
+)
+SELECT
+          orders.Id AS id
+        FROM orders
+        WHERE orders.OrgId LIKE 'org\\\\_1'
+          AND orders.Note NOT LIKE 'it\\\\_s'
+        ORDER BY id ASC",
+}
+`;
+
 exports[`core SQL (clickhouse) > limit-offset 1`] = `
 {
   "parameters": [],
@@ -435,7 +489,7 @@ SELECT
         FROM orders
         WHERE orders.OrgId = 'org_1'
           AND (orders.Customer LIKE '%e%' AND orders.Customer NOT LIKE 'i%')
-          AND (orders.Status ILIKE 'PA%' OR orders.Status IN ('open'))
+          AND (orders.Status LIKE 'pa%' OR orders.Status IN ('open'))
           AND orders.Id NOT IN (3)
           AND NOT (orders.Id = 2)
         ORDER BY id ASC",
@@ -601,6 +655,678 @@ SELECT
 )
 ORDER BY id ASC
 FORMAT JSON",
+}
+`;
+
+exports[`core SQL (d1) > and-or 1`] = `
+{
+  "parameters": [
+    "org_1",
+    "paid",
+    15,
+    "globex",
+  ],
+  "sql": "WITH "orders" AS (
+<orders fixture>
+),
+"customers" AS (
+<customers fixture>
+)
+SELECT
+          "orders"."Id" AS "id"
+        FROM "orders"
+        WHERE "orders"."OrgId" = ?
+          AND (("orders"."Status" = ? AND "orders"."Amount" > ?) OR "orders"."Customer" = ?)
+        ORDER BY "id" ASC",
+}
+`;
+
+exports[`core SQL (d1) > arithmetic 1`] = `
+{
+  "parameters": [
+    "org_1",
+    4,
+  ],
+  "sql": "WITH "orders" AS (
+<orders fixture>
+),
+"customers" AS (
+<customers fixture>
+)
+SELECT
+          "orders"."Amount" + 1 AS "added",
+          "orders"."Amount" - 1 AS "subtracted",
+          "orders"."Amount" * 2 AS "multiplied",
+          "orders"."Amount" % 3 AS "remainder",
+          "orders"."Amount" / 2 AS "divided"
+        FROM "orders"
+        WHERE "orders"."OrgId" = ?
+          AND "orders"."Id" = ?",
+}
+`;
+
+exports[`core SQL (d1) > comparisons 1`] = `
+{
+  "parameters": [
+    "org_1",
+    "void",
+    5,
+    10,
+    20,
+    10,
+  ],
+  "sql": "WITH "orders" AS (
+<orders fixture>
+),
+"customers" AS (
+<customers fixture>
+)
+SELECT
+          "orders"."Id" AS "id"
+        FROM "orders"
+        WHERE "orders"."OrgId" = ?
+          AND "orders"."Status" != ?
+          AND "orders"."Amount" > ?
+          AND "orders"."Amount" >= ?
+          AND "orders"."Amount" < ?
+          AND "orders"."Amount" <= ?",
+}
+`;
+
+exports[`core SQL (d1) > cross-join 1`] = `
+{
+  "parameters": [
+    "org_1",
+    "org_1",
+    2,
+  ],
+  "sql": "WITH "orders" AS (
+<orders fixture>
+),
+"customers" AS (
+<customers fixture>
+)
+SELECT
+          "orders"."Id" AS "id",
+          "c"."Name" AS "customer"
+        FROM "orders"
+        CROSS JOIN "customers" AS "c"
+        WHERE "orders"."OrgId" = ?
+          AND "c"."OrgId" = ?
+          AND "orders"."Id" <= ?
+        ORDER BY "id" ASC, "customer" ASC",
+}
+`;
+
+exports[`core SQL (d1) > cross-join-subquery 1`] = `
+{
+  "parameters": [
+    "org_1",
+    "org_1",
+    2,
+  ],
+  "sql": "WITH "orders" AS (
+<orders fixture>
+),
+"customers" AS (
+<customers fixture>
+)
+SELECT
+          "orders"."Id" AS "id",
+          "k"."customers" AS "customers"
+        FROM "orders"
+        CROSS JOIN (WITH "orders" AS (
+<orders fixture>
+),
+"customers" AS (
+<customers fixture>
+)
+SELECT
+          count(*) AS "customers"
+        FROM "customers"
+        WHERE "customers"."OrgId" = ?) AS "k"
+        WHERE "orders"."OrgId" = ?
+          AND "orders"."Id" <= ?
+        ORDER BY "id" ASC",
+}
+`;
+
+exports[`core SQL (d1) > cte 1`] = `
+{
+  "parameters": [
+    "org_1",
+    "paid",
+  ],
+  "sql": "WITH "orders" AS (
+<orders fixture>
+),
+"customers" AS (
+<customers fixture>
+),
+"paid" AS (
+WITH "orders" AS (
+<orders fixture>
+),
+"customers" AS (
+<customers fixture>
+)
+SELECT
+          "orders"."Customer" AS "Customer",
+          "orders"."Amount" AS "Amount"
+        FROM "orders"
+        WHERE "orders"."OrgId" = ?
+          AND "orders"."Status" = ?
+)
+SELECT
+          sum("paid"."Amount") AS "total"
+        FROM "paid"",
+}
+`;
+
+exports[`core SQL (d1) > distinct-plain 1`] = `
+{
+  "parameters": [
+    "org_1",
+  ],
+  "sql": "WITH "orders" AS (
+<orders fixture>
+),
+"customers" AS (
+<customers fixture>
+)
+SELECT DISTINCT
+          "orders"."Status" AS "status"
+        FROM "orders"
+        WHERE "orders"."OrgId" = ?
+        ORDER BY "status" ASC",
+}
+`;
+
+exports[`core SQL (d1) > from-subquery 1`] = `
+{
+  "parameters": [
+    "org_1",
+    6,
+  ],
+  "sql": "SELECT
+          "t"."customer" AS "customer",
+          "t"."total" AS "total"
+        FROM (WITH "orders" AS (
+<orders fixture>
+),
+"customers" AS (
+<customers fixture>
+)
+SELECT
+          "orders"."OrgId" AS "OrgId",
+          "orders"."Customer" AS "customer",
+          sum("orders"."Amount") AS "total"
+        FROM "orders"
+        WHERE "orders"."OrgId" = ?
+        GROUP BY 1, 2) AS "t"
+        WHERE "t"."total" > ?
+        ORDER BY "total" DESC",
+}
+`;
+
+exports[`core SQL (d1) > group-having 1`] = `
+{
+  "parameters": [
+    "paid",
+    "org_1",
+  ],
+  "sql": "WITH "orders" AS (
+<orders fixture>
+),
+"customers" AS (
+<customers fixture>
+)
+SELECT
+          "orders"."Customer" AS "customer",
+          count(*) AS "orders",
+          count(*) FILTER (WHERE "orders"."Status" = ?) AS "paid",
+          sum("orders"."Amount") AS "total",
+          min("orders"."Amount") AS "smallest",
+          max("orders"."Amount") AS "largest"
+        FROM "orders"
+        WHERE "orders"."OrgId" = ?
+        GROUP BY 1
+        HAVING count(*) >= 2
+        ORDER BY "customer" ASC",
+}
+`;
+
+exports[`core SQL (d1) > inner-join 1`] = `
+{
+  "parameters": [
+    "org_1",
+  ],
+  "sql": "WITH "orders" AS (
+<orders fixture>
+),
+"customers" AS (
+<customers fixture>
+)
+SELECT
+          "orders"."Id" AS "id",
+          "c"."Tier" AS "tier"
+        FROM "orders"
+        INNER JOIN "customers" AS "c" ON ("orders"."Customer" = "c"."Name" AND "orders"."OrgId" = "c"."OrgId")
+        WHERE "orders"."OrgId" = ?
+        ORDER BY "id" ASC",
+}
+`;
+
+exports[`core SQL (d1) > is-not-null 1`] = `
+{
+  "parameters": [
+    "org_1",
+  ],
+  "sql": "WITH "orders" AS (
+<orders fixture>
+),
+"customers" AS (
+<customers fixture>
+)
+SELECT
+          "orders"."Id" AS "id"
+        FROM "orders"
+        WHERE "orders"."OrgId" = ?
+          AND "orders"."Note" IS NOT NULL
+        ORDER BY "id" ASC",
+}
+`;
+
+exports[`core SQL (d1) > join-subqueries 1`] = `
+{
+  "parameters": [
+    "org_1",
+    "silver",
+    "org_1",
+    "org_1",
+  ],
+  "sql": "WITH "orders" AS (
+<orders fixture>
+),
+"customers" AS (
+<customers fixture>
+)
+SELECT
+          "customers"."Name" AS "name",
+          "t"."tier" AS "tier",
+          "n"."orders" AS "orders"
+        FROM "customers"
+        INNER JOIN (WITH "orders" AS (
+<orders fixture>
+),
+"customers" AS (
+<customers fixture>
+)
+SELECT
+          "customers"."Name" AS "name",
+          "customers"."Tier" AS "tier"
+        FROM "customers"
+        WHERE "customers"."OrgId" = ?
+          AND "customers"."Tier" != ?) AS "t" ON "customers"."Name" = "t"."name"
+        LEFT JOIN (WITH "orders" AS (
+<orders fixture>
+),
+"customers" AS (
+<customers fixture>
+)
+SELECT
+          "orders"."Customer" AS "customer",
+          count(*) AS "orders"
+        FROM "orders"
+        WHERE "orders"."OrgId" = ?
+        GROUP BY 1) AS "n" ON "customers"."Name" = "n"."customer"
+        WHERE "customers"."OrgId" = ?
+        ORDER BY "name" ASC",
+}
+`;
+
+exports[`core SQL (d1) > left-join 1`] = `
+{
+  "parameters": [
+    "org_1",
+    3,
+  ],
+  "sql": "WITH "orders" AS (
+<orders fixture>
+),
+"customers" AS (
+<customers fixture>
+)
+SELECT
+          "orders"."Id" AS "id",
+          "c"."Tier" AS "tier"
+        FROM "orders"
+        LEFT JOIN "customers" AS "c" ON ("orders"."Customer" = "c"."Name" AND "orders"."OrgId" = "c"."OrgId")
+        WHERE "orders"."OrgId" = ?
+          AND "orders"."Id" >= ?
+        ORDER BY "id" ASC",
+}
+`;
+
+exports[`core SQL (d1) > like-case 1`] = `
+{
+  "parameters": [
+    "org_1",
+    "ACME",
+  ],
+  "sql": "WITH "orders" AS (
+<orders fixture>
+),
+"customers" AS (
+<customers fixture>
+)
+SELECT
+          "orders"."Id" AS "id"
+        FROM "orders"
+        WHERE "orders"."OrgId" = ?
+          AND "orders"."Customer" LIKE ? ESCAPE '\\'
+        ORDER BY "id" ASC",
+}
+`;
+
+exports[`core SQL (d1) > like-escape 1`] = `
+{
+  "parameters": [
+    "org\\_1",
+    "it\\_s",
+  ],
+  "sql": "WITH "orders" AS (
+<orders fixture>
+),
+"customers" AS (
+<customers fixture>
+)
+SELECT
+          "orders"."Id" AS "id"
+        FROM "orders"
+        WHERE "orders"."OrgId" LIKE ? ESCAPE '\\'
+          AND "orders"."Note" NOT LIKE ? ESCAPE '\\'
+        ORDER BY "id" ASC",
+}
+`;
+
+exports[`core SQL (d1) > limit-offset 1`] = `
+{
+  "parameters": [
+    "org_1",
+  ],
+  "sql": "WITH "orders" AS (
+<orders fixture>
+),
+"customers" AS (
+<customers fixture>
+)
+SELECT
+          "orders"."Id" AS "id"
+        FROM "orders"
+        WHERE "orders"."OrgId" = ?
+        ORDER BY "id" DESC
+        LIMIT 2
+        OFFSET 1",
+}
+`;
+
+exports[`core SQL (d1) > null-and-range 1`] = `
+{
+  "parameters": [
+    "org_1",
+    5,
+    20,
+    3,
+    3,
+  ],
+  "sql": "WITH "orders" AS (
+<orders fixture>
+),
+"customers" AS (
+<customers fixture>
+)
+SELECT
+          "orders"."Id" AS "id"
+        FROM "orders"
+        WHERE "orders"."OrgId" = ?
+          AND "orders"."Note" IS NULL
+          AND "orders"."Amount" BETWEEN ? AND ?
+          AND "orders"."Id" NOT BETWEEN ? AND ?
+        ORDER BY "id" ASC",
+}
+`;
+
+exports[`core SQL (d1) > nulls-and-literals 1`] = `
+{
+  "parameters": [
+    "org_1",
+    2,
+    4,
+  ],
+  "sql": "WITH "orders" AS (
+<orders fixture>
+),
+"customers" AS (
+<customers fixture>
+)
+SELECT
+          "orders"."Id" AS "id",
+          "orders"."Note" AS "note",
+          coalesce("orders"."Note", '-') AS "shown",
+          'x''y' AS "label"
+        FROM "orders"
+        WHERE "orders"."OrgId" = ?
+          AND "orders"."Id" IN (?, ?)
+        ORDER BY "id" ASC",
+}
+`;
+
+exports[`core SQL (d1) > params 1`] = `
+{
+  "parameters": [
+    "org_1",
+    7,
+    19.5,
+    "2026-01-01 00:00:00.000",
+  ],
+  "sql": "WITH "orders" AS (
+<orders fixture>
+),
+"customers" AS (
+<customers fixture>
+)
+SELECT
+          "orders"."Id" AS "id",
+          "orders"."Created" AS "created"
+        FROM "orders"
+        WHERE "orders"."OrgId" = ?
+          AND "orders"."Amount" >= ?
+          AND "orders"."Amount" < ?
+          AND "orders"."Created" >= ?
+        ORDER BY "id" ASC",
+}
+`;
+
+exports[`core SQL (d1) > patterns-and-lists 1`] = `
+{
+  "parameters": [
+    "org_1",
+    "%e%",
+    "i%",
+    "pa%",
+    "open",
+    3,
+    2,
+  ],
+  "sql": "WITH "orders" AS (
+<orders fixture>
+),
+"customers" AS (
+<customers fixture>
+)
+SELECT
+          "orders"."Id" AS "id"
+        FROM "orders"
+        WHERE "orders"."OrgId" = ?
+          AND ("orders"."Customer" LIKE ? ESCAPE '\\' AND "orders"."Customer" NOT LIKE ? ESCAPE '\\')
+          AND ("orders"."Status" LIKE ? ESCAPE '\\' OR "orders"."Status" IN (?))
+          AND "orders"."Id" NOT IN (?)
+          AND NOT ("orders"."Id" = ?)
+        ORDER BY "id" ASC",
+}
+`;
+
+exports[`core SQL (d1) > route-and-cross-tenant 1`] = `
+{
+  "parameters": [],
+  "sql": "WITH "orders" AS (
+<orders fixture>
+),
+"customers" AS (
+<customers fixture>
+)
+SELECT
+          count(*) AS "orders"
+        FROM "orders"",
+}
+`;
+
+exports[`core SQL (d1) > select-columns 1`] = `
+{
+  "parameters": [
+    "org_1",
+    "paid",
+  ],
+  "sql": "WITH "orders" AS (
+<orders fixture>
+),
+"customers" AS (
+<customers fixture>
+)
+SELECT
+          "orders"."Id" AS "Id",
+          "orders"."Customer" AS "Customer"
+        FROM "orders"
+        WHERE "orders"."OrgId" = ?
+          AND "orders"."Status" = ?
+        ORDER BY "Id" ASC",
+}
+`;
+
+exports[`core SQL (d1) > selected-param 1`] = `
+{
+  "parameters": [
+    1,
+    "org_1",
+    1,
+  ],
+  "sql": "WITH "orders" AS (
+<orders fixture>
+),
+"customers" AS (
+<customers fixture>
+)
+SELECT
+          "orders"."Id" AS "id",
+          ? AS "flagged"
+        FROM "orders"
+        WHERE "orders"."OrgId" = ?
+          AND "orders"."Id" = ?",
+}
+`;
+
+exports[`core SQL (d1) > union 1`] = `
+{
+  "parameters": [
+    "org_1",
+    "paid",
+    "org_1",
+    "open",
+    "org_1",
+    "void",
+  ],
+  "sql": "SELECT * FROM (
+SELECT * FROM (
+WITH "orders" AS (
+<orders fixture>
+),
+"customers" AS (
+<customers fixture>
+)
+SELECT
+          "orders"."Status" AS "status",
+          sum("orders"."Amount") AS "total"
+        FROM "orders"
+        WHERE "orders"."OrgId" = ?
+          AND "orders"."Status" = ?
+        GROUP BY 1
+) AS "__union_branch"
+UNION ALL
+SELECT * FROM (
+WITH "orders" AS (
+<orders fixture>
+),
+"customers" AS (
+<customers fixture>
+)
+SELECT
+          "orders"."Status" AS "status",
+          sum("orders"."Amount") AS "total"
+        FROM "orders"
+        WHERE "orders"."OrgId" = ?
+          AND "orders"."Status" = ?
+        GROUP BY 1
+) AS "__union_branch"
+UNION ALL
+SELECT * FROM (
+WITH "orders" AS (
+<orders fixture>
+),
+"customers" AS (
+<customers fixture>
+)
+SELECT
+          "orders"."Status" AS "status",
+          sum("orders"."Amount") AS "total"
+        FROM "orders"
+        WHERE "orders"."OrgId" = ?
+          AND "orders"."Status" = ?
+        GROUP BY 1
+) AS "__union_branch"
+) AS "__union"
+ORDER BY "total" DESC
+LIMIT 2
+OFFSET 1",
+}
+`;
+
+exports[`core SQL (d1) > union-cross-tenant 1`] = `
+{
+  "parameters": [],
+  "sql": "SELECT * FROM (
+WITH "orders" AS (
+<orders fixture>
+),
+"customers" AS (
+<customers fixture>
+)
+SELECT
+          count(*) AS "orders"
+        FROM "orders"
+) AS "__union_branch"
+UNION ALL
+SELECT * FROM (
+WITH "orders" AS (
+<orders fixture>
+),
+"customers" AS (
+<customers fixture>
+)
+SELECT
+          count(*) AS "orders"
+        FROM "orders"
+) AS "__union_branch"",
 }
 `;
 
@@ -860,6 +1586,27 @@ SELECT
 }
 `;
 
+exports[`core SQL (postgres) > ilike 1`] = `
+{
+  "parameters": [
+    "org_1",
+    "PA%",
+  ],
+  "sql": "WITH "orders" AS (
+<orders fixture>
+),
+"customers" AS (
+<customers fixture>
+)
+SELECT
+          "orders"."Id" AS "id"
+        FROM "orders"
+        WHERE "orders"."OrgId" = $1
+          AND "orders"."Status" ILIKE $2
+        ORDER BY "id" ASC",
+}
+`;
+
 exports[`core SQL (postgres) > inner-join 1`] = `
 {
   "parameters": [
@@ -966,6 +1713,48 @@ SELECT
         LEFT JOIN "customers" AS "c" ON ("orders"."Customer" = "c"."Name" AND "orders"."OrgId" = "c"."OrgId")
         WHERE "orders"."OrgId" = $1
           AND "orders"."Id" >= $2
+        ORDER BY "id" ASC",
+}
+`;
+
+exports[`core SQL (postgres) > like-case 1`] = `
+{
+  "parameters": [
+    "org_1",
+    "ACME",
+  ],
+  "sql": "WITH "orders" AS (
+<orders fixture>
+),
+"customers" AS (
+<customers fixture>
+)
+SELECT
+          "orders"."Id" AS "id"
+        FROM "orders"
+        WHERE "orders"."OrgId" = $1
+          AND "orders"."Customer" LIKE $2
+        ORDER BY "id" ASC",
+}
+`;
+
+exports[`core SQL (postgres) > like-escape 1`] = `
+{
+  "parameters": [
+    "org\\_1",
+    "it\\_s",
+  ],
+  "sql": "WITH "orders" AS (
+<orders fixture>
+),
+"customers" AS (
+<customers fixture>
+)
+SELECT
+          "orders"."Id" AS "id"
+        FROM "orders"
+        WHERE "orders"."OrgId" LIKE $1
+          AND "orders"."Note" NOT LIKE $2
         ORDER BY "id" ASC",
 }
 `;
@@ -1094,7 +1883,7 @@ exports[`core SQL (postgres) > patterns-and-lists 1`] = `
     "org_1",
     "%e%",
     "i%",
-    "PA%",
+    "pa%",
     "open",
     3,
     2,
@@ -1110,7 +1899,7 @@ SELECT
         FROM "orders"
         WHERE "orders"."OrgId" = $1
           AND ("orders"."Customer" LIKE $2 AND "orders"."Customer" NOT LIKE $3)
-          AND ("orders"."Status" ILIKE $4 OR "orders"."Status" IN ($5))
+          AND ("orders"."Status" LIKE $4 OR "orders"."Status" IN ($5))
           AND "orders"."Id" NOT IN ($6)
           AND NOT ("orders"."Id" = $7)
         ORDER BY "id" ASC",
@@ -1265,5 +2054,677 @@ SELECT
           count(*) AS "orders"
         FROM "orders"
 )",
+}
+`;
+
+exports[`core SQL (sqlite) > and-or 1`] = `
+{
+  "parameters": [
+    "org_1",
+    "paid",
+    15,
+    "globex",
+  ],
+  "sql": "WITH "orders" AS (
+<orders fixture>
+),
+"customers" AS (
+<customers fixture>
+)
+SELECT
+          "orders"."Id" AS "id"
+        FROM "orders"
+        WHERE "orders"."OrgId" = ?
+          AND (("orders"."Status" = ? AND "orders"."Amount" > ?) OR "orders"."Customer" = ?)
+        ORDER BY "id" ASC",
+}
+`;
+
+exports[`core SQL (sqlite) > arithmetic 1`] = `
+{
+  "parameters": [
+    "org_1",
+    4,
+  ],
+  "sql": "WITH "orders" AS (
+<orders fixture>
+),
+"customers" AS (
+<customers fixture>
+)
+SELECT
+          "orders"."Amount" + 1 AS "added",
+          "orders"."Amount" - 1 AS "subtracted",
+          "orders"."Amount" * 2 AS "multiplied",
+          "orders"."Amount" % 3 AS "remainder",
+          "orders"."Amount" / 2 AS "divided"
+        FROM "orders"
+        WHERE "orders"."OrgId" = ?
+          AND "orders"."Id" = ?",
+}
+`;
+
+exports[`core SQL (sqlite) > comparisons 1`] = `
+{
+  "parameters": [
+    "org_1",
+    "void",
+    5,
+    10,
+    20,
+    10,
+  ],
+  "sql": "WITH "orders" AS (
+<orders fixture>
+),
+"customers" AS (
+<customers fixture>
+)
+SELECT
+          "orders"."Id" AS "id"
+        FROM "orders"
+        WHERE "orders"."OrgId" = ?
+          AND "orders"."Status" != ?
+          AND "orders"."Amount" > ?
+          AND "orders"."Amount" >= ?
+          AND "orders"."Amount" < ?
+          AND "orders"."Amount" <= ?",
+}
+`;
+
+exports[`core SQL (sqlite) > cross-join 1`] = `
+{
+  "parameters": [
+    "org_1",
+    "org_1",
+    2,
+  ],
+  "sql": "WITH "orders" AS (
+<orders fixture>
+),
+"customers" AS (
+<customers fixture>
+)
+SELECT
+          "orders"."Id" AS "id",
+          "c"."Name" AS "customer"
+        FROM "orders"
+        CROSS JOIN "customers" AS "c"
+        WHERE "orders"."OrgId" = ?
+          AND "c"."OrgId" = ?
+          AND "orders"."Id" <= ?
+        ORDER BY "id" ASC, "customer" ASC",
+}
+`;
+
+exports[`core SQL (sqlite) > cross-join-subquery 1`] = `
+{
+  "parameters": [
+    "org_1",
+    "org_1",
+    2,
+  ],
+  "sql": "WITH "orders" AS (
+<orders fixture>
+),
+"customers" AS (
+<customers fixture>
+)
+SELECT
+          "orders"."Id" AS "id",
+          "k"."customers" AS "customers"
+        FROM "orders"
+        CROSS JOIN (WITH "orders" AS (
+<orders fixture>
+),
+"customers" AS (
+<customers fixture>
+)
+SELECT
+          count(*) AS "customers"
+        FROM "customers"
+        WHERE "customers"."OrgId" = ?) AS "k"
+        WHERE "orders"."OrgId" = ?
+          AND "orders"."Id" <= ?
+        ORDER BY "id" ASC",
+}
+`;
+
+exports[`core SQL (sqlite) > cte 1`] = `
+{
+  "parameters": [
+    "org_1",
+    "paid",
+  ],
+  "sql": "WITH "orders" AS (
+<orders fixture>
+),
+"customers" AS (
+<customers fixture>
+),
+"paid" AS (
+WITH "orders" AS (
+<orders fixture>
+),
+"customers" AS (
+<customers fixture>
+)
+SELECT
+          "orders"."Customer" AS "Customer",
+          "orders"."Amount" AS "Amount"
+        FROM "orders"
+        WHERE "orders"."OrgId" = ?
+          AND "orders"."Status" = ?
+)
+SELECT
+          sum("paid"."Amount") AS "total"
+        FROM "paid"",
+}
+`;
+
+exports[`core SQL (sqlite) > distinct-plain 1`] = `
+{
+  "parameters": [
+    "org_1",
+  ],
+  "sql": "WITH "orders" AS (
+<orders fixture>
+),
+"customers" AS (
+<customers fixture>
+)
+SELECT DISTINCT
+          "orders"."Status" AS "status"
+        FROM "orders"
+        WHERE "orders"."OrgId" = ?
+        ORDER BY "status" ASC",
+}
+`;
+
+exports[`core SQL (sqlite) > from-subquery 1`] = `
+{
+  "parameters": [
+    "org_1",
+    6,
+  ],
+  "sql": "SELECT
+          "t"."customer" AS "customer",
+          "t"."total" AS "total"
+        FROM (WITH "orders" AS (
+<orders fixture>
+),
+"customers" AS (
+<customers fixture>
+)
+SELECT
+          "orders"."OrgId" AS "OrgId",
+          "orders"."Customer" AS "customer",
+          sum("orders"."Amount") AS "total"
+        FROM "orders"
+        WHERE "orders"."OrgId" = ?
+        GROUP BY 1, 2) AS "t"
+        WHERE "t"."total" > ?
+        ORDER BY "total" DESC",
+}
+`;
+
+exports[`core SQL (sqlite) > group-having 1`] = `
+{
+  "parameters": [
+    "paid",
+    "org_1",
+  ],
+  "sql": "WITH "orders" AS (
+<orders fixture>
+),
+"customers" AS (
+<customers fixture>
+)
+SELECT
+          "orders"."Customer" AS "customer",
+          count(*) AS "orders",
+          count(*) FILTER (WHERE "orders"."Status" = ?) AS "paid",
+          sum("orders"."Amount") AS "total",
+          min("orders"."Amount") AS "smallest",
+          max("orders"."Amount") AS "largest"
+        FROM "orders"
+        WHERE "orders"."OrgId" = ?
+        GROUP BY 1
+        HAVING count(*) >= 2
+        ORDER BY "customer" ASC",
+}
+`;
+
+exports[`core SQL (sqlite) > inner-join 1`] = `
+{
+  "parameters": [
+    "org_1",
+  ],
+  "sql": "WITH "orders" AS (
+<orders fixture>
+),
+"customers" AS (
+<customers fixture>
+)
+SELECT
+          "orders"."Id" AS "id",
+          "c"."Tier" AS "tier"
+        FROM "orders"
+        INNER JOIN "customers" AS "c" ON ("orders"."Customer" = "c"."Name" AND "orders"."OrgId" = "c"."OrgId")
+        WHERE "orders"."OrgId" = ?
+        ORDER BY "id" ASC",
+}
+`;
+
+exports[`core SQL (sqlite) > is-not-null 1`] = `
+{
+  "parameters": [
+    "org_1",
+  ],
+  "sql": "WITH "orders" AS (
+<orders fixture>
+),
+"customers" AS (
+<customers fixture>
+)
+SELECT
+          "orders"."Id" AS "id"
+        FROM "orders"
+        WHERE "orders"."OrgId" = ?
+          AND "orders"."Note" IS NOT NULL
+        ORDER BY "id" ASC",
+}
+`;
+
+exports[`core SQL (sqlite) > join-subqueries 1`] = `
+{
+  "parameters": [
+    "org_1",
+    "silver",
+    "org_1",
+    "org_1",
+  ],
+  "sql": "WITH "orders" AS (
+<orders fixture>
+),
+"customers" AS (
+<customers fixture>
+)
+SELECT
+          "customers"."Name" AS "name",
+          "t"."tier" AS "tier",
+          "n"."orders" AS "orders"
+        FROM "customers"
+        INNER JOIN (WITH "orders" AS (
+<orders fixture>
+),
+"customers" AS (
+<customers fixture>
+)
+SELECT
+          "customers"."Name" AS "name",
+          "customers"."Tier" AS "tier"
+        FROM "customers"
+        WHERE "customers"."OrgId" = ?
+          AND "customers"."Tier" != ?) AS "t" ON "customers"."Name" = "t"."name"
+        LEFT JOIN (WITH "orders" AS (
+<orders fixture>
+),
+"customers" AS (
+<customers fixture>
+)
+SELECT
+          "orders"."Customer" AS "customer",
+          count(*) AS "orders"
+        FROM "orders"
+        WHERE "orders"."OrgId" = ?
+        GROUP BY 1) AS "n" ON "customers"."Name" = "n"."customer"
+        WHERE "customers"."OrgId" = ?
+        ORDER BY "name" ASC",
+}
+`;
+
+exports[`core SQL (sqlite) > left-join 1`] = `
+{
+  "parameters": [
+    "org_1",
+    3,
+  ],
+  "sql": "WITH "orders" AS (
+<orders fixture>
+),
+"customers" AS (
+<customers fixture>
+)
+SELECT
+          "orders"."Id" AS "id",
+          "c"."Tier" AS "tier"
+        FROM "orders"
+        LEFT JOIN "customers" AS "c" ON ("orders"."Customer" = "c"."Name" AND "orders"."OrgId" = "c"."OrgId")
+        WHERE "orders"."OrgId" = ?
+          AND "orders"."Id" >= ?
+        ORDER BY "id" ASC",
+}
+`;
+
+exports[`core SQL (sqlite) > like-case 1`] = `
+{
+  "parameters": [
+    "org_1",
+    "ACME",
+  ],
+  "sql": "WITH "orders" AS (
+<orders fixture>
+),
+"customers" AS (
+<customers fixture>
+)
+SELECT
+          "orders"."Id" AS "id"
+        FROM "orders"
+        WHERE "orders"."OrgId" = ?
+          AND "orders"."Customer" LIKE ? ESCAPE '\\'
+        ORDER BY "id" ASC",
+}
+`;
+
+exports[`core SQL (sqlite) > like-escape 1`] = `
+{
+  "parameters": [
+    "org\\_1",
+    "it\\_s",
+  ],
+  "sql": "WITH "orders" AS (
+<orders fixture>
+),
+"customers" AS (
+<customers fixture>
+)
+SELECT
+          "orders"."Id" AS "id"
+        FROM "orders"
+        WHERE "orders"."OrgId" LIKE ? ESCAPE '\\'
+          AND "orders"."Note" NOT LIKE ? ESCAPE '\\'
+        ORDER BY "id" ASC",
+}
+`;
+
+exports[`core SQL (sqlite) > limit-offset 1`] = `
+{
+  "parameters": [
+    "org_1",
+  ],
+  "sql": "WITH "orders" AS (
+<orders fixture>
+),
+"customers" AS (
+<customers fixture>
+)
+SELECT
+          "orders"."Id" AS "id"
+        FROM "orders"
+        WHERE "orders"."OrgId" = ?
+        ORDER BY "id" DESC
+        LIMIT 2
+        OFFSET 1",
+}
+`;
+
+exports[`core SQL (sqlite) > null-and-range 1`] = `
+{
+  "parameters": [
+    "org_1",
+    5,
+    20,
+    3,
+    3,
+  ],
+  "sql": "WITH "orders" AS (
+<orders fixture>
+),
+"customers" AS (
+<customers fixture>
+)
+SELECT
+          "orders"."Id" AS "id"
+        FROM "orders"
+        WHERE "orders"."OrgId" = ?
+          AND "orders"."Note" IS NULL
+          AND "orders"."Amount" BETWEEN ? AND ?
+          AND "orders"."Id" NOT BETWEEN ? AND ?
+        ORDER BY "id" ASC",
+}
+`;
+
+exports[`core SQL (sqlite) > nulls-and-literals 1`] = `
+{
+  "parameters": [
+    "org_1",
+    2,
+    4,
+  ],
+  "sql": "WITH "orders" AS (
+<orders fixture>
+),
+"customers" AS (
+<customers fixture>
+)
+SELECT
+          "orders"."Id" AS "id",
+          "orders"."Note" AS "note",
+          coalesce("orders"."Note", '-') AS "shown",
+          'x''y' AS "label"
+        FROM "orders"
+        WHERE "orders"."OrgId" = ?
+          AND "orders"."Id" IN (?, ?)
+        ORDER BY "id" ASC",
+}
+`;
+
+exports[`core SQL (sqlite) > params 1`] = `
+{
+  "parameters": [
+    "org_1",
+    7,
+    19.5,
+    "2026-01-01 00:00:00.000",
+  ],
+  "sql": "WITH "orders" AS (
+<orders fixture>
+),
+"customers" AS (
+<customers fixture>
+)
+SELECT
+          "orders"."Id" AS "id",
+          "orders"."Created" AS "created"
+        FROM "orders"
+        WHERE "orders"."OrgId" = ?
+          AND "orders"."Amount" >= ?
+          AND "orders"."Amount" < ?
+          AND "orders"."Created" >= ?
+        ORDER BY "id" ASC",
+}
+`;
+
+exports[`core SQL (sqlite) > patterns-and-lists 1`] = `
+{
+  "parameters": [
+    "org_1",
+    "%e%",
+    "i%",
+    "pa%",
+    "open",
+    3,
+    2,
+  ],
+  "sql": "WITH "orders" AS (
+<orders fixture>
+),
+"customers" AS (
+<customers fixture>
+)
+SELECT
+          "orders"."Id" AS "id"
+        FROM "orders"
+        WHERE "orders"."OrgId" = ?
+          AND ("orders"."Customer" LIKE ? ESCAPE '\\' AND "orders"."Customer" NOT LIKE ? ESCAPE '\\')
+          AND ("orders"."Status" LIKE ? ESCAPE '\\' OR "orders"."Status" IN (?))
+          AND "orders"."Id" NOT IN (?)
+          AND NOT ("orders"."Id" = ?)
+        ORDER BY "id" ASC",
+}
+`;
+
+exports[`core SQL (sqlite) > route-and-cross-tenant 1`] = `
+{
+  "parameters": [],
+  "sql": "WITH "orders" AS (
+<orders fixture>
+),
+"customers" AS (
+<customers fixture>
+)
+SELECT
+          count(*) AS "orders"
+        FROM "orders"",
+}
+`;
+
+exports[`core SQL (sqlite) > select-columns 1`] = `
+{
+  "parameters": [
+    "org_1",
+    "paid",
+  ],
+  "sql": "WITH "orders" AS (
+<orders fixture>
+),
+"customers" AS (
+<customers fixture>
+)
+SELECT
+          "orders"."Id" AS "Id",
+          "orders"."Customer" AS "Customer"
+        FROM "orders"
+        WHERE "orders"."OrgId" = ?
+          AND "orders"."Status" = ?
+        ORDER BY "Id" ASC",
+}
+`;
+
+exports[`core SQL (sqlite) > selected-param 1`] = `
+{
+  "parameters": [
+    1,
+    "org_1",
+    1,
+  ],
+  "sql": "WITH "orders" AS (
+<orders fixture>
+),
+"customers" AS (
+<customers fixture>
+)
+SELECT
+          "orders"."Id" AS "id",
+          ? AS "flagged"
+        FROM "orders"
+        WHERE "orders"."OrgId" = ?
+          AND "orders"."Id" = ?",
+}
+`;
+
+exports[`core SQL (sqlite) > union 1`] = `
+{
+  "parameters": [
+    "org_1",
+    "paid",
+    "org_1",
+    "open",
+    "org_1",
+    "void",
+  ],
+  "sql": "SELECT * FROM (
+SELECT * FROM (
+WITH "orders" AS (
+<orders fixture>
+),
+"customers" AS (
+<customers fixture>
+)
+SELECT
+          "orders"."Status" AS "status",
+          sum("orders"."Amount") AS "total"
+        FROM "orders"
+        WHERE "orders"."OrgId" = ?
+          AND "orders"."Status" = ?
+        GROUP BY 1
+) AS "__union_branch"
+UNION ALL
+SELECT * FROM (
+WITH "orders" AS (
+<orders fixture>
+),
+"customers" AS (
+<customers fixture>
+)
+SELECT
+          "orders"."Status" AS "status",
+          sum("orders"."Amount") AS "total"
+        FROM "orders"
+        WHERE "orders"."OrgId" = ?
+          AND "orders"."Status" = ?
+        GROUP BY 1
+) AS "__union_branch"
+UNION ALL
+SELECT * FROM (
+WITH "orders" AS (
+<orders fixture>
+),
+"customers" AS (
+<customers fixture>
+)
+SELECT
+          "orders"."Status" AS "status",
+          sum("orders"."Amount") AS "total"
+        FROM "orders"
+        WHERE "orders"."OrgId" = ?
+          AND "orders"."Status" = ?
+        GROUP BY 1
+) AS "__union_branch"
+) AS "__union"
+ORDER BY "total" DESC
+LIMIT 2
+OFFSET 1",
+}
+`;
+
+exports[`core SQL (sqlite) > union-cross-tenant 1`] = `
+{
+  "parameters": [],
+  "sql": "SELECT * FROM (
+WITH "orders" AS (
+<orders fixture>
+),
+"customers" AS (
+<customers fixture>
+)
+SELECT
+          count(*) AS "orders"
+        FROM "orders"
+) AS "__union_branch"
+UNION ALL
+SELECT * FROM (
+WITH "orders" AS (
+<orders fixture>
+),
+"customers" AS (
+<customers fixture>
+)
+SELECT
+          count(*) AS "orders"
+        FROM "orders"
+) AS "__union_branch"",
 }
 `;
