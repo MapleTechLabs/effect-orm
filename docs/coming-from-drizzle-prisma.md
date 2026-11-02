@@ -1,8 +1,10 @@
 # Coming from Drizzle or Prisma
 
-This page maps the Prisma and Drizzle operations you use every day to effect-orm. It uses
-Postgres, the one dialect here with transactions and `RETURNING`. Each row says where effect-orm
-has the operation today. "Planned: #N" names an open pull request that adds it; until it merges,
+This page maps the Prisma and Drizzle operations you use every day to effect-orm. Its examples
+use Postgres. SQLite and Cloudflare D1 (`@maple-dev/effect-orm/sqlite`) have the same builder,
+`RETURNING` and `ON CONFLICT`; where a row differs on them, it says so, and
+[SQLite and Cloudflare D1](./sqlite.md) has the details. Each row says where effect-orm has the
+operation today. "Planned: #N" names an open pull request that adds it; until it merges,
 use the workaround in the same row.
 
 Two things change for every operation:
@@ -26,24 +28,24 @@ Two things change for every operation:
 | `upsert` | `.onConflictDoUpdate({ target, set })` | `.onConflictDoUpdate({ target, set })`. `excluded` values in `set`: planned: #112 |
 | `update`, `updateMany` | `db.update(t).set().where()` | `PG.update(T).set(...).where(...)`; a write with no `where` or `allRows()` does not compile ([Updating and deleting](./updates-and-deletes.md)) |
 | `delete`, `deleteMany` | `db.delete(t).where()` | `PG.deleteFrom(T).where(...)` |
-| `$transaction(async (tx) => ...)` | `db.transaction(async (tx) => ...)` | `effect.pipe(Db.transaction())`; no `tx` handle, nesting is a savepoint ([Transactions](./database.md#transactions)) |
-| `$transaction([a, b])` | `db.batch([a, b])` | Run them inside one `Db.transaction`. There is no single-round-trip batch |
+| `$transaction(async (tx) => ...)` | `db.transaction(async (tx) => ...)` | `effect.pipe(Db.transaction())`; no `tx` handle, nesting is a savepoint ([Transactions](./database.md#transactions)). D1 has no interactive transactions: there `Db.transaction` fails with `TransactionUnsupported` |
+| `$transaction([a, b])` | `db.batch([a, b])` | Run them inside one `Db.transaction`. There is no single-round-trip batch, and no wrapper for D1's `batch` yet ([D1](./sqlite.md#execute-on-d1)) |
 | `$queryRaw`, `$executeRaw` | `` db.execute(sql`...`) `` | `` Db.query(Db.sql`...`, schema) ``, `` Db.execute(Db.sql`...`) ``; every `${value}` is bound |
-| `SELECT ... FOR UPDATE` by `$queryRaw` | `.for("update")` | `.forUpdate()`, `.forNoKeyUpdate()`, `.forShare()` ([Building queries](./queries.md)) |
+| `SELECT ... FOR UPDATE` by `$queryRaw` | `.for("update")` | `.forUpdate()`, `.forNoKeyUpdate()`, `.forShare()` on Postgres ([Building queries](./queries.md)); SQLite has no row locks |
 | `P2002` (unique violation) | `DrizzleQueryError` and a `cause.code` check | `DatabaseError` with `reason: "UniqueViolation"` and `sqlState`. Tagged constraint errors: planned: #95 |
 | `cursor`, `skip: 1`, `take` | `where(gt(t.id, cursor))` | Keyset by hand: `.where(($) => [$.key.gt(cursor)]).orderBy(...).limit(n)`. `Db.paginate`: planned: #108 |
-| `contains`, `mode: "insensitive"` | `ilike(t.c, "%x%")` | `$.c.ilike("%x%")`; escape `%` and `_` in user input yourself. `contains` / `startsWith` / `endsWith` with escaping: planned: #114 |
+| `contains`, `mode: "insensitive"` | `ilike(t.c, "%x%")` | `$.c.ilike("%x%")`; escape `%` and `_` in user input yourself. SQLite and D1 have no `ilike`, and their `like` ignores ASCII case. `contains` / `startsWith` / `endsWith` with escaping: planned: #114 |
 | `Json` field, `path` filters | `jsonb()`, `` sql`->>` `` | `PG.jsonb(schema)` decodes the document with a Schema; `PG.jsonText($.c, "key")` reads one key. Typed paths, `@>`, `jsonb_set`: planned: #115 |
 | `@default(uuid())`, `@default(now())` | `.defaultRandom()`, `.defaultNow()` | `PG.column(type, { defaultExpr: "gen_random_uuid()" })`, `{ defaultExpr: "now()" }` |
 | `@default(cuid())`, `@updatedAt` | `.$defaultFn()`, `.$onUpdate()` | Client-side defaults and `onUpdate`: planned: #111. Today: pass the id in the insert, and `set` `PG.now()` in each update |
 | `@map("org_id")`, `@@map` | `text("org_id")` | `PG.column(PG.text, { name: "org_id" })`; the table name is the first argument of `PG.table`. ClickHouse column names and a `casing` option: planned: #109 |
-| `@@unique`, `@@index`, relations with `onDelete` | `unique()`, `index()`, `references()` | `uniqueConstraints`, `indexes`, `foreignKeys` on `PG.table` ([Postgres migrations](./migrations.md#postgres)) |
+| `@@unique`, `@@index`, relations with `onDelete` | `unique()`, `index()`, `references()` | `uniqueConstraints`, `indexes`, `foreignKeys` on `PG.table` ([Postgres migrations](./migrations.md#postgres)). `SQLite.table` declares keys and indexes, not foreign keys ([SQLite](./sqlite.md#declare-a-table-with-its-ddl)) |
 | `prisma db seed` | `drizzle-seed` | `PG.insertInto(T).values(rows)` in a script. Rows generated from column Schemas: planned: #113 |
-| `prisma migrate dev` / `deploy` | `drizzle-kit generate` / `migrate` | `effect-orm generate`, `effect-orm migrate` ([Schema and migrations](./migrations.md)). A drizzle-kit folder can be adopted |
-| `prisma db pull` | `drizzle-kit pull` | `effect-orm pull` for ClickHouse only; Postgres is not supported yet |
+| `prisma migrate dev` / `deploy` | `drizzle-kit generate` / `migrate` | `effect-orm generate`, `effect-orm migrate` ([Schema and migrations](./migrations.md)). A drizzle-kit folder can be adopted. SQLite has `generate` only; a drizzle-kit-compatible tool applies its folders ([SQLite migrations](./migrations.md#sqlite)) |
+| `prisma db pull` | `drizzle-kit pull` | `effect-orm pull` for ClickHouse only; Postgres and SQLite are not supported yet |
 | `prisma migrate diff` (drift) | none | `effect-orm verify` compares the database with the last applied snapshot. Compare with the table definitions (`verify --schema`): planned: #107 |
 | `prisma migrate status` | `drizzle-kit check` | `effect-orm status`; `effect-orm check` validates the migrations folder, as `drizzle-kit check` does |
-| A mocked client in unit tests | none | Run on PGlite, as below. A `Database` with no server: planned: #93 |
+| A mocked client in unit tests | a mocked `db` | Run on PGlite, as below, or on in-memory SQLite. A `Database` with no server: planned: #93 |
 
 ## The table above, as one program
 
@@ -247,7 +249,7 @@ drop that row, as it would in SQL.
 
 - **Effect services and Layers.** `Database` is a service. You build it with
   `Db.layerSqlClient` over any Effect `SqlClient` (`@effect/sql-pg`, `@effect/sql-pglite`,
-  `@effect/sql-clickhouse`), and provide it once. A test swaps the client layer, not a mock.
+  `@effect/sql-clickhouse`, `@effect/sql-sqlite-node`, `@effect/sql-d1`), and provide it once. A test swaps the client layer, not a mock.
 - **Typed errors.** A failed statement is a `DatabaseError` with the driver's `reason` and the
   server's `sqlState`. COMMIT and ROLLBACK failures are their own errors. A helper marked
   `Db.requireTransaction` does not compile outside `Db.transaction`, so a missing transaction is
@@ -263,9 +265,9 @@ drop that row, as it would in SQL.
 
 ## A CAFE Worker
 
-CAFE is Cloudflare, Alchemy, Foldkit and Effect. A full CAFE example has D1 and Durable Object
-SQLite, which wait for the SQLite and D1 dialects (#49). Until then, a Worker can reach Postgres
-through [Hyperdrive](https://developers.cloudflare.com/hyperdrive/). The handler below does not
+CAFE is Cloudflare, Alchemy, Foldkit and Effect. A Worker can use D1 through `d1Dialect` and
+`@effect/sql-d1` ([Execute on D1](./sqlite.md#execute-on-d1)), or reach Postgres through
+[Hyperdrive](https://developers.cloudflare.com/hyperdrive/), as below. The handler below does not
 know which client it runs on: it takes a function that builds a `Database` for each request.
 
 ```ts title="cafe-worker.ts"
@@ -358,6 +360,5 @@ export const anonymous = (await get({})).status
 await origin.close()
 ```
 
-The Alchemy stack (`alchemy.run.ts` with the Worker and its Hyperdrive binding) and a Foldkit UI
-are not in this guide yet. They come with the D1 example, so that one stack shows the whole
-CAFE layout.
+The Alchemy stack (`alchemy.run.ts` with the Worker and its Hyperdrive or D1 binding), Durable
+Object SQLite storage and a Foldkit UI are not in this guide yet.
