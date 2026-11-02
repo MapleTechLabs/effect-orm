@@ -259,13 +259,14 @@ describe("ClickhouseHttpClient", () => {
 			return Effect.gen(function* () {
 				const sql = yield* SqlClient.SqlClient
 				yield* sql.unsafe("SELECT 1")
-				const span = spans.find((s) => s.name === "sql.execute")
+				const span = spans.find((s) => s.attributes.has("effect.sql.method"))
 				assert(span !== undefined)
-				return Object.fromEntries(span.attributes)
+				return { name: span.name, ...Object.fromEntries(span.attributes) }
 			}).pipe(Effect.provide(live), Effect.withTracer(recording))
 		}
 		return Effect.gen(function* () {
 			expect(yield* run({})).toMatchObject({
+				name: "analytics",
 				"db.system.name": "clickhouse",
 				"db.namespace": "analytics",
 				"server.address": "clickhouse.example",
