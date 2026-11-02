@@ -237,7 +237,23 @@ when a decoded row cannot be written back to its wire shape. Fields: `message`, 
 #### `CompiledQueryDecodeError`
 
 Tag `"@maple-dev/effect-orm/CompiledQueryDecodeError"`. Fails the `decodeRows` /
-`decodeFirstRow` Effect. Fields: `message`, `rowIndex`, `cause`.
+`decodeFirstRow` Effect and `Db.query` with a row schema. Fields: `message`, `rowIndex`,
+`dialect?`, `collection?`, `column?` (the column alias of the first issue) and `issues`
+(`DecodeIssue[]`). None of them holds a row value, so the error is safe to log. The Schema
+error is on the non-enumerable `schemaError` property, not on `cause`, because it can hold row
+values. See [Logging a decode failure](./decoding-results.md#logging-a-decode-failure).
+
+#### `DecodeIssue`
+
+`{ path, kind, expected? }`: one issue of a `CompiledQueryDecodeError`. `path` is the Schema
+path from the row (its first segment is the column alias), `kind` the Schema issue tag
+(`InvalidType`, `MissingKey`, `Filter`, `Encoding`, …), `expected` what the schema AST expects.
+
+#### `formatDecodeError(error, options?)`
+
+A one-line summary of a `CompiledQueryDecodeError` for a log: dialect, table, row index, and
+the path and expected type of each issue. `FormatDecodeErrorOptions.verbose: true` appends the
+raw Schema error message, which can hold row values.
 
 #### `SchemaDefinitionError`
 

@@ -53,8 +53,11 @@ assuming a typed query is optimized. See [Recipes](./recipes.md#time-buckets-ove
 
 ## Decode failures and lost information
 
-`CompiledQueryDecodeError` reports `rowIndex`. Inspect that row's field names and wire values
-alongside `compiled.rowSchemaSource`, `compiled.untypedColumns`, and `compiled.rowSchemaMismatch`.
+`CompiledQueryDecodeError` reports `rowIndex`, the `column` and the `issues` (path and expected
+type). It does not hold the wire value. Inspect that row's field names and wire values alongside
+`compiled.rowSchemaSource`, `compiled.untypedColumns`, and `compiled.rowSchemaMismatch`. For the
+raw Schema message, read `error.schemaError` or `formatDecodeError(error, { verbose: true })`
+locally. Do not send it to shared logs: it can hold row values.
 
 | Symptom                              | Check                                                                                                                                         |
 | ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------- |

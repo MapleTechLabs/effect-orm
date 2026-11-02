@@ -169,7 +169,9 @@ it("rejects a stored value that does not match the derived row schema", async ()
 		return yield* Effect.exit(db.run(SQLite.from(Items).select()))
 	}))
 	if (!Exit.isFailure(exit)) throw new Error("invalid database row was accepted")
-	expect(Cause.findError(exit.cause)).toMatchObject({ success: { _tag: "@maple-dev/effect-orm/CompiledQueryDecodeError" } })
+	expect(Cause.findError(exit.cause)).toMatchObject({
+		success: { _tag: "@maple-dev/effect-orm/CompiledQueryDecodeError", dialect: "sqlite", collection: "items", column: "enabled" },
+	})
 })
 
 it("rolls back failed SQLite transactions and nested savepoints", async () => {

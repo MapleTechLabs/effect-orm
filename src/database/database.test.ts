@@ -103,6 +103,18 @@ layer(Live, { excludeTestServices: true })("Database on PGlite", (it) => {
 		}),
 	)
 
+	it.effect("a query decode error names the dialect and the column, not the value", () =>
+		Effect.gen(function* () {
+			const Row = Schema.Struct({ phone: Schema.Number })
+			const error = yield* Effect.flip(Db.query(Db.sql`SELECT '+1-555-0100' AS phone`, Row))
+			assert(error instanceof CH.CompiledQueryDecodeError)
+			expect(error.dialect).toBe("postgres")
+			expect(error.column).toBe("phone")
+			expect(error.message).toBe('row 0 did not match the schema: at ["phone"] expected number')
+			expect(Cause.pretty(Cause.fail(error))).not.toContain("555-0100")
+		}),
+	)
+
 	it.effect("refuses a query compiled for another dialect", () =>
 		Effect.gen(function* () {
 			// The root compile is ClickHouse's.
