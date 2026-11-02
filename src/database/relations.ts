@@ -7,7 +7,7 @@
 // See design/relations.md for why this and not JSON aggregation.
 
 import { Effect } from "effect"
-import type { CompiledQueryDecodeError } from "../ch/compile"
+import { compileCH, type CompiledQueryDecodeError } from "../ch/compile"
 import { QueryBuilderDefect, type QueryBuilderError } from "../ch/errors"
 import { and, lit, makeCond, makeExpr, not, type Condition, type Expr, type ParamsIn } from "../ch/expr"
 import { builtins } from "../ch/functions/builtin"
@@ -19,7 +19,7 @@ import { custom, type ColumnDefs, type InferTS } from "../ch/types"
 import { PgNumber } from "../pg/types"
 import { fail } from "../ch/failure"
 import { known, raw } from "../sql/sql-fragment"
-import { Database } from "./database"
+import { Database, type DatabaseApi } from "./database"
 import type { DatabaseError } from "./errors"
 
 type AnyTable = Table<string, any, any, any>
@@ -347,6 +347,12 @@ const distinct = (values: ReadonlyArray<unknown>): Array<unknown> => [
 	...new Set(values.filter((value) => value !== null && value !== undefined)),
 ]
 
+const chunks = <A>(values: ReadonlyArray<A>, size: number): Array<ReadonlyArray<A>> => {
+	const out: Array<ReadonlyArray<A>> = []
+	for (let i = 0; i < values.length; i += size) out.push(values.slice(i, i + size))
+	return out
+}
+
 const levelQuery = (
 	tables: RelationTables,
 	relations: Relations,
@@ -382,6 +388,29 @@ const keyMatch = (parent: AnyTable, target: AnyTable, relation: Relation, rows: 
 	]
 }
 
+/**
+ * Run `queryFor` over `keys`, split so each statement fits the dialect's
+ * bound-value limit (D1: 100) next to the level's other bindings. Each key
+ * lands in one batch, so the rows of one parent and their order are kept.
+ */
+const runBatched = <A>(
+	db: DatabaseApi,
+	keys: ReadonlyArray<unknown>,
+	queryFor: (batch: ReadonlyArray<unknown>) => CHQuery<any, any, any, any>,
+): Effect.Effect<ReadonlyArray<A>, FindError> =>
+	Effect.gen(function* () {
+		let batches: ReadonlyArray<ReadonlyArray<unknown>> = [keys]
+		const limit = db.dialect.params._tag === "bind" ? db.dialect.params.maxParameters : undefined
+		if (limit !== undefined && keys.length > 1) {
+			const one = yield* compileCH(queryFor(keys.slice(0, 1)) as any, undefined, { dialect: db.dialect })
+			const size = Math.max(1, limit - (one.parameters.length - 1))
+			if (keys.length > size) batches = chunks(keys, size)
+		}
+		const out: Array<A> = []
+		for (const batch of batches) out.push(...((yield* db.run(queryFor(batch) as any)) as ReadonlyArray<A>))
+		return out
+	})
+
 const relationOf = (relations: Relations, key: string, name: string): Effect.Effect<Relation> => {
 	const relation = relations[key]?.[name]
 	return relation === undefined ? Effect.die(new Error(`findMany: ${key} has no relation named ${name}`)) : Effect.succeed(relation)
@@ -414,8 +443,9 @@ const attach = (
 			const keys = distinct(rows.map((row) => row[relation.from]))
 			let children: ReadonlyArray<Row> = []
 			if (keys.length > 0) {
-				const query = levelQuery(tables, relations, relation.target, nested, keyMatch(parent, target, relation, rows, keys), crossTenant)
-				const decoded = (yield* db.run(query as any)) as ReadonlyArray<Row>
+				const decoded = yield* runBatched<Row>(db, keys, (batch) =>
+					levelQuery(tables, relations, relation.target, nested, keyMatch(parent, target, relation, rows, batch), crossTenant),
+				)
 				children = yield* attach(tables, relations, relation.target, decoded, nested, crossTenant)
 			}
 			const byKey = new Map<unknown, Array<Row>>()
@@ -437,15 +467,15 @@ const attach = (
 			if (keys.length > 0) {
 				// `SELECT <to>, count(*) … WHERE <to> IN (<keys>) GROUP BY <to>`: the
 				// same key match and tenant pin as a loaded level.
-				const match = keyMatch(parent, target, relation, rows, keys)
-				let query: CHQuery<any, any, any, any> = from(target as Table<string, ColumnDefs>)
-					.select(($: any) => ({ key: $[relation.to], n: countAll() }))
-					.where(($: any) => [...match($), ...(where?.($, relatedOf(tables, relations, relation.target, $)) ?? [])])
-					.groupBy("key" as never)
-				if (crossTenant) query = query.crossTenant()
-				for (const row of (yield* db.run(query as any)) as ReadonlyArray<{ key: unknown; n: number }>) {
-					byKey.set(row.key, row.n)
-				}
+				const grouped = yield* runBatched<{ key: unknown; n: number }>(db, keys, (batch) => {
+					const match = keyMatch(parent, target, relation, rows, batch)
+					const query: CHQuery<any, any, any, any> = from(target as Table<string, ColumnDefs>)
+						.select(($: any) => ({ key: $[relation.to], n: countAll() }))
+						.where(($: any) => [...match($), ...(where?.($, relatedOf(tables, relations, relation.target, $)) ?? [])])
+						.groupBy("key" as never)
+					return crossTenant ? query.crossTenant() : query
+				})
+				for (const row of grouped) byKey.set(row.key, row.n)
 			}
 			counts[name] = byKey
 		}

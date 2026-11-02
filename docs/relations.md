@@ -95,8 +95,10 @@ The levels are separate statements. Outside a transaction, a write from another 
 land between two of them. Run `findMany` inside [`Db.transaction`](./database.md#transactions)
 with `isolationLevel: "repeatable read"` for one snapshot across all levels.
 
-All keys of a level go into one `IN` list. Postgres allows at most 65,535 bound values in one
-statement, so keep the top level paged with `limit`.
+A level's keys go into one `IN` list when they fit the dialect's bound-value limit (Postgres
+65,535, SQLite 32,766, D1 100). Past it the level is split into several `IN` statements, each
+within the limit, and their rows are joined before grouping, so the result is the same. On D1
+a level with 250 keys sends three statements. Keep the top level paged with `limit`.
 
 ## Tenant scope on every level
 

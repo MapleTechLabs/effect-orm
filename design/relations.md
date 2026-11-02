@@ -56,10 +56,11 @@ Why:
    understands. A nested JSON subquery would need correlated-subquery evidence through
    `jsonb_agg`, which the analysis does not have yet.
 3. **Every dialect.** The SQL is only `IN (...)`, so the same code runs on Postgres, on
-   ClickHouse, and later on SQLite / D1 and MySQL. JSON aggregation needs a different function
+   ClickHouse, SQLite and D1, and later on MySQL. JSON aggregation needs a different function
    set per dialect, and ClickHouse has no `jsonb_agg`.
 4. **The statement count is fixed.** It is the depth of the `with` tree, not the row count, so
-   there is no N+1.
+   there is no N+1. The one exception is a level whose keys pass the dialect's bound-value limit
+   (see "Long `IN` lists" below).
 
 The costs:
 
@@ -67,9 +68,10 @@ The costs:
   small. JSON aggregation is better on a slow link.
 - **No single snapshot.** Outside a transaction, a write can land between two levels. The docs
   say to use `Db.transaction({ isolationLevel: "repeatable read" })`. `findMany` does not open a
-  transaction itself: ClickHouse has none, and the caller may already be in one.
-- **Long `IN` lists.** All keys of a level are in one list. Postgres has a limit of 65,535 bound
-  values. Chunking belongs with #57 (parameter limits).
+  transaction itself: ClickHouse and D1 have none, and the caller may already be in one.
+- **Long `IN` lists.** A level's keys are split into batches that fit the dialect's
+  `maxParameters` next to the level's other bindings (D1 allows 100), one statement per batch.
+  Each parent key is in one batch, so the rows of one parent and their order do not change.
 
 JSON aggregation can come later as a second strategy behind the same API, per dialect, once the
 column types have JSON codecs. The result type and the tenant rule would not change.
@@ -108,7 +110,7 @@ grandchild reached through a shared table.
 | Relation filters in `update` / `delete` | Their accessor is not qualified, so there is no alias to correlate on; refused |
 | `orderBy` a relation count | Select `count()` on a builder query and order by its alias |
 | Params in nested `where` | `findMany` takes no params; values go in as literals |
-| SQLite, MySQL, D1 | Not on main yet; the SQL here is plain `IN`, so no dialect work is expected |
+| MySQL | Not on main yet; the SQL here is plain `IN`, `EXISTS` and `count(*)`, so no dialect work is expected |
 
 ## 6. Relation filters and counts
 
