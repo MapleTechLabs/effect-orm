@@ -4,6 +4,7 @@ import { type DateTime, Schema } from "effect"
 import { expectTypeOf } from "expect-type"
 import * as CH from "./index"
 import * as CHD from "../clickhouse"
+import * as SQLite from "../sqlite"
 
 const Spans = CHD.table("spans", {
 	columns: {
@@ -63,3 +64,17 @@ expectTypeOf<CH.TableSchemas<typeof Plain>["insert"]["Type"]>().toEqualTypeOf<{
 // A computed column is not part of an insert row.
 // @ts-expect-error Day is computed
 const withDay: typeof schemas.insert.Type = { OrgId: "o", At: {} as DateTime.Utc, Day: "2026-01-01" }
+
+// A SQLite table: a defaulted column is optional, and a decoded insert row is a row `values` takes.
+const Notes = SQLite.table("notes", {
+	columns: { id: SQLite.integer, pinned: SQLite.column(SQLite.boolean, { default: false }), at: SQLite.timestamp },
+	primaryKey: ["id"],
+})
+const notes = SQLite.tableSchemas(Notes)
+expectTypeOf<typeof notes.insert.Type>().toEqualTypeOf<{
+	readonly id: number
+	readonly at: DateTime.Utc
+	readonly pinned?: boolean | undefined
+}>()
+declare const note: typeof notes.insert.Type
+SQLite.insertInto(Notes).values(note)

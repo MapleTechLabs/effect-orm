@@ -1,8 +1,13 @@
+import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient"
 import { describe, expect, it } from "@effect/vitest"
-import { DateTime, Schema } from "effect"
+import { DateTime, Effect, Schema } from "effect"
+import * as SqlClient from "effect/sql/SqlClient"
 import * as CH from "./index"
 import * as CHD from "../clickhouse"
+import * as Db from "../database"
 import * as PG from "../postgres"
+import { renderSqliteSchema, sqliteEntitiesOf } from "../schema"
+import * as SQLite from "../sqlite"
 
 const Spans = CHD.table("spans", {
 	columns: {
@@ -103,4 +108,56 @@ describe("tableSchemas", () => {
 			}),
 		).toEqual({ id: 1, orgId: "o", createdAt: "2026-01-01T00:00:00.000Z", body: { path: "/" } })
 	})
+
+	// SQLite stores booleans as 0/1 and timestamps and JSON as text, so `select` and `insert` read
+	// those wire forms while `json` / `jsonCreate` read plain JSON.
+	const Notes = SQLite.table("notes", {
+		columns: {
+			id: SQLite.integer,
+			orgId: SQLite.column(SQLite.text, { name: "org_id" }),
+			pinned: SQLite.column(SQLite.boolean, { default: false }),
+			at: SQLite.timestamp,
+			meta: SQLite.nullable(SQLite.json(Schema.Struct({ tag: Schema.String }))),
+		},
+		primaryKey: ["id"],
+	})
+	const at = DateTime.makeUnsafe("2026-01-01T00:00:00.250Z")
+
+	it("reads a SQLite table: wire forms on select and insert, plain JSON on the json variants", () => {
+		const { select, insert, json, jsonCreate } = SQLite.tableSchemas(Notes)
+		expect(Schema.decodeUnknownSync(select)({ id: 1, orgId: "o", pinned: 1, at: "2026-01-01 00:00:00.250", meta: '{"tag":"a"}' })).toEqual({
+			id: 1,
+			orgId: "o",
+			pinned: true,
+			at,
+			meta: { tag: "a" },
+		})
+		expect(Schema.decodeUnknownSync(insert)({ id: 1, orgId: "o", at: "2026-01-01 00:00:00.250" })).toEqual({ id: 1, orgId: "o", at })
+		expect(() => Schema.decodeUnknownSync(insert)({ id: 1.5, orgId: "o", at: "2026-01-01 00:00:00" })).toThrow(/id/)
+		expect(Schema.encodeSync(json)({ id: 1, orgId: "o", pinned: true, at, meta: { tag: "a" } })).toEqual({
+			id: 1,
+			orgId: "o",
+			pinned: true,
+			at: "2026-01-01T00:00:00.250Z",
+			meta: { tag: "a" },
+		})
+		expect(Schema.decodeUnknownSync(jsonCreate)({ id: 1, orgId: "o", at: "2026-01-01T00:00:00.250Z", meta: null })).toEqual({
+			id: 1,
+			orgId: "o",
+			at,
+			meta: null,
+		})
+	})
+
+	it.effect("a SQLite jsonCreate body inserts, and select decodes the row read back", () =>
+		Effect.gen(function* () {
+			const db = Db.fromSqlClient(yield* SqlClient.SqlClient, { dialect: SQLite.sqliteDialect })
+			for (const sql of yield* Effect.map(sqliteEntitiesOf([Notes]), renderSqliteSchema)) yield* db.execute({ sql })
+			const { jsonCreate } = SQLite.tableSchemas(Notes)
+			const body = Schema.decodeUnknownSync(jsonCreate)({ id: 1, orgId: "o", at: "2026-01-01T00:00:00.250Z", meta: { tag: "a" } })
+			yield* db.run(SQLite.insertInto(Notes).values(body))
+			const rows = yield* db.run(SQLite.from(Notes).select())
+			expect(rows).toEqual([{ id: 1, orgId: "o", pinned: false, at, meta: { tag: "a" } }])
+		}).pipe(Effect.provide(SqliteClient.layer({ filename: ":memory:" }))),
+	)
 })
