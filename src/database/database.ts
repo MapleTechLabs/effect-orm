@@ -155,6 +155,13 @@ export interface FromSqlClientOptions {
 	 */
 	readonly observe?: (statement: Statement) => Effect.Effect<void>
 	/**
+	 * Keep the SQL driver's own span inside each statement span. Off by default:
+	 * the statement span already carries the query text, so the driver's span is
+	 * a second span per statement with nothing new. Turn it on to also get what
+	 * only the driver records, such as `server.address` or connection waits.
+	 */
+	readonly driverSpans?: boolean
+	/**
 	 * Refuse, as a `TenantScopeViolation` defect, any compiled statement whose
 	 * `tenantScope` is `"cross-tenant"` unless it was declared with
 	 * `.crossTenant()`. Off by default. Plain SQL given to `query` and
@@ -208,6 +215,9 @@ export const fromSqlClient = (sql: SqlClient.SqlClient, options: FromSqlClientOp
 	const capabilities = dialect.transactions ?? noTransactions
 	const command = options.command ?? ((effect) => effect)
 	const observe = options.observe ?? (() => Effect.void)
+	// The statement span is the span: the driver's own runs untraced unless asked for.
+	const driver = <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>
+		options.driverSpans === true ? effect : Effect.withTracerEnabled(effect, false)
 	// Result names exactly as the server sent them: the compiled decoder reads
 	// the aliases it wrote.
 	const raw = sql.withoutTransforms()
@@ -249,7 +259,7 @@ export const fromSqlClient = (sql: SqlClient.SqlClient, options: FromSqlClientOp
 			dialect,
 			statement,
 			guard(statement).pipe(
-				Effect.andThen(raw.unsafe<Record<string, unknown>>(statement.sql, statement.parameters ?? [])),
+				Effect.andThen(driver(raw.unsafe<Record<string, unknown>>(statement.sql, statement.parameters ?? []))),
 				Effect.map((rows): ReadonlyArray<Record<string, unknown>> => rows),
 				Effect.mapError(toDatabaseError(statement.sql)),
 			),
@@ -282,7 +292,7 @@ export const fromSqlClient = (sql: SqlClient.SqlClient, options: FromSqlClientOp
 				dialect,
 				resolved,
 				guard(resolved).pipe(
-					Effect.andThen(command(raw.unsafe(resolved.sql, resolved.parameters ?? []))),
+					Effect.andThen(driver(command(raw.unsafe(resolved.sql, resolved.parameters ?? [])))),
 					Effect.asVoid,
 					Effect.mapError(toDatabaseError(resolved.sql)),
 				),
