@@ -345,6 +345,11 @@ export const authors = (org: string, ids: ReadonlyArray<number>) =>
   different params never share a batch, so one statement never reads two tenants, and
   [`requireTenantScope`](./tenant-scoping.md#enforcing-it) checks each batch statement as it
   checks `run`.
+- **Bound-parameter limits.** On a dialect with a limit on the values one statement may
+  bind (D1: 100, Postgres: 65535), a large batch is split into statements that each fit,
+  with room for the query's own params. The statements run one after another on the
+  batch's connection. Each key is in exactly one of them, so its rows keep the query's
+  `ORDER BY`. ClickHouse inlines values and has no such limit.
 - **`limit` and `offset`** would apply to the whole batch, not to each key, so a query with
   either fails with `QueryBuilderError` and sends nothing.
 
@@ -352,7 +357,7 @@ The batch waits one `yieldNow`, the same as Effect's own resolvers, so the looku
 together: through `Effect.forEach` or `Effect.all` with concurrency, or in fibers forked in the
 same step. Lookups in sequence send one statement each.
 
-_(Backed by `Request batching on PGlite`, in `src/database/resolver.test.ts`: one statement for N lookups, tenants and transactions kept apart.)_
+_(Backed by `Request batching on PGlite`, in `src/database/resolver.test.ts`: one statement for N lookups, tenants and transactions kept apart; and `src/database/resolver.sqlite.test.ts`: a D1 batch over 100 bindings split into statements that fit.)_
 
 ## ClickHouse
 

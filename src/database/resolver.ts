@@ -12,7 +12,7 @@
 import { Cause, Context, Effect, Exit, MutableHashMap, Request, RequestResolver } from "effect"
 import * as SqlClient from "effect/sql/SqlClient"
 import type { NonEmptyArray } from "effect/Array"
-import type { CompiledQueryDecodeError } from "../ch/compile"
+import { compileCH, type CompiledQueryDecodeError } from "../ch/compile"
 import { QueryBuilderError } from "../ch/errors"
 import type { ParamsSatisfied } from "../ch/expr"
 import type { CHQuery, NeedsSelect } from "../ch/query"
@@ -116,12 +116,28 @@ const resolverFor = (query: CHQuery<any, any, any, any, any>, key: string) => {
 				for (const entry of entries) MutableHashMap.set(wanted, entry.request.key, true)
 				const values = Array.from(MutableHashMap.keys(wanted))
 				const db = yield* Database
-				const rows = yield* db.run(
-					query.where(($: any) => [$[key].in_(...values)]) as never,
-					entries[0].request.params as never,
-				)
+				const params = entries[0].request.params as Record<string, unknown>
+				// A dialect with a bound-parameter limit (D1: 100) would refuse one
+				// statement for a large batch, so the keys go in chunks that leave
+				// room for the params the query binds itself. Chunks run in turn, on
+				// the batch's own connection or transaction. Each key is in one
+				// chunk, so its rows keep the query's ORDER BY.
+				const style = db.dialect.params
+				let size = values.length
+				if (style._tag === "bind" && style.maxParameters !== undefined) {
+					const base = yield* compileCH(query as never, params as never, { dialect: db.dialect })
+					// One key binds one value; with no room left the first chunk
+					// fails to compile with the limit's own error.
+					size = Math.max(1, style.maxParameters - base.parameters.length)
+				}
+				const rows: Array<Record<string, unknown>> = []
+				for (let start = 0; start < values.length; start += size) {
+					const chunk = values.slice(start, start + size)
+					const sent = yield* db.run(query.where(($: any) => [$[key].in_(...chunk)]) as never, params as never)
+					for (const row of sent as ReadonlyArray<Record<string, unknown>>) rows.push(row)
+				}
 				const byKey = MutableHashMap.empty<unknown, Array<Record<string, unknown>>>()
-				for (const row of rows as ReadonlyArray<Record<string, unknown>>) {
+				for (const row of rows) {
 					const group = MutableHashMap.get(byKey, row[key])
 					if (group._tag === "Some") group.value.push(row)
 					else MutableHashMap.set(byKey, row[key], [row])
