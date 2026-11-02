@@ -7,7 +7,7 @@
 
 import { Effect, Option } from "effect"
 import { CheckViolation, DatabaseError, ForeignKeyViolation, NotNullViolation, TransactionCommitFailed, UniqueViolation, type ConstraintViolation } from "./errors"
-import { serverFieldOf } from "./sql-error"
+import { serverFieldOf, sqliteConstraintOf, type SqliteConstraint } from "./sql-error"
 
 type Kind = typeof UniqueViolation | typeof ForeignKeyViolation | typeof NotNullViolation | typeof CheckViolation
 
@@ -28,18 +28,56 @@ const fromClickHouseMessage = (message: string) => {
 	return match === null ? {} : { constraint: match[1], table: match[2] }
 }
 
+interface Named {
+	readonly constraint?: string | undefined
+	readonly table?: string | undefined
+	readonly column?: string | undefined
+}
+
+const namedByServer = (error: DatabaseError | TransactionCommitFailed): Named => {
+	const named = error.errorCode === undefined ? {} : fromClickHouseMessage(error.message)
+	return {
+		constraint: serverFieldOf(error.cause, "constraint") ?? named.constraint,
+		table: serverFieldOf(error.cause, "table") ?? named.table,
+		column: serverFieldOf(error.cause, "column"),
+	}
+}
+
+// SQLite names no unique index, only its columns: "UNIQUE constraint failed:
+// t.a, t.b", "NOT NULL constraint failed: t.a", "CHECK constraint failed: name"
+// (the expression when the CHECK has none), "FOREIGN KEY constraint failed".
+// D1 appends ": SQLITE_CONSTRAINT (extended: ...)". Effect's SQLite
+// `UniqueViolation` reason calls the column list its constraint, so this reads
+// the message rather than the reason.
+const fromSqliteMessage = (kind: SqliteConstraint, message: string): Named => {
+	const detail = /constraint failed: (.*?)(?:: SQLITE_CONSTRAINT\b.*)?$/.exec(message)?.[1]?.trim()
+	if (detail === undefined || detail.length === 0) return {}
+	if (kind === "CHECK") return { constraint: detail }
+	const columns = detail.split(", ").map((qualified) => /^(.+)\.([^.]+)$/.exec(qualified))
+	const table = columns[0]?.[1]
+	if (table === undefined || columns.some((column) => column?.[1] !== table)) return {}
+	// A column only when the key has just one.
+	return columns.length === 1 ? { table, column: columns[0]?.[2] } : { table }
+}
+
+const SQLITE_KINDS: Readonly<Record<SqliteConstraint, Kind>> = {
+	UNIQUE: UniqueViolation,
+	PRIMARYKEY: UniqueViolation,
+	FOREIGNKEY: ForeignKeyViolation,
+	NOTNULL: NotNullViolation,
+	CHECK: CheckViolation,
+}
+
 /**
  * The constraint violation `error` reports, if it is a `DatabaseError` or
  * `TransactionCommitFailed` for one. Anything else is `None`.
  */
 export const constraintViolation = (error: unknown): Option.Option<ConstraintViolation> => {
 	if (!(error instanceof DatabaseError || error instanceof TransactionCommitFailed)) return Option.none()
-	const Kind = kindOf(error)
+	const sqlite = sqliteConstraintOf(error.cause)
+	const Kind = sqlite === undefined ? kindOf(error) : SQLITE_KINDS[sqlite]
 	if (Kind === undefined) return Option.none()
-	const named = error.errorCode === undefined ? {} : fromClickHouseMessage(error.message)
-	const constraint = serverFieldOf(error.cause, "constraint") ?? named.constraint
-	const table = serverFieldOf(error.cause, "table") ?? named.table
-	const column = serverFieldOf(error.cause, "column")
+	const { constraint, table, column } = sqlite === undefined ? namedByServer(error) : fromSqliteMessage(sqlite, error.message)
 	return Option.some(
 		new Kind({
 			message: error.message,

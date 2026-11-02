@@ -76,6 +76,41 @@ export const serverFieldOf = (cause: unknown, field: "constraint" | "table" | "c
 	return undefined
 }
 
+// SQLite's extended result codes for the constraint kinds a caller branches on.
+const SQLITE_CONSTRAINT_CODES: Readonly<Record<number, SqliteConstraint>> = {
+	275: "CHECK",
+	787: "FOREIGNKEY",
+	1299: "NOTNULL",
+	1555: "PRIMARYKEY",
+	2067: "UNIQUE",
+}
+
+/** The kind of a failed SQLite constraint, as its extended result code names it. */
+export type SqliteConstraint = "UNIQUE" | "PRIMARYKEY" | "FOREIGNKEY" | "NOTNULL" | "CHECK"
+
+/**
+ * The SQLite constraint a driver error reports. `node:sqlite` (under
+ * `@effect/sql-sqlite-node`) keeps the extended result code as `errcode`; D1
+ * keeps only text, "... (extended: SQLITE_CONSTRAINT_UNIQUE)". Neither can be
+ * read as a ClickHouse or Postgres code, so this is its own reader.
+ */
+export const sqliteConstraintOf = (cause: unknown): SqliteConstraint | undefined => {
+	let current: unknown = cause
+	for (let depth = 0; depth < 8 && typeof current === "object" && current !== null; depth++) {
+		if ("code" in current && current.code === "ERR_SQLITE_ERROR" && "errcode" in current && typeof current.errcode === "number") {
+			return SQLITE_CONSTRAINT_CODES[current.errcode]
+		}
+		if ("message" in current && typeof current.message === "string") {
+			const match = /\(extended: SQLITE_CONSTRAINT_(UNIQUE|PRIMARYKEY|FOREIGNKEY|NOTNULL|CHECK)\)/.exec(current.message)
+			if (match !== null) return match[1] as SqliteConstraint
+		}
+		const inner = next(current)
+		if (inner === undefined || inner === current) break
+		current = inner
+	}
+	return undefined
+}
+
 /** The driver's classification: `SqlError.reason._tag`, or `Unknown`. */
 export const reasonOf = (cause: unknown): string => (isSqlError(cause) ? cause.reason._tag : "Unknown")
 

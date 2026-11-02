@@ -21,8 +21,8 @@ export class DatabaseError extends Schema.TaggedError<DatabaseError>()("@maple-d
 
 // What every constraint violation carries. `constraint`, `table` and `column`
 // are present when the server named them: Postgres names the constraint and
-// table, and the column for NOT NULL; ClickHouse names the CHECK constraint.
-// `cause` is the `DatabaseError` or `TransactionCommitFailed` it came from.
+// table, and the column for NOT NULL; ClickHouse names the CHECK constraint;
+// SQLite names the table and a single column, or the CHECK. `cause` is the `DatabaseError` or `TransactionCommitFailed` it came from.
 const ViolationFields = {
 	message: Schema.String,
 	sql: Schema.optional(Schema.String),
@@ -34,25 +34,25 @@ const ViolationFields = {
 	cause: Schema.Defect(),
 }
 
-/** A row would duplicate a unique key or primary key. Postgres SQLSTATE 23505. */
+/** A row would duplicate a unique key or primary key. Postgres SQLSTATE 23505, SQLite `SQLITE_CONSTRAINT_UNIQUE` or `_PRIMARYKEY`. */
 export class UniqueViolation extends Schema.TaggedError<UniqueViolation>()(
 	"@maple-dev/effect-orm/UniqueViolation",
 	ViolationFields,
 ) {}
 
-/** A row references a missing row, or a delete leaves rows that reference it. Postgres SQLSTATE 23503. */
+/** A row references a missing row, or a delete leaves rows that reference it. Postgres SQLSTATE 23503, SQLite `SQLITE_CONSTRAINT_FOREIGNKEY`. */
 export class ForeignKeyViolation extends Schema.TaggedError<ForeignKeyViolation>()(
 	"@maple-dev/effect-orm/ForeignKeyViolation",
 	ViolationFields,
 ) {}
 
-/** A NOT NULL column got NULL. Postgres SQLSTATE 23502. */
+/** A NOT NULL column got NULL. Postgres SQLSTATE 23502, SQLite `SQLITE_CONSTRAINT_NOTNULL`. */
 export class NotNullViolation extends Schema.TaggedError<NotNullViolation>()(
 	"@maple-dev/effect-orm/NotNullViolation",
 	ViolationFields,
 ) {}
 
-/** A row fails a CHECK constraint. Postgres SQLSTATE 23514, ClickHouse code 469 (`VIOLATED_CONSTRAINT`). */
+/** A row fails a CHECK constraint. Postgres SQLSTATE 23514, ClickHouse code 469 (`VIOLATED_CONSTRAINT`), SQLite `SQLITE_CONSTRAINT_CHECK`. */
 export class CheckViolation extends Schema.TaggedError<CheckViolation>()(
 	"@maple-dev/effect-orm/CheckViolation",
 	ViolationFields,
