@@ -5,47 +5,17 @@
 // query that runs cleanly but answers wrong (a lost parenthesis, a negation
 // applied to the wrong side, NULL handled like a value) shows up as a row diff.
 //
-// Where the databases genuinely differ, the model says so per target rather
-// than papering over it; each such rule names the difference it encodes.
+// Where the databases genuinely differ, the model reads the target's
+// `Semantics` (dialects/types.ts) rather than its name, so a new dialect states
+// its rules instead of patching this file.
 // Inputs the model cannot judge raise `skip` with a reason.
-import { fixtureRows } from "../core-cases"
-import type { Target } from "./db"
+import { coreFixture, type Fixture, type Order, type Customer } from "./fixtures"
+import type { Semantics } from "./dialects/types"
 import { skip } from "./harness"
-import type { Agg, AggShape, ArithOp, Cond, Expr, Operand, Plan, RowsShape } from "./plan"
+import type { Agg, ArithOp, Cond, Expr, Operand, Plan, UnionPlan } from "./plan"
 
 type V = number | string | null
 type Bool = boolean | null
-
-interface Order {
-	readonly OrgId: string
-	readonly Id: number
-	readonly Customer: string
-	readonly Amount: number
-	readonly Status: string
-	readonly Note: string | null
-	/** Epoch milliseconds. */
-	readonly Created: number
-}
-interface Customer {
-	readonly OrgId: string
-	readonly Name: string
-	readonly Tier: string
-}
-
-const orders: ReadonlyArray<Order> = fixtureRows.orders.map(([OrgId, Id, Customer, Amount, Status, Note, Created]) => ({
-	OrgId: OrgId as string,
-	Id: Id as number,
-	Customer: Customer as string,
-	Amount: Amount as number,
-	Status: Status as string,
-	Note: Note as string | null,
-	Created: Date.parse(`${(Created as string).replace(" ", "T")}Z`),
-}))
-const customers: ReadonlyArray<Customer> = fixtureRows.customers.map(([OrgId, Name, Tier]) => ({
-	OrgId: OrgId as string,
-	Name: Name as string,
-	Tier: Tier as string,
-}))
 
 interface Row {
 	readonly o: Order
@@ -54,7 +24,7 @@ interface Row {
 }
 
 interface Env {
-	readonly target: Target
+	readonly sem: Semantics
 	readonly plan: Plan
 	readonly joined: boolean
 }
@@ -68,7 +38,7 @@ const isTime = (e: Expr) => e.k === "col" && e.col === "Created"
  * database does (`-7 % toUInt32(3)` is 0), so the model declines those.
  */
 type ChKind = "unsigned" | "signed" | "float"
-const chKind = (e: Expr | number): ChKind => {
+export const chKind = (e: Expr | number): ChKind => {
 	if (typeof e === "number") return !Number.isInteger(e) ? "float" : e >= 0 ? "unsigned" : "signed"
 	switch (e.k) {
 		case "col":
@@ -130,8 +100,8 @@ const evalExpr = (env: Env, row: Row, e: Expr): V => {
 			return row.o[e.col]
 		case "jcol":
 			if (row.c !== undefined) return row.c[e.col]
-			// ClickHouse with join_use_nulls=0 fills a missing row with column defaults.
-			return env.target === "clickhouse" ? "" : null
+			// e.g. ClickHouse with join_use_nulls=0 fills a missing row with column defaults.
+			return env.sem.missingJoinColumn === "default" ? "" : null
 		case "num":
 		case "str":
 			return e.v
@@ -152,10 +122,11 @@ const evalExpr = (env: Env, row: Row, e: Expr): V => {
 				case "div":
 					if (r === 0) skip("division by zero")
 					// `/` is float division on ClickHouse, integer division of two Postgres integers.
-					return env.target === "postgres" ? Math.trunc(l / r) : l / r
+					return env.sem.integerDivision === "truncate" ? Math.trunc(l / r) : l / r
 				case "mod":
 					if (r === 0) skip("division by zero")
-					if (env.target !== "postgres") {
+					if (env.sem.modulo === "integer" && [chKind(e.l), chKind(e.r)].includes("float")) skip("% casting a float operand to an integer")
+					if (env.sem.modulo === "clickhouse") {
 						const kinds = new Set([chKind(e.l), chKind(e.r)])
 						if (kinds.has("unsigned") && kinds.has("signed")) skip("ClickHouse % across signed and unsigned")
 						// Not IEEE fmod: `3 % (27 / 99)` is 0 on ClickHouse, 2.2e-16 by fmod.
@@ -168,7 +139,7 @@ const evalExpr = (env: Env, row: Row, e: Expr): V => {
 	}
 }
 
-/** Strings compare by UTF-8 bytes on both targets (ClickHouse always, Postgres under the C collation). */
+/** Strings compare by UTF-8 bytes on every target (ClickHouse always, Postgres under the C collation). */
 const encoder = new TextEncoder()
 const compareStrings = (a: string, b: string): number => {
 	const x = encoder.encode(a)
@@ -219,7 +190,7 @@ const evalCond = (env: Env, row: Row, c: Cond): Bool => {
 		case "const":
 			return c.v
 		case "tenant": {
-			const org = c.side === "orders" ? row.o.OrgId : row.c?.OrgId ?? (env.target === "clickhouse" ? "" : null)
+			const org = c.side === "orders" ? row.o.OrgId : row.c?.OrgId ?? (env.sem.missingJoinColumn === "default" ? "" : null)
 			return org === null ? null : org === env.plan.orgId
 		}
 		case "not":
@@ -257,7 +228,7 @@ const evalCond = (env: Env, row: Row, c: Cond): Bool => {
 			if (l === null) return null
 			// Case folding beyond ASCII and `_` over multi-byte text differ between the two; not modelled.
 			if (/[^\x00-\x7f]/.test(l)) skip("LIKE over non-ASCII text")
-			const matched = likeRegex(c.pattern, c.op === "ilike").test(l)
+			const matched = likeRegex(c.pattern, c.op === "ilike" || env.sem.likeIgnoresCase).test(l)
 			return c.op === "notLike" ? !matched : matched
 		}
 		case "between": {
@@ -280,19 +251,17 @@ const evalCond = (env: Env, row: Row, c: Cond): Bool => {
 
 // Queries
 
-const sourceRows = (env: Env): ReadonlyArray<Row> =>
-	orders.flatMap((o): Array<Row> => {
+const sourceRows = (env: Env, fixture: Fixture): ReadonlyArray<Row> =>
+	fixture.orders.flatMap((o): Array<Row> => {
 		if (env.plan.join === undefined) return [{ o }]
-		const matches = customers.filter((c) => c.OrgId === o.OrgId && c.Name === o.Customer)
+		const matches = fixture.customers.filter((c) => c.OrgId === o.OrgId && c.Name === o.Customer)
 		if (matches.length > 0) return matches.map((c) => ({ o, c }))
 		return env.plan.join === "left" ? [{ o }] : []
 	})
 
 type OutRow = Record<string, V>
 
-const nullsFirst = (target: Target, dir: "asc" | "desc") =>
-	// Postgres: NULLS LAST ascending, NULLS FIRST descending. ClickHouse: NULLS LAST either way.
-	target === "postgres" && dir === "desc"
+const nullsFirst = (sem: Semantics, dir: "asc" | "desc") => sem.nulls[dir] === "first"
 
 const sortRows = (env: Env, rows: Array<OutRow>, orderBy: ReadonlyArray<readonly [string, "asc" | "desc"]>) =>
 	rows.sort((a, b) => {
@@ -301,7 +270,7 @@ const sortRows = (env: Env, rows: Array<OutRow>, orderBy: ReadonlyArray<readonly
 			const y = b[alias] ?? null
 			if (x === null && y === null) continue
 			if (x === null || y === null) {
-				const first = nullsFirst(env.target, dir)
+				const first = nullsFirst(env.sem, dir)
 				return (x === null) === first ? -1 : 1
 			}
 			const d = compare(x, y)
@@ -310,7 +279,7 @@ const sortRows = (env: Env, rows: Array<OutRow>, orderBy: ReadonlyArray<readonly
 		return 0
 	})
 
-const page = <A>(rows: ReadonlyArray<A>, shape: RowsShape | AggShape): ReadonlyArray<A> => {
+const page = <A>(rows: ReadonlyArray<A>, shape: { readonly limit?: number | undefined; readonly offset?: number | undefined }): ReadonlyArray<A> => {
 	const start = shape.offset ?? 0
 	return rows.slice(start, shape.limit === undefined ? undefined : start + shape.limit)
 }
@@ -325,9 +294,7 @@ const evalAgg = (env: Env, rows: ReadonlyArray<Row>, agg: Agg, global: boolean):
 			return rows.filter((row) => evalCond(env, row, agg.c) === true).length
 		default: {
 			const values = rows.map((row) => evalExpr(env, row, agg.e)).filter((v): v is number => v !== null)
-			// Postgres answers an aggregate over no rows with NULL. ClickHouse answers with a default that its
-			// optimizer moves around (`min(-1 + x)` is rewritten `-1 + min(x)`, so it is -1, not 0): not modelled.
-			if (values.length === 0) return global && env.target !== "postgres" ? skip("ClickHouse aggregate over no rows") : null
+			if (values.length === 0) return global && env.sem.emptyAggregate === "unmodelled" ? skip("aggregate over no rows") : null
 			if (agg.k === "sum") return values.reduce((a, b) => a + b, 0)
 			return agg.k === "min" ? Math.min(...values) : Math.max(...values)
 		}
@@ -350,13 +317,28 @@ const ariths = (value: unknown): Array<Expr> => {
 	return [...own, ...Object.values(value).flatMap(ariths)]
 }
 
-export const evaluate = (plan: Plan, target: Target): ModelResult => {
-	const env: Env = { target, plan, joined: plan.join !== undefined }
+/** Constant folding is independent of relation cardinality, including an empty join. */
+const constant = (expr: Expr): boolean => {
+	switch (expr.k) {
+		case "num":
+		case "str": return true
+		case "arith": return constant(expr.l) && (typeof expr.r === "number" || constant(expr.r))
+		case "coalesce": return constant(expr.e) && constant(expr.fallback)
+		default: return false
+	}
+}
+
+export const evaluate = (plan: Plan, sem: Semantics, fixture: Fixture = coreFixture): ModelResult => {
+	const env: Env = { sem, plan, joined: plan.join !== undefined }
 	// A database may evaluate any expression on any row — or fold a constant one at plan time — before
 	// filtering decides it was not needed. So a division by zero anywhere is a division by zero.
 	const all = ariths(plan)
-	for (const row of sourceRows(env)) for (const e of all) evalExpr(env, row, e)
-	const filtered = sourceRows(env).filter((row) => and3(plan.where.map((c) => evalCond(env, row, c))) === true)
+	// A constant expression never reads this row. Reuse a real fixture row so the evaluator
+	// can check folded subexpressions even when the input fixture or its inner join is empty.
+	const constantRow: Row = { o: coreFixture.orders[0]! }
+	for (const e of all) if (constant(e)) evalExpr(env, constantRow, e)
+	for (const row of sourceRows(env, fixture)) for (const e of all) evalExpr(env, row, e)
+	const filtered = sourceRows(env, fixture).filter((row) => and3(plan.where.map((c) => evalCond(env, row, c))) === true)
 	const orgs = new Set(filtered.flatMap((row) => [row.o.OrgId, ...(row.c ? [row.c.OrgId] : [])]))
 	const shape = plan.shape
 
@@ -390,8 +372,23 @@ export const evaluate = (plan: Plan, target: Target): ModelResult => {
 			}))
 	}
 
-	const uniqueKeys = shape.k === "rows" ? ["id"] : shape.keys.map(([alias]) => alias)
+	const uniqueKeys = shape.k === "rows" ? (plan.join === undefined ? ["id"] : shape.select.map(([alias]) => alias)) : shape.keys.map(([alias]) => alias)
 	const total = uniqueKeys.length > 0 && uniqueKeys.every((key) => shape.orderBy.some(([alias]) => alias === key))
 	sortRows(env, rows, shape.orderBy)
 	return { rows: page(rows, shape), ordered: total && !plan.wrap, orgs }
+}
+
+/**
+ * A union: each branch's rows (its own ORDER BY and LIMIT applied first),
+ * concatenated, then the union's ORDER BY, LIMIT and OFFSET. Rows compare as
+ * a list only when the union orders by every alias.
+ */
+export const evaluateUnion = (plan: UnionPlan, sem: Semantics, fixture: Fixture = coreFixture): ModelResult => {
+	const parts = plan.branches.map((branch) => evaluate(branch, sem, fixture))
+	const rows = parts.flatMap((part) => [...part.rows])
+	const first = plan.branches[0]!
+	const aliases = first.shape.k === "rows" ? first.shape.select.map(([alias]) => alias) : []
+	sortRows({ sem, plan: first, joined: false }, rows, plan.orderBy)
+	const total = plan.orderBy.length > 0 && aliases.every((alias) => plan.orderBy.some(([key]) => key === alias))
+	return { rows: page(rows, plan), ordered: total, orgs: new Set(parts.flatMap((part) => [...part.orgs])) }
 }

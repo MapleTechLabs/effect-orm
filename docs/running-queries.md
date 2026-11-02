@@ -8,10 +8,10 @@ column types already assume.
 ## A complete client example
 
 For Node.js or Bun, install Effect's ClickHouse client separately. Use the same Effect 4
-release as your `effect` dependency; this example is checked against `4.0.0`:
+release as your `effect` dependency; this example is checked against `4.0.6`:
 
 ```sh
-npm install effect@4.0.0 @effect/sql-clickhouse@4.0.0
+npm install effect@4.0.6 @effect/sql-clickhouse@4.0.6
 ```
 
 This example reads five rows from ClickHouse's built-in `system.numbers` table, declared
