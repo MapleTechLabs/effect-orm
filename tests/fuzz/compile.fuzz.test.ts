@@ -24,7 +24,7 @@ const stringsIn = (value: unknown): Array<string> =>
 const serialize = (value: unknown) => JSON.stringify(value, (_, v) => (typeof v === "bigint" ? `${v}n` : v instanceof Date ? `Date(${v.getTime()})` : v))
 
 const compiles = (dialect: FuzzDialect, input: Plan) => {
-	const known = knownPlanIssue({ target: dialect.name, plan: input })
+	const known = knownPlanIssue({ target: dialect.name, plan: input, executed: false })
 	if (known !== undefined) skipKnown(known)
 	const ctx = scopeContext(dialect)
 	const first = compilePlan(dialect, ctx, input)
