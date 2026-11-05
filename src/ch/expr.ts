@@ -189,7 +189,9 @@ type FunctionSetLabel<Set extends string> = Set extends "clickhouse"
 		? "Postgres"
 		: Set extends "sqlite"
 			? "SQLite"
-			: Set
+			: Set extends "mysql"
+				? "MySQL"
+				: Set
 
 /**
  * `unknown` when the entries `P` can compile for a dialect whose function set
@@ -219,12 +221,13 @@ export type DialectSatisfied<P, Target extends string> =
  * `"both ClickHouse and Postgres"`, `"ClickHouse, Postgres and SQLite"`: the
  * built-in sets of a union, in a fixed order. A custom set is named as it is.
  */
-type JoinLabels<Sets extends string> = [Exclude<Sets, "clickhouse" | "postgres" | "sqlite">] extends [never]
+type JoinLabels<Sets extends string> = [Exclude<Sets, "clickhouse" | "postgres" | "sqlite" | "mysql">] extends [never]
 	? JoinWithAnd<
 			[
 				...("clickhouse" extends Sets ? ["ClickHouse"] : []),
 				...("postgres" extends Sets ? ["Postgres"] : []),
 				...("sqlite" extends Sets ? ["SQLite"] : []),
+				...("mysql" extends Sets ? ["MySQL"] : []),
 			]
 		>
 	: `both ${FunctionSetLabel<Sets>}`
@@ -233,7 +236,9 @@ type JoinWithAnd<Labels extends ReadonlyArray<string>> = Labels extends readonly
 	? `both ${A} and ${B}`
 	: Labels extends readonly [infer A extends string, infer B extends string, infer C extends string]
 		? `${A}, ${B} and ${C}`
-		: Labels[number]
+		: Labels extends readonly [infer A extends string, infer B extends string, infer C extends string, infer D extends string]
+			? `${A}, ${B}, ${C} and ${D}`
+			: Labels[number]
 
 /** The value a param needs: every entry's type for that name, intersected
  *  per entry (a `boolean` entry stays `boolean`, not `true & false`). */
@@ -554,14 +559,17 @@ const comparisonLiteral = (columnType: CHType<string, any, any>, value: unknown,
 	return literal
 }
 
+/** The integer column types of the dialects whose integers compare with a fraction numerically. */
+const FRACTION_COMPARABLE_INTEGERS = new Set(["integer", "tinyint", "smallint", "int", "int unsigned", "bigint"])
+
 /**
- * A fraction compared with a SQLite `integer` column: `Amount > 9.75` is a
- * meaningful comparison, but the column's codec only encodes whole numbers.
- * SQLite compares an INTEGER with a REAL numerically, so the value is written
- * as the number it is. Inserting a fraction is still refused by the codec.
+ * A fraction compared with a SQLite or MySQL integer column: `Amount > 9.75`
+ * is a meaningful comparison, but the column's codec only encodes whole
+ * numbers. Both compare an integer with a fraction numerically, so the value
+ * is written as the number it is. Inserting a fraction is still refused by the codec.
  */
 const sqliteFraction = (columnType: CHType<string, any, any>, value: unknown): boolean =>
-	columnType.sql === "integer" &&
+	FRACTION_COMPARABLE_INTEGERS.has(columnType.sql) &&
 	typeof value === "number" &&
 	Number.isFinite(value) &&
 	!Number.isInteger(value) &&
@@ -639,7 +647,9 @@ const textPattern = (value: string | Expr<string, any>, match: TextMatch, glob: 
 			: [LIKE_ESCAPE, "%", "_"].map((char) => [char, LIKE_ESCAPE + char] as const)
 		let escaped = compile(value.toFragment())
 		for (const [char, replacement] of replacements) escaped = `replace(${escaped}, ${q(char)}, ${q(replacement)})`
-		return `(${[before && q(before), escaped, after && q(after)].filter(Boolean).join(" || ")})`
+		const parts = [before && q(before), escaped, after && q(after)].filter(Boolean)
+		const concat = activeSqlSyntax()?.concat
+		return concat === undefined ? `(${parts.join(" || ")})` : concat(parts)
 	}
 	return fail(
 		new QueryBuilderError({
@@ -655,11 +665,19 @@ const textPattern = (value: string | Expr<string, any>, match: TextMatch, glob: 
  * insensitive. Where LIKE ignores case and there is no ILIKE (SQLite, whose
  * LIKE folds ASCII unless `PRAGMA case_sensitive_like` is on), a sensitive
  * match is a `GLOB` and an insensitive one a LIKE of `lower()` on both sides.
+ * Where LIKE follows the collation (MySQL), a sensitive match compares bytes.
  */
 const textMatch = (fragment: SqlFragment, value: string | Expr<string, any>, match: TextMatch, options?: TextMatchOptions): Condition<any> =>
 	makeCond(
 		known(() => {
 			const insensitive = options?.insensitive === true
+			if (activeSqlSyntax()?.likeFollowsCollation === true) {
+				const pattern = textPattern(value, match, false)
+				// Only `%` is a wildcard here and every other character is escaped, so a byte-wise LIKE matches characters.
+				return insensitive
+					? `LOWER(${compile(fragment)}) LIKE LOWER(${pattern})${likeEscape()}`
+					: `CAST(${compile(fragment)} AS BINARY) LIKE CAST(${pattern} AS BINARY)${likeEscape()}`
+			}
 			if (activeSqlSyntax()?.likeIgnoresCase !== true) {
 				return `${compile(fragment)} ${insensitive ? "ILIKE" : "LIKE"} ${textPattern(value, match, false)}${likeEscape()}`
 			}

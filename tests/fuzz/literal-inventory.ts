@@ -18,6 +18,11 @@ export const literalCoverage = {
 		text: "text", integer: "integer", real: "real", boolean: "boolean", timestamp: "timestamp", blob: "blob",
 		json: "json", nullable: "nullable(text)", brand: "brand(text)", custom: "custom(text)",
 	},
+	mysql: {
+		text: "text", longtext: "longtext", varchar: "varchar(64)", tinyint: "tinyint", smallint: "smallint", int: "int",
+		intUnsigned: "int unsigned", bigint: "bigint", double: "double", decimal: "decimal(18,4)", boolean: "boolean",
+		datetime: "datetime(3)", date: "date", blob: "blob", json: "json", nullable: "nullable(text)", brand: "brand(text)", custom: "custom(int)",
+	},
 } as const
 
 export const literalExemptions = {
@@ -36,5 +41,10 @@ export const literalExemptions = {
 	sqlite: {
 		sqliteTimestampText: "Timestamp formatting helper, not a descriptor.",
 		timestampNow: "SQL default expression, not a descriptor.",
+	},
+	mysql: {
+		dateTimeNow: "SQL default expression, not a descriptor.",
+		mysqlDateTimeText: "DATETIME formatting helper, not a descriptor.",
+		varbinary: "The blob codec under a length-bounded SQL type; blob covers it.",
 	},
 } as const

@@ -137,3 +137,29 @@ export const jsonPayload = (rules: StringRules) => Arbitrary.schema(jsonPayloadS
 	Arbitrary.filter((value) => wellFormed(value) && [value.message, ...value.meta.tags].every((s) =>
 		(rules.nul || !s.includes("\0")) && (rules.leadingBom || !s.startsWith("\ufeff")))),
 )
+
+/**
+ * A double as SQL that is exact without parsing a decimal: SQLite and MySQL
+ * read some decimals (`1.23456789e-95`, as a literal or through their JSON
+ * functions) as a neighbouring double. The integer mantissa is exact, and
+ * multiplying or dividing by a power of two below 2^62 is exact while the
+ * result is a double. `cast` is the dialect's double type (`REAL`, `DOUBLE`).
+ */
+export const exactDouble = (value: number, cast: string): string => {
+	if (value === 0) return `CAST(0 AS ${cast})`
+	const view = new DataView(new ArrayBuffer(8))
+	view.setFloat64(0, Math.abs(value))
+	const bits = view.getBigUint64(0)
+	const biased = Number(bits >> 52n)
+	const fraction = bits & ((1n << 52n) - 1n)
+	// value = mantissa * 2^exponent
+	const mantissa = biased === 0 ? fraction : fraction | (1n << 52n)
+	let exponent = (biased === 0 ? 1 : biased) - 1075
+	let sql = `CAST(${value < 0 ? "-" : ""}${mantissa} AS ${cast})`
+	while (exponent !== 0) {
+		const step = Math.min(Math.abs(exponent), 62)
+		sql += `${exponent > 0 ? " * " : " / "}${2n ** BigInt(step)}`
+		exponent -= Math.sign(exponent) * step
+	}
+	return sql
+}

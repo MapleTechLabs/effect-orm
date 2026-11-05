@@ -1518,6 +1518,1602 @@ SELECT
 }
 `;
 
+exports[`core SQL (mariadb) > and-or 1`] = `
+{
+  "parameters": [
+    "org_1",
+    "paid",
+    15,
+    "globex",
+  ],
+  "sql": "WITH \`orders\` AS (
+<orders fixture>
+),
+\`customers\` AS (
+<customers fixture>
+)
+SELECT
+          \`orders\`.\`Id\` AS \`id\`
+        FROM \`orders\`
+        WHERE \`orders\`.\`OrgId\` = ?
+          AND ((\`orders\`.\`Status\` = ? AND \`orders\`.\`Amount\` > ?) OR \`orders\`.\`Customer\` = ?)
+        ORDER BY \`id\` ASC",
+}
+`;
+
+exports[`core SQL (mariadb) > arithmetic 1`] = `
+{
+  "parameters": [
+    "org_1",
+    4,
+  ],
+  "sql": "WITH \`orders\` AS (
+<orders fixture>
+),
+\`customers\` AS (
+<customers fixture>
+)
+SELECT
+          \`orders\`.\`Amount\` + 1 AS \`added\`,
+          \`orders\`.\`Amount\` - 1 AS \`subtracted\`,
+          \`orders\`.\`Amount\` * 2 AS \`multiplied\`,
+          \`orders\`.\`Amount\` % 3 AS \`remainder\`,
+          \`orders\`.\`Amount\` / 2 AS \`divided\`
+        FROM \`orders\`
+        WHERE \`orders\`.\`OrgId\` = ?
+          AND \`orders\`.\`Id\` = ?",
+}
+`;
+
+exports[`core SQL (mariadb) > comparisons 1`] = `
+{
+  "parameters": [
+    "org_1",
+    "void",
+    5,
+    10,
+    20,
+    10,
+  ],
+  "sql": "WITH \`orders\` AS (
+<orders fixture>
+),
+\`customers\` AS (
+<customers fixture>
+)
+SELECT
+          \`orders\`.\`Id\` AS \`id\`
+        FROM \`orders\`
+        WHERE \`orders\`.\`OrgId\` = ?
+          AND \`orders\`.\`Status\` != ?
+          AND \`orders\`.\`Amount\` > ?
+          AND \`orders\`.\`Amount\` >= ?
+          AND \`orders\`.\`Amount\` < ?
+          AND \`orders\`.\`Amount\` <= ?",
+}
+`;
+
+exports[`core SQL (mariadb) > cross-join 1`] = `
+{
+  "parameters": [
+    "org_1",
+    "org_1",
+    2,
+  ],
+  "sql": "WITH \`orders\` AS (
+<orders fixture>
+),
+\`customers\` AS (
+<customers fixture>
+)
+SELECT
+          \`orders\`.\`Id\` AS \`id\`,
+          \`c\`.\`Name\` AS \`customer\`
+        FROM \`orders\`
+        CROSS JOIN \`customers\` AS \`c\`
+        WHERE \`orders\`.\`OrgId\` = ?
+          AND \`c\`.\`OrgId\` = ?
+          AND \`orders\`.\`Id\` <= ?
+        ORDER BY \`id\` ASC, \`customer\` ASC",
+}
+`;
+
+exports[`core SQL (mariadb) > cross-join-subquery 1`] = `
+{
+  "parameters": [
+    "org_1",
+    "org_1",
+    2,
+  ],
+  "sql": "WITH \`orders\` AS (
+<orders fixture>
+),
+\`customers\` AS (
+<customers fixture>
+)
+SELECT
+          \`orders\`.\`Id\` AS \`id\`,
+          \`k\`.\`customers\` AS \`customers\`
+        FROM \`orders\`
+        CROSS JOIN (WITH \`orders\` AS (
+<orders fixture>
+),
+\`customers\` AS (
+<customers fixture>
+)
+SELECT
+          COUNT(*) AS \`customers\`
+        FROM \`customers\`
+        WHERE \`customers\`.\`OrgId\` = ?) AS \`k\`
+        WHERE \`orders\`.\`OrgId\` = ?
+          AND \`orders\`.\`Id\` <= ?
+        ORDER BY \`id\` ASC",
+}
+`;
+
+exports[`core SQL (mariadb) > cte 1`] = `
+{
+  "parameters": [
+    "org_1",
+    "paid",
+  ],
+  "sql": "WITH \`orders\` AS (
+<orders fixture>
+),
+\`customers\` AS (
+<customers fixture>
+),
+\`paid\` AS (
+WITH \`orders\` AS (
+<orders fixture>
+),
+\`customers\` AS (
+<customers fixture>
+)
+SELECT
+          \`orders\`.\`Customer\` AS \`Customer\`,
+          \`orders\`.\`Amount\` AS \`Amount\`
+        FROM \`orders\`
+        WHERE \`orders\`.\`OrgId\` = ?
+          AND \`orders\`.\`Status\` = ?
+)
+SELECT
+          SUM(\`paid\`.\`Amount\`) AS \`total\`
+        FROM \`paid\`",
+}
+`;
+
+exports[`core SQL (mariadb) > distinct-plain 1`] = `
+{
+  "parameters": [
+    "org_1",
+  ],
+  "sql": "WITH \`orders\` AS (
+<orders fixture>
+),
+\`customers\` AS (
+<customers fixture>
+)
+SELECT DISTINCT
+          \`orders\`.\`Status\` AS \`status\`
+        FROM \`orders\`
+        WHERE \`orders\`.\`OrgId\` = ?
+        ORDER BY \`status\` ASC",
+}
+`;
+
+exports[`core SQL (mariadb) > from-subquery 1`] = `
+{
+  "parameters": [
+    "org_1",
+    6,
+  ],
+  "sql": "SELECT
+          \`t\`.\`customer\` AS \`customer\`,
+          \`t\`.\`total\` AS \`total\`
+        FROM (WITH \`orders\` AS (
+<orders fixture>
+),
+\`customers\` AS (
+<customers fixture>
+)
+SELECT
+          \`orders\`.\`OrgId\` AS \`OrgId\`,
+          \`orders\`.\`Customer\` AS \`customer\`,
+          SUM(\`orders\`.\`Amount\`) AS \`total\`
+        FROM \`orders\`
+        WHERE \`orders\`.\`OrgId\` = ?
+        GROUP BY 1, 2) AS \`t\`
+        WHERE \`t\`.\`total\` > ?
+        ORDER BY \`total\` DESC",
+}
+`;
+
+exports[`core SQL (mariadb) > group-having 1`] = `
+{
+  "parameters": [
+    "paid",
+    "org_1",
+  ],
+  "sql": "WITH \`orders\` AS (
+<orders fixture>
+),
+\`customers\` AS (
+<customers fixture>
+)
+SELECT
+          \`orders\`.\`Customer\` AS \`customer\`,
+          COUNT(*) AS \`orders\`,
+          COUNT(CASE WHEN \`orders\`.\`Status\` = ? THEN 1 END) AS \`paid\`,
+          SUM(\`orders\`.\`Amount\`) AS \`total\`,
+          MIN(\`orders\`.\`Amount\`) AS \`smallest\`,
+          MAX(\`orders\`.\`Amount\`) AS \`largest\`
+        FROM \`orders\`
+        WHERE \`orders\`.\`OrgId\` = ?
+        GROUP BY 1
+        HAVING COUNT(*) >= 2
+        ORDER BY \`customer\` ASC",
+}
+`;
+
+exports[`core SQL (mariadb) > inner-join 1`] = `
+{
+  "parameters": [
+    "org_1",
+  ],
+  "sql": "WITH \`orders\` AS (
+<orders fixture>
+),
+\`customers\` AS (
+<customers fixture>
+)
+SELECT
+          \`orders\`.\`Id\` AS \`id\`,
+          \`c\`.\`Tier\` AS \`tier\`
+        FROM \`orders\`
+        INNER JOIN \`customers\` AS \`c\` ON (\`orders\`.\`Customer\` = \`c\`.\`Name\` AND \`orders\`.\`OrgId\` = \`c\`.\`OrgId\`)
+        WHERE \`orders\`.\`OrgId\` = ?
+        ORDER BY \`id\` ASC",
+}
+`;
+
+exports[`core SQL (mariadb) > is-not-null 1`] = `
+{
+  "parameters": [
+    "org_1",
+  ],
+  "sql": "WITH \`orders\` AS (
+<orders fixture>
+),
+\`customers\` AS (
+<customers fixture>
+)
+SELECT
+          \`orders\`.\`Id\` AS \`id\`
+        FROM \`orders\`
+        WHERE \`orders\`.\`OrgId\` = ?
+          AND \`orders\`.\`Note\` IS NOT NULL
+        ORDER BY \`id\` ASC",
+}
+`;
+
+exports[`core SQL (mariadb) > join-subqueries 1`] = `
+{
+  "parameters": [
+    "org_1",
+    "silver",
+    "org_1",
+    "org_1",
+  ],
+  "sql": "WITH \`orders\` AS (
+<orders fixture>
+),
+\`customers\` AS (
+<customers fixture>
+)
+SELECT
+          \`customers\`.\`Name\` AS \`name\`,
+          \`t\`.\`tier\` AS \`tier\`,
+          \`n\`.\`orders\` AS \`orders\`
+        FROM \`customers\`
+        INNER JOIN (WITH \`orders\` AS (
+<orders fixture>
+),
+\`customers\` AS (
+<customers fixture>
+)
+SELECT
+          \`customers\`.\`Name\` AS \`name\`,
+          \`customers\`.\`Tier\` AS \`tier\`
+        FROM \`customers\`
+        WHERE \`customers\`.\`OrgId\` = ?
+          AND \`customers\`.\`Tier\` != ?) AS \`t\` ON \`customers\`.\`Name\` = \`t\`.\`name\`
+        LEFT JOIN (WITH \`orders\` AS (
+<orders fixture>
+),
+\`customers\` AS (
+<customers fixture>
+)
+SELECT
+          \`orders\`.\`Customer\` AS \`customer\`,
+          COUNT(*) AS \`orders\`
+        FROM \`orders\`
+        WHERE \`orders\`.\`OrgId\` = ?
+        GROUP BY 1) AS \`n\` ON \`customers\`.\`Name\` = \`n\`.\`customer\`
+        WHERE \`customers\`.\`OrgId\` = ?
+        ORDER BY \`name\` ASC",
+}
+`;
+
+exports[`core SQL (mariadb) > left-join 1`] = `
+{
+  "parameters": [
+    "org_1",
+    3,
+  ],
+  "sql": "WITH \`orders\` AS (
+<orders fixture>
+),
+\`customers\` AS (
+<customers fixture>
+)
+SELECT
+          \`orders\`.\`Id\` AS \`id\`,
+          \`c\`.\`Tier\` AS \`tier\`
+        FROM \`orders\`
+        LEFT JOIN \`customers\` AS \`c\` ON (\`orders\`.\`Customer\` = \`c\`.\`Name\` AND \`orders\`.\`OrgId\` = \`c\`.\`OrgId\`)
+        WHERE \`orders\`.\`OrgId\` = ?
+          AND \`orders\`.\`Id\` >= ?
+        ORDER BY \`id\` ASC",
+}
+`;
+
+exports[`core SQL (mariadb) > left-join-not-null 1`] = `
+{
+  "parameters": [
+    "org_1",
+    3,
+  ],
+  "sql": "WITH \`orders\` AS (
+<orders fixture>
+),
+\`customers\` AS (
+<customers fixture>
+)
+SELECT
+          \`orders\`.\`Id\` AS \`id\`,
+          \`c\`.\`Tier\` AS \`tier\`
+        FROM \`orders\`
+        LEFT JOIN \`customers\` AS \`c\` ON (\`orders\`.\`Customer\` = \`c\`.\`Name\` AND \`orders\`.\`OrgId\` = \`c\`.\`OrgId\`)
+        WHERE \`orders\`.\`OrgId\` = ?
+          AND \`orders\`.\`Id\` >= ?
+          AND \`c\`.\`Tier\` IS NOT NULL
+        ORDER BY \`id\` ASC",
+}
+`;
+
+exports[`core SQL (mariadb) > like-case 1`] = `
+{
+  "parameters": [
+    "org_1",
+    "ACME",
+  ],
+  "sql": "WITH \`orders\` AS (
+<orders fixture>
+),
+\`customers\` AS (
+<customers fixture>
+)
+SELECT
+          \`orders\`.\`Id\` AS \`id\`
+        FROM \`orders\`
+        WHERE \`orders\`.\`OrgId\` = ?
+          AND \`orders\`.\`Customer\` LIKE ?
+        ORDER BY \`id\` ASC",
+}
+`;
+
+exports[`core SQL (mariadb) > like-escape 1`] = `
+{
+  "parameters": [
+    "org\\_1",
+    "it\\_s",
+  ],
+  "sql": "WITH \`orders\` AS (
+<orders fixture>
+),
+\`customers\` AS (
+<customers fixture>
+)
+SELECT
+          \`orders\`.\`Id\` AS \`id\`
+        FROM \`orders\`
+        WHERE \`orders\`.\`OrgId\` LIKE ?
+          AND \`orders\`.\`Note\` NOT LIKE ?
+        ORDER BY \`id\` ASC",
+}
+`;
+
+exports[`core SQL (mariadb) > limit-offset 1`] = `
+{
+  "parameters": [
+    "org_1",
+  ],
+  "sql": "WITH \`orders\` AS (
+<orders fixture>
+),
+\`customers\` AS (
+<customers fixture>
+)
+SELECT
+          \`orders\`.\`Id\` AS \`id\`
+        FROM \`orders\`
+        WHERE \`orders\`.\`OrgId\` = ?
+        ORDER BY \`id\` DESC
+        LIMIT 2
+        OFFSET 1",
+}
+`;
+
+exports[`core SQL (mariadb) > locking-update-share 1`] = `
+{
+  "parameters": [
+    "org_1",
+    1,
+  ],
+  "sql": "WITH \`orders\` AS (
+<orders fixture>
+),
+\`customers\` AS (
+<customers fixture>
+)
+SELECT
+          \`orders\`.\`Id\` AS \`id\`
+        FROM \`orders\`
+        WHERE \`orders\`.\`OrgId\` = ?
+          AND \`orders\`.\`Id\` = ?
+        LOCK IN SHARE MODE NOWAIT",
+}
+`;
+
+exports[`core SQL (mariadb) > null-and-range 1`] = `
+{
+  "parameters": [
+    "org_1",
+    5,
+    20,
+    3,
+    3,
+  ],
+  "sql": "WITH \`orders\` AS (
+<orders fixture>
+),
+\`customers\` AS (
+<customers fixture>
+)
+SELECT
+          \`orders\`.\`Id\` AS \`id\`
+        FROM \`orders\`
+        WHERE \`orders\`.\`OrgId\` = ?
+          AND \`orders\`.\`Note\` IS NULL
+          AND \`orders\`.\`Amount\` BETWEEN ? AND ?
+          AND \`orders\`.\`Id\` NOT BETWEEN ? AND ?
+        ORDER BY \`id\` ASC",
+}
+`;
+
+exports[`core SQL (mariadb) > nulls-and-literals 1`] = `
+{
+  "parameters": [
+    "org_1",
+    2,
+    4,
+  ],
+  "sql": "WITH \`orders\` AS (
+<orders fixture>
+),
+\`customers\` AS (
+<customers fixture>
+)
+SELECT
+          \`orders\`.\`Id\` AS \`id\`,
+          \`orders\`.\`Note\` AS \`note\`,
+          COALESCE(\`orders\`.\`Note\`, '-') AS \`shown\`,
+          'x\\'y' AS \`label\`
+        FROM \`orders\`
+        WHERE \`orders\`.\`OrgId\` = ?
+          AND \`orders\`.\`Id\` IN (?, ?)
+        ORDER BY \`id\` ASC",
+}
+`;
+
+exports[`core SQL (mariadb) > params 1`] = `
+{
+  "parameters": [
+    "org_1",
+    7,
+    19.5,
+    "2026-01-01 00:00:00.000",
+  ],
+  "sql": "WITH \`orders\` AS (
+<orders fixture>
+),
+\`customers\` AS (
+<customers fixture>
+)
+SELECT
+          \`orders\`.\`Id\` AS \`id\`,
+          \`orders\`.\`Created\` AS \`created\`
+        FROM \`orders\`
+        WHERE \`orders\`.\`OrgId\` = ?
+          AND \`orders\`.\`Amount\` >= ?
+          AND \`orders\`.\`Amount\` < ?
+          AND \`orders\`.\`Created\` >= ?
+        ORDER BY \`id\` ASC",
+}
+`;
+
+exports[`core SQL (mariadb) > patterns-and-lists 1`] = `
+{
+  "parameters": [
+    "org_1",
+    "%e%",
+    "i%",
+    "pa%",
+    "open",
+    3,
+    2,
+  ],
+  "sql": "WITH \`orders\` AS (
+<orders fixture>
+),
+\`customers\` AS (
+<customers fixture>
+)
+SELECT
+          \`orders\`.\`Id\` AS \`id\`
+        FROM \`orders\`
+        WHERE \`orders\`.\`OrgId\` = ?
+          AND (\`orders\`.\`Customer\` LIKE ? AND \`orders\`.\`Customer\` NOT LIKE ?)
+          AND (\`orders\`.\`Status\` LIKE ? OR \`orders\`.\`Status\` IN (?))
+          AND \`orders\`.\`Id\` NOT IN (?)
+          AND NOT (\`orders\`.\`Id\` = ?)
+        ORDER BY \`id\` ASC",
+}
+`;
+
+exports[`core SQL (mariadb) > pipe-data-last 1`] = `
+{
+  "parameters": [
+    "org_1",
+  ],
+  "sql": "WITH \`orders\` AS (
+<orders fixture>
+),
+\`customers\` AS (
+<customers fixture>
+)
+SELECT
+          \`orders\`.\`Id\` AS \`id\`,
+          \`c\`.\`Tier\` AS \`tier\`
+        FROM \`orders\`
+        INNER JOIN \`customers\` AS \`c\` ON (\`orders\`.\`Customer\` = \`c\`.\`Name\` AND \`orders\`.\`OrgId\` = \`c\`.\`OrgId\`)
+        WHERE \`orders\`.\`OrgId\` = ?
+        ORDER BY \`id\` ASC
+        LIMIT 2",
+}
+`;
+
+exports[`core SQL (mariadb) > route-and-cross-tenant 1`] = `
+{
+  "parameters": [],
+  "sql": "WITH \`orders\` AS (
+<orders fixture>
+),
+\`customers\` AS (
+<customers fixture>
+)
+SELECT
+          COUNT(*) AS \`orders\`
+        FROM \`orders\`",
+}
+`;
+
+exports[`core SQL (mariadb) > select-columns 1`] = `
+{
+  "parameters": [
+    "org_1",
+    "paid",
+  ],
+  "sql": "WITH \`orders\` AS (
+<orders fixture>
+),
+\`customers\` AS (
+<customers fixture>
+)
+SELECT
+          \`orders\`.\`Id\` AS \`Id\`,
+          \`orders\`.\`Customer\` AS \`Customer\`
+        FROM \`orders\`
+        WHERE \`orders\`.\`OrgId\` = ?
+          AND \`orders\`.\`Status\` = ?
+        ORDER BY \`Id\` ASC",
+}
+`;
+
+exports[`core SQL (mariadb) > selected-param 1`] = `
+{
+  "parameters": [
+    1,
+    "org_1",
+    1,
+  ],
+  "sql": "WITH \`orders\` AS (
+<orders fixture>
+),
+\`customers\` AS (
+<customers fixture>
+)
+SELECT
+          \`orders\`.\`Id\` AS \`id\`,
+          ? AS \`flagged\`
+        FROM \`orders\`
+        WHERE \`orders\`.\`OrgId\` = ?
+          AND \`orders\`.\`Id\` = ?",
+}
+`;
+
+exports[`core SQL (mariadb) > text-match 1`] = `
+{
+  "parameters": [
+    "%50\\%%",
+    "a\\_%",
+    "%\\\\dir",
+    "%[x]%",
+    "%o?",
+  ],
+  "sql": "WITH \`texts\` AS (
+SELECT 1 AS \`Id\`, CAST('50% off' AS CHAR) AS \`Body\` UNION ALL SELECT 2 AS \`Id\`, CAST('500 off' AS CHAR) AS \`Body\` UNION ALL SELECT 3 AS \`Id\`, CAST('a_b' AS CHAR) AS \`Body\` UNION ALL SELECT 4 AS \`Id\`, CAST('aXb' AS CHAR) AS \`Body\` UNION ALL SELECT 5 AS \`Id\`, CAST('C:\\\\dir' AS CHAR) AS \`Body\` UNION ALL SELECT 6 AS \`Id\`, CAST('C:dir' AS CHAR) AS \`Body\` UNION ALL SELECT 7 AS \`Id\`, CAST('A_B' AS CHAR) AS \`Body\` UNION ALL SELECT 8 AS \`Id\`, CAST('[x]' AS CHAR) AS \`Body\` UNION ALL SELECT 9 AS \`Id\`, CAST('x' AS CHAR) AS \`Body\` UNION ALL SELECT 10 AS \`Id\`, CAST('who?' AS CHAR) AS \`Body\` UNION ALL SELECT 11 AS \`Id\`, CAST('whom' AS CHAR) AS \`Body\`
+)
+SELECT
+          \`texts\`.\`Id\` AS \`id\`
+        FROM \`texts\`
+        WHERE (CAST(\`texts\`.\`Body\` AS BINARY) LIKE CAST(? AS BINARY) OR CAST(\`texts\`.\`Body\` AS BINARY) LIKE CAST(? AS BINARY) OR CAST(\`texts\`.\`Body\` AS BINARY) LIKE CAST(? AS BINARY) OR CAST(\`texts\`.\`Body\` AS BINARY) LIKE CAST(? AS BINARY) OR CAST(\`texts\`.\`Body\` AS BINARY) LIKE CAST(? AS BINARY))
+        ORDER BY \`id\` ASC",
+}
+`;
+
+exports[`core SQL (mariadb) > text-match-insensitive 1`] = `
+{
+  "parameters": [
+    "%AXB%",
+    "A\\_%",
+    "%\\% OFF",
+    "%[X]%",
+  ],
+  "sql": "WITH \`texts\` AS (
+SELECT 1 AS \`Id\`, CAST('50% off' AS CHAR) AS \`Body\` UNION ALL SELECT 2 AS \`Id\`, CAST('500 off' AS CHAR) AS \`Body\` UNION ALL SELECT 3 AS \`Id\`, CAST('a_b' AS CHAR) AS \`Body\` UNION ALL SELECT 4 AS \`Id\`, CAST('aXb' AS CHAR) AS \`Body\` UNION ALL SELECT 5 AS \`Id\`, CAST('C:\\\\dir' AS CHAR) AS \`Body\` UNION ALL SELECT 6 AS \`Id\`, CAST('C:dir' AS CHAR) AS \`Body\` UNION ALL SELECT 7 AS \`Id\`, CAST('A_B' AS CHAR) AS \`Body\` UNION ALL SELECT 8 AS \`Id\`, CAST('[x]' AS CHAR) AS \`Body\` UNION ALL SELECT 9 AS \`Id\`, CAST('x' AS CHAR) AS \`Body\` UNION ALL SELECT 10 AS \`Id\`, CAST('who?' AS CHAR) AS \`Body\` UNION ALL SELECT 11 AS \`Id\`, CAST('whom' AS CHAR) AS \`Body\`
+)
+SELECT
+          \`texts\`.\`Id\` AS \`id\`
+        FROM \`texts\`
+        WHERE (LOWER(\`texts\`.\`Body\`) LIKE LOWER(?) OR LOWER(\`texts\`.\`Body\`) LIKE LOWER(?) OR LOWER(\`texts\`.\`Body\`) LIKE LOWER(?) OR LOWER(\`texts\`.\`Body\`) LIKE LOWER(?))
+        ORDER BY \`id\` ASC",
+}
+`;
+
+exports[`core SQL (mariadb) > text-match-param 1`] = `
+{
+  "parameters": [
+    "0%",
+    "_b",
+    "C:\\",
+    "[x]",
+    "o?",
+  ],
+  "sql": "WITH \`texts\` AS (
+SELECT 1 AS \`Id\`, CAST('50% off' AS CHAR) AS \`Body\` UNION ALL SELECT 2 AS \`Id\`, CAST('500 off' AS CHAR) AS \`Body\` UNION ALL SELECT 3 AS \`Id\`, CAST('a_b' AS CHAR) AS \`Body\` UNION ALL SELECT 4 AS \`Id\`, CAST('aXb' AS CHAR) AS \`Body\` UNION ALL SELECT 5 AS \`Id\`, CAST('C:\\\\dir' AS CHAR) AS \`Body\` UNION ALL SELECT 6 AS \`Id\`, CAST('C:dir' AS CHAR) AS \`Body\` UNION ALL SELECT 7 AS \`Id\`, CAST('A_B' AS CHAR) AS \`Body\` UNION ALL SELECT 8 AS \`Id\`, CAST('[x]' AS CHAR) AS \`Body\` UNION ALL SELECT 9 AS \`Id\`, CAST('x' AS CHAR) AS \`Body\` UNION ALL SELECT 10 AS \`Id\`, CAST('who?' AS CHAR) AS \`Body\` UNION ALL SELECT 11 AS \`Id\`, CAST('whom' AS CHAR) AS \`Body\`
+)
+SELECT
+          \`texts\`.\`Id\` AS \`id\`
+        FROM \`texts\`
+        WHERE (CAST(\`texts\`.\`Body\` AS BINARY) LIKE CAST(CONCAT('%', replace(replace(replace(?, '\\\\', '\\\\\\\\'), '%', '\\\\%'), '_', '\\\\_'), '%') AS BINARY) OR CAST(\`texts\`.\`Body\` AS BINARY) LIKE CAST(CONCAT('%', replace(replace(replace(?, '\\\\', '\\\\\\\\'), '%', '\\\\%'), '_', '\\\\_')) AS BINARY) OR CAST(\`texts\`.\`Body\` AS BINARY) LIKE CAST(CONCAT(replace(replace(replace(?, '\\\\', '\\\\\\\\'), '%', '\\\\%'), '_', '\\\\_'), '%') AS BINARY) OR CAST(\`texts\`.\`Body\` AS BINARY) LIKE CAST(CONCAT('%', replace(replace(replace(?, '\\\\', '\\\\\\\\'), '%', '\\\\%'), '_', '\\\\_'), '%') AS BINARY) OR CAST(\`texts\`.\`Body\` AS BINARY) LIKE CAST(CONCAT('%', replace(replace(replace(?, '\\\\', '\\\\\\\\'), '%', '\\\\%'), '_', '\\\\_')) AS BINARY))
+        ORDER BY \`id\` ASC",
+}
+`;
+
+exports[`core SQL (mariadb) > union 1`] = `
+{
+  "parameters": [
+    "org_1",
+    "paid",
+    "org_1",
+    "open",
+    "org_1",
+    "void",
+  ],
+  "sql": "SELECT * FROM (
+SELECT * FROM (
+WITH \`orders\` AS (
+<orders fixture>
+),
+\`customers\` AS (
+<customers fixture>
+)
+SELECT
+          \`orders\`.\`Status\` AS \`status\`,
+          SUM(\`orders\`.\`Amount\`) AS \`total\`
+        FROM \`orders\`
+        WHERE \`orders\`.\`OrgId\` = ?
+          AND \`orders\`.\`Status\` = ?
+        GROUP BY 1
+) AS \`__union_branch\`
+UNION ALL
+SELECT * FROM (
+WITH \`orders\` AS (
+<orders fixture>
+),
+\`customers\` AS (
+<customers fixture>
+)
+SELECT
+          \`orders\`.\`Status\` AS \`status\`,
+          SUM(\`orders\`.\`Amount\`) AS \`total\`
+        FROM \`orders\`
+        WHERE \`orders\`.\`OrgId\` = ?
+          AND \`orders\`.\`Status\` = ?
+        GROUP BY 1
+) AS \`__union_branch\`
+UNION ALL
+SELECT * FROM (
+WITH \`orders\` AS (
+<orders fixture>
+),
+\`customers\` AS (
+<customers fixture>
+)
+SELECT
+          \`orders\`.\`Status\` AS \`status\`,
+          SUM(\`orders\`.\`Amount\`) AS \`total\`
+        FROM \`orders\`
+        WHERE \`orders\`.\`OrgId\` = ?
+          AND \`orders\`.\`Status\` = ?
+        GROUP BY 1
+) AS \`__union_branch\`
+) AS \`__union\`
+ORDER BY \`total\` DESC
+LIMIT 2
+OFFSET 1",
+}
+`;
+
+exports[`core SQL (mariadb) > union-cross-tenant 1`] = `
+{
+  "parameters": [],
+  "sql": "SELECT * FROM (
+WITH \`orders\` AS (
+<orders fixture>
+),
+\`customers\` AS (
+<customers fixture>
+)
+SELECT
+          COUNT(*) AS \`orders\`
+        FROM \`orders\`
+) AS \`__union_branch\`
+UNION ALL
+SELECT * FROM (
+WITH \`orders\` AS (
+<orders fixture>
+),
+\`customers\` AS (
+<customers fixture>
+)
+SELECT
+          COUNT(*) AS \`orders\`
+        FROM \`orders\`
+) AS \`__union_branch\`",
+}
+`;
+
+exports[`core SQL (mysql) > and-or 1`] = `
+{
+  "parameters": [
+    "org_1",
+    "paid",
+    15,
+    "globex",
+  ],
+  "sql": "WITH \`orders\` AS (
+<orders fixture>
+),
+\`customers\` AS (
+<customers fixture>
+)
+SELECT
+          \`orders\`.\`Id\` AS \`id\`
+        FROM \`orders\`
+        WHERE \`orders\`.\`OrgId\` = ?
+          AND ((\`orders\`.\`Status\` = ? AND \`orders\`.\`Amount\` > ?) OR \`orders\`.\`Customer\` = ?)
+        ORDER BY \`id\` ASC",
+}
+`;
+
+exports[`core SQL (mysql) > arithmetic 1`] = `
+{
+  "parameters": [
+    "org_1",
+    4,
+  ],
+  "sql": "WITH \`orders\` AS (
+<orders fixture>
+),
+\`customers\` AS (
+<customers fixture>
+)
+SELECT
+          \`orders\`.\`Amount\` + 1 AS \`added\`,
+          \`orders\`.\`Amount\` - 1 AS \`subtracted\`,
+          \`orders\`.\`Amount\` * 2 AS \`multiplied\`,
+          \`orders\`.\`Amount\` % 3 AS \`remainder\`,
+          \`orders\`.\`Amount\` / 2 AS \`divided\`
+        FROM \`orders\`
+        WHERE \`orders\`.\`OrgId\` = ?
+          AND \`orders\`.\`Id\` = ?",
+}
+`;
+
+exports[`core SQL (mysql) > comparisons 1`] = `
+{
+  "parameters": [
+    "org_1",
+    "void",
+    5,
+    10,
+    20,
+    10,
+  ],
+  "sql": "WITH \`orders\` AS (
+<orders fixture>
+),
+\`customers\` AS (
+<customers fixture>
+)
+SELECT
+          \`orders\`.\`Id\` AS \`id\`
+        FROM \`orders\`
+        WHERE \`orders\`.\`OrgId\` = ?
+          AND \`orders\`.\`Status\` != ?
+          AND \`orders\`.\`Amount\` > ?
+          AND \`orders\`.\`Amount\` >= ?
+          AND \`orders\`.\`Amount\` < ?
+          AND \`orders\`.\`Amount\` <= ?",
+}
+`;
+
+exports[`core SQL (mysql) > cross-join 1`] = `
+{
+  "parameters": [
+    "org_1",
+    "org_1",
+    2,
+  ],
+  "sql": "WITH \`orders\` AS (
+<orders fixture>
+),
+\`customers\` AS (
+<customers fixture>
+)
+SELECT
+          \`orders\`.\`Id\` AS \`id\`,
+          \`c\`.\`Name\` AS \`customer\`
+        FROM \`orders\`
+        CROSS JOIN \`customers\` AS \`c\`
+        WHERE \`orders\`.\`OrgId\` = ?
+          AND \`c\`.\`OrgId\` = ?
+          AND \`orders\`.\`Id\` <= ?
+        ORDER BY \`id\` ASC, \`customer\` ASC",
+}
+`;
+
+exports[`core SQL (mysql) > cross-join-subquery 1`] = `
+{
+  "parameters": [
+    "org_1",
+    "org_1",
+    2,
+  ],
+  "sql": "WITH \`orders\` AS (
+<orders fixture>
+),
+\`customers\` AS (
+<customers fixture>
+)
+SELECT
+          \`orders\`.\`Id\` AS \`id\`,
+          \`k\`.\`customers\` AS \`customers\`
+        FROM \`orders\`
+        CROSS JOIN (WITH \`orders\` AS (
+<orders fixture>
+),
+\`customers\` AS (
+<customers fixture>
+)
+SELECT
+          COUNT(*) AS \`customers\`
+        FROM \`customers\`
+        WHERE \`customers\`.\`OrgId\` = ?) AS \`k\`
+        WHERE \`orders\`.\`OrgId\` = ?
+          AND \`orders\`.\`Id\` <= ?
+        ORDER BY \`id\` ASC",
+}
+`;
+
+exports[`core SQL (mysql) > cte 1`] = `
+{
+  "parameters": [
+    "org_1",
+    "paid",
+  ],
+  "sql": "WITH \`orders\` AS (
+<orders fixture>
+),
+\`customers\` AS (
+<customers fixture>
+),
+\`paid\` AS (
+WITH \`orders\` AS (
+<orders fixture>
+),
+\`customers\` AS (
+<customers fixture>
+)
+SELECT
+          \`orders\`.\`Customer\` AS \`Customer\`,
+          \`orders\`.\`Amount\` AS \`Amount\`
+        FROM \`orders\`
+        WHERE \`orders\`.\`OrgId\` = ?
+          AND \`orders\`.\`Status\` = ?
+)
+SELECT
+          SUM(\`paid\`.\`Amount\`) AS \`total\`
+        FROM \`paid\`",
+}
+`;
+
+exports[`core SQL (mysql) > distinct-plain 1`] = `
+{
+  "parameters": [
+    "org_1",
+  ],
+  "sql": "WITH \`orders\` AS (
+<orders fixture>
+),
+\`customers\` AS (
+<customers fixture>
+)
+SELECT DISTINCT
+          \`orders\`.\`Status\` AS \`status\`
+        FROM \`orders\`
+        WHERE \`orders\`.\`OrgId\` = ?
+        ORDER BY \`status\` ASC",
+}
+`;
+
+exports[`core SQL (mysql) > from-subquery 1`] = `
+{
+  "parameters": [
+    "org_1",
+    6,
+  ],
+  "sql": "SELECT
+          \`t\`.\`customer\` AS \`customer\`,
+          \`t\`.\`total\` AS \`total\`
+        FROM (WITH \`orders\` AS (
+<orders fixture>
+),
+\`customers\` AS (
+<customers fixture>
+)
+SELECT
+          \`orders\`.\`OrgId\` AS \`OrgId\`,
+          \`orders\`.\`Customer\` AS \`customer\`,
+          SUM(\`orders\`.\`Amount\`) AS \`total\`
+        FROM \`orders\`
+        WHERE \`orders\`.\`OrgId\` = ?
+        GROUP BY 1, 2) AS \`t\`
+        WHERE \`t\`.\`total\` > ?
+        ORDER BY \`total\` DESC",
+}
+`;
+
+exports[`core SQL (mysql) > group-having 1`] = `
+{
+  "parameters": [
+    "paid",
+    "org_1",
+  ],
+  "sql": "WITH \`orders\` AS (
+<orders fixture>
+),
+\`customers\` AS (
+<customers fixture>
+)
+SELECT
+          \`orders\`.\`Customer\` AS \`customer\`,
+          COUNT(*) AS \`orders\`,
+          COUNT(CASE WHEN \`orders\`.\`Status\` = ? THEN 1 END) AS \`paid\`,
+          SUM(\`orders\`.\`Amount\`) AS \`total\`,
+          MIN(\`orders\`.\`Amount\`) AS \`smallest\`,
+          MAX(\`orders\`.\`Amount\`) AS \`largest\`
+        FROM \`orders\`
+        WHERE \`orders\`.\`OrgId\` = ?
+        GROUP BY 1
+        HAVING COUNT(*) >= 2
+        ORDER BY \`customer\` ASC",
+}
+`;
+
+exports[`core SQL (mysql) > inner-join 1`] = `
+{
+  "parameters": [
+    "org_1",
+  ],
+  "sql": "WITH \`orders\` AS (
+<orders fixture>
+),
+\`customers\` AS (
+<customers fixture>
+)
+SELECT
+          \`orders\`.\`Id\` AS \`id\`,
+          \`c\`.\`Tier\` AS \`tier\`
+        FROM \`orders\`
+        INNER JOIN \`customers\` AS \`c\` ON (\`orders\`.\`Customer\` = \`c\`.\`Name\` AND \`orders\`.\`OrgId\` = \`c\`.\`OrgId\`)
+        WHERE \`orders\`.\`OrgId\` = ?
+        ORDER BY \`id\` ASC",
+}
+`;
+
+exports[`core SQL (mysql) > is-not-null 1`] = `
+{
+  "parameters": [
+    "org_1",
+  ],
+  "sql": "WITH \`orders\` AS (
+<orders fixture>
+),
+\`customers\` AS (
+<customers fixture>
+)
+SELECT
+          \`orders\`.\`Id\` AS \`id\`
+        FROM \`orders\`
+        WHERE \`orders\`.\`OrgId\` = ?
+          AND \`orders\`.\`Note\` IS NOT NULL
+        ORDER BY \`id\` ASC",
+}
+`;
+
+exports[`core SQL (mysql) > join-subqueries 1`] = `
+{
+  "parameters": [
+    "org_1",
+    "silver",
+    "org_1",
+    "org_1",
+  ],
+  "sql": "WITH \`orders\` AS (
+<orders fixture>
+),
+\`customers\` AS (
+<customers fixture>
+)
+SELECT
+          \`customers\`.\`Name\` AS \`name\`,
+          \`t\`.\`tier\` AS \`tier\`,
+          \`n\`.\`orders\` AS \`orders\`
+        FROM \`customers\`
+        INNER JOIN (WITH \`orders\` AS (
+<orders fixture>
+),
+\`customers\` AS (
+<customers fixture>
+)
+SELECT
+          \`customers\`.\`Name\` AS \`name\`,
+          \`customers\`.\`Tier\` AS \`tier\`
+        FROM \`customers\`
+        WHERE \`customers\`.\`OrgId\` = ?
+          AND \`customers\`.\`Tier\` != ?) AS \`t\` ON \`customers\`.\`Name\` = \`t\`.\`name\`
+        LEFT JOIN (WITH \`orders\` AS (
+<orders fixture>
+),
+\`customers\` AS (
+<customers fixture>
+)
+SELECT
+          \`orders\`.\`Customer\` AS \`customer\`,
+          COUNT(*) AS \`orders\`
+        FROM \`orders\`
+        WHERE \`orders\`.\`OrgId\` = ?
+        GROUP BY 1) AS \`n\` ON \`customers\`.\`Name\` = \`n\`.\`customer\`
+        WHERE \`customers\`.\`OrgId\` = ?
+        ORDER BY \`name\` ASC",
+}
+`;
+
+exports[`core SQL (mysql) > left-join 1`] = `
+{
+  "parameters": [
+    "org_1",
+    3,
+  ],
+  "sql": "WITH \`orders\` AS (
+<orders fixture>
+),
+\`customers\` AS (
+<customers fixture>
+)
+SELECT
+          \`orders\`.\`Id\` AS \`id\`,
+          \`c\`.\`Tier\` AS \`tier\`
+        FROM \`orders\`
+        LEFT JOIN \`customers\` AS \`c\` ON (\`orders\`.\`Customer\` = \`c\`.\`Name\` AND \`orders\`.\`OrgId\` = \`c\`.\`OrgId\`)
+        WHERE \`orders\`.\`OrgId\` = ?
+          AND \`orders\`.\`Id\` >= ?
+        ORDER BY \`id\` ASC",
+}
+`;
+
+exports[`core SQL (mysql) > left-join-not-null 1`] = `
+{
+  "parameters": [
+    "org_1",
+    3,
+  ],
+  "sql": "WITH \`orders\` AS (
+<orders fixture>
+),
+\`customers\` AS (
+<customers fixture>
+)
+SELECT
+          \`orders\`.\`Id\` AS \`id\`,
+          \`c\`.\`Tier\` AS \`tier\`
+        FROM \`orders\`
+        LEFT JOIN \`customers\` AS \`c\` ON (\`orders\`.\`Customer\` = \`c\`.\`Name\` AND \`orders\`.\`OrgId\` = \`c\`.\`OrgId\`)
+        WHERE \`orders\`.\`OrgId\` = ?
+          AND \`orders\`.\`Id\` >= ?
+          AND \`c\`.\`Tier\` IS NOT NULL
+        ORDER BY \`id\` ASC",
+}
+`;
+
+exports[`core SQL (mysql) > like-case 1`] = `
+{
+  "parameters": [
+    "org_1",
+    "ACME",
+  ],
+  "sql": "WITH \`orders\` AS (
+<orders fixture>
+),
+\`customers\` AS (
+<customers fixture>
+)
+SELECT
+          \`orders\`.\`Id\` AS \`id\`
+        FROM \`orders\`
+        WHERE \`orders\`.\`OrgId\` = ?
+          AND \`orders\`.\`Customer\` LIKE ?
+        ORDER BY \`id\` ASC",
+}
+`;
+
+exports[`core SQL (mysql) > like-escape 1`] = `
+{
+  "parameters": [
+    "org\\_1",
+    "it\\_s",
+  ],
+  "sql": "WITH \`orders\` AS (
+<orders fixture>
+),
+\`customers\` AS (
+<customers fixture>
+)
+SELECT
+          \`orders\`.\`Id\` AS \`id\`
+        FROM \`orders\`
+        WHERE \`orders\`.\`OrgId\` LIKE ?
+          AND \`orders\`.\`Note\` NOT LIKE ?
+        ORDER BY \`id\` ASC",
+}
+`;
+
+exports[`core SQL (mysql) > limit-offset 1`] = `
+{
+  "parameters": [
+    "org_1",
+  ],
+  "sql": "WITH \`orders\` AS (
+<orders fixture>
+),
+\`customers\` AS (
+<customers fixture>
+)
+SELECT
+          \`orders\`.\`Id\` AS \`id\`
+        FROM \`orders\`
+        WHERE \`orders\`.\`OrgId\` = ?
+        ORDER BY \`id\` DESC
+        LIMIT 2
+        OFFSET 1",
+}
+`;
+
+exports[`core SQL (mysql) > locking-update-share 1`] = `
+{
+  "parameters": [
+    "org_1",
+    1,
+  ],
+  "sql": "WITH \`orders\` AS (
+<orders fixture>
+),
+\`customers\` AS (
+<customers fixture>
+)
+SELECT
+          \`orders\`.\`Id\` AS \`id\`
+        FROM \`orders\`
+        WHERE \`orders\`.\`OrgId\` = ?
+          AND \`orders\`.\`Id\` = ?
+        FOR SHARE NOWAIT",
+}
+`;
+
+exports[`core SQL (mysql) > null-and-range 1`] = `
+{
+  "parameters": [
+    "org_1",
+    5,
+    20,
+    3,
+    3,
+  ],
+  "sql": "WITH \`orders\` AS (
+<orders fixture>
+),
+\`customers\` AS (
+<customers fixture>
+)
+SELECT
+          \`orders\`.\`Id\` AS \`id\`
+        FROM \`orders\`
+        WHERE \`orders\`.\`OrgId\` = ?
+          AND \`orders\`.\`Note\` IS NULL
+          AND \`orders\`.\`Amount\` BETWEEN ? AND ?
+          AND \`orders\`.\`Id\` NOT BETWEEN ? AND ?
+        ORDER BY \`id\` ASC",
+}
+`;
+
+exports[`core SQL (mysql) > nulls-and-literals 1`] = `
+{
+  "parameters": [
+    "org_1",
+    2,
+    4,
+  ],
+  "sql": "WITH \`orders\` AS (
+<orders fixture>
+),
+\`customers\` AS (
+<customers fixture>
+)
+SELECT
+          \`orders\`.\`Id\` AS \`id\`,
+          \`orders\`.\`Note\` AS \`note\`,
+          COALESCE(\`orders\`.\`Note\`, '-') AS \`shown\`,
+          'x\\'y' AS \`label\`
+        FROM \`orders\`
+        WHERE \`orders\`.\`OrgId\` = ?
+          AND \`orders\`.\`Id\` IN (?, ?)
+        ORDER BY \`id\` ASC",
+}
+`;
+
+exports[`core SQL (mysql) > params 1`] = `
+{
+  "parameters": [
+    "org_1",
+    7,
+    19.5,
+    "2026-01-01 00:00:00.000",
+  ],
+  "sql": "WITH \`orders\` AS (
+<orders fixture>
+),
+\`customers\` AS (
+<customers fixture>
+)
+SELECT
+          \`orders\`.\`Id\` AS \`id\`,
+          \`orders\`.\`Created\` AS \`created\`
+        FROM \`orders\`
+        WHERE \`orders\`.\`OrgId\` = ?
+          AND \`orders\`.\`Amount\` >= ?
+          AND \`orders\`.\`Amount\` < ?
+          AND \`orders\`.\`Created\` >= ?
+        ORDER BY \`id\` ASC",
+}
+`;
+
+exports[`core SQL (mysql) > patterns-and-lists 1`] = `
+{
+  "parameters": [
+    "org_1",
+    "%e%",
+    "i%",
+    "pa%",
+    "open",
+    3,
+    2,
+  ],
+  "sql": "WITH \`orders\` AS (
+<orders fixture>
+),
+\`customers\` AS (
+<customers fixture>
+)
+SELECT
+          \`orders\`.\`Id\` AS \`id\`
+        FROM \`orders\`
+        WHERE \`orders\`.\`OrgId\` = ?
+          AND (\`orders\`.\`Customer\` LIKE ? AND \`orders\`.\`Customer\` NOT LIKE ?)
+          AND (\`orders\`.\`Status\` LIKE ? OR \`orders\`.\`Status\` IN (?))
+          AND \`orders\`.\`Id\` NOT IN (?)
+          AND NOT (\`orders\`.\`Id\` = ?)
+        ORDER BY \`id\` ASC",
+}
+`;
+
+exports[`core SQL (mysql) > pipe-data-last 1`] = `
+{
+  "parameters": [
+    "org_1",
+  ],
+  "sql": "WITH \`orders\` AS (
+<orders fixture>
+),
+\`customers\` AS (
+<customers fixture>
+)
+SELECT
+          \`orders\`.\`Id\` AS \`id\`,
+          \`c\`.\`Tier\` AS \`tier\`
+        FROM \`orders\`
+        INNER JOIN \`customers\` AS \`c\` ON (\`orders\`.\`Customer\` = \`c\`.\`Name\` AND \`orders\`.\`OrgId\` = \`c\`.\`OrgId\`)
+        WHERE \`orders\`.\`OrgId\` = ?
+        ORDER BY \`id\` ASC
+        LIMIT 2",
+}
+`;
+
+exports[`core SQL (mysql) > route-and-cross-tenant 1`] = `
+{
+  "parameters": [],
+  "sql": "WITH \`orders\` AS (
+<orders fixture>
+),
+\`customers\` AS (
+<customers fixture>
+)
+SELECT
+          COUNT(*) AS \`orders\`
+        FROM \`orders\`",
+}
+`;
+
+exports[`core SQL (mysql) > select-columns 1`] = `
+{
+  "parameters": [
+    "org_1",
+    "paid",
+  ],
+  "sql": "WITH \`orders\` AS (
+<orders fixture>
+),
+\`customers\` AS (
+<customers fixture>
+)
+SELECT
+          \`orders\`.\`Id\` AS \`Id\`,
+          \`orders\`.\`Customer\` AS \`Customer\`
+        FROM \`orders\`
+        WHERE \`orders\`.\`OrgId\` = ?
+          AND \`orders\`.\`Status\` = ?
+        ORDER BY \`Id\` ASC",
+}
+`;
+
+exports[`core SQL (mysql) > selected-param 1`] = `
+{
+  "parameters": [
+    1,
+    "org_1",
+    1,
+  ],
+  "sql": "WITH \`orders\` AS (
+<orders fixture>
+),
+\`customers\` AS (
+<customers fixture>
+)
+SELECT
+          \`orders\`.\`Id\` AS \`id\`,
+          ? AS \`flagged\`
+        FROM \`orders\`
+        WHERE \`orders\`.\`OrgId\` = ?
+          AND \`orders\`.\`Id\` = ?",
+}
+`;
+
+exports[`core SQL (mysql) > text-match 1`] = `
+{
+  "parameters": [
+    "%50\\%%",
+    "a\\_%",
+    "%\\\\dir",
+    "%[x]%",
+    "%o?",
+  ],
+  "sql": "WITH \`texts\` AS (
+SELECT 1 AS \`Id\`, CAST('50% off' AS CHAR) AS \`Body\` UNION ALL SELECT 2 AS \`Id\`, CAST('500 off' AS CHAR) AS \`Body\` UNION ALL SELECT 3 AS \`Id\`, CAST('a_b' AS CHAR) AS \`Body\` UNION ALL SELECT 4 AS \`Id\`, CAST('aXb' AS CHAR) AS \`Body\` UNION ALL SELECT 5 AS \`Id\`, CAST('C:\\\\dir' AS CHAR) AS \`Body\` UNION ALL SELECT 6 AS \`Id\`, CAST('C:dir' AS CHAR) AS \`Body\` UNION ALL SELECT 7 AS \`Id\`, CAST('A_B' AS CHAR) AS \`Body\` UNION ALL SELECT 8 AS \`Id\`, CAST('[x]' AS CHAR) AS \`Body\` UNION ALL SELECT 9 AS \`Id\`, CAST('x' AS CHAR) AS \`Body\` UNION ALL SELECT 10 AS \`Id\`, CAST('who?' AS CHAR) AS \`Body\` UNION ALL SELECT 11 AS \`Id\`, CAST('whom' AS CHAR) AS \`Body\`
+)
+SELECT
+          \`texts\`.\`Id\` AS \`id\`
+        FROM \`texts\`
+        WHERE (CAST(\`texts\`.\`Body\` AS BINARY) LIKE CAST(? AS BINARY) OR CAST(\`texts\`.\`Body\` AS BINARY) LIKE CAST(? AS BINARY) OR CAST(\`texts\`.\`Body\` AS BINARY) LIKE CAST(? AS BINARY) OR CAST(\`texts\`.\`Body\` AS BINARY) LIKE CAST(? AS BINARY) OR CAST(\`texts\`.\`Body\` AS BINARY) LIKE CAST(? AS BINARY))
+        ORDER BY \`id\` ASC",
+}
+`;
+
+exports[`core SQL (mysql) > text-match-insensitive 1`] = `
+{
+  "parameters": [
+    "%AXB%",
+    "A\\_%",
+    "%\\% OFF",
+    "%[X]%",
+  ],
+  "sql": "WITH \`texts\` AS (
+SELECT 1 AS \`Id\`, CAST('50% off' AS CHAR) AS \`Body\` UNION ALL SELECT 2 AS \`Id\`, CAST('500 off' AS CHAR) AS \`Body\` UNION ALL SELECT 3 AS \`Id\`, CAST('a_b' AS CHAR) AS \`Body\` UNION ALL SELECT 4 AS \`Id\`, CAST('aXb' AS CHAR) AS \`Body\` UNION ALL SELECT 5 AS \`Id\`, CAST('C:\\\\dir' AS CHAR) AS \`Body\` UNION ALL SELECT 6 AS \`Id\`, CAST('C:dir' AS CHAR) AS \`Body\` UNION ALL SELECT 7 AS \`Id\`, CAST('A_B' AS CHAR) AS \`Body\` UNION ALL SELECT 8 AS \`Id\`, CAST('[x]' AS CHAR) AS \`Body\` UNION ALL SELECT 9 AS \`Id\`, CAST('x' AS CHAR) AS \`Body\` UNION ALL SELECT 10 AS \`Id\`, CAST('who?' AS CHAR) AS \`Body\` UNION ALL SELECT 11 AS \`Id\`, CAST('whom' AS CHAR) AS \`Body\`
+)
+SELECT
+          \`texts\`.\`Id\` AS \`id\`
+        FROM \`texts\`
+        WHERE (LOWER(\`texts\`.\`Body\`) LIKE LOWER(?) OR LOWER(\`texts\`.\`Body\`) LIKE LOWER(?) OR LOWER(\`texts\`.\`Body\`) LIKE LOWER(?) OR LOWER(\`texts\`.\`Body\`) LIKE LOWER(?))
+        ORDER BY \`id\` ASC",
+}
+`;
+
+exports[`core SQL (mysql) > text-match-param 1`] = `
+{
+  "parameters": [
+    "0%",
+    "_b",
+    "C:\\",
+    "[x]",
+    "o?",
+  ],
+  "sql": "WITH \`texts\` AS (
+SELECT 1 AS \`Id\`, CAST('50% off' AS CHAR) AS \`Body\` UNION ALL SELECT 2 AS \`Id\`, CAST('500 off' AS CHAR) AS \`Body\` UNION ALL SELECT 3 AS \`Id\`, CAST('a_b' AS CHAR) AS \`Body\` UNION ALL SELECT 4 AS \`Id\`, CAST('aXb' AS CHAR) AS \`Body\` UNION ALL SELECT 5 AS \`Id\`, CAST('C:\\\\dir' AS CHAR) AS \`Body\` UNION ALL SELECT 6 AS \`Id\`, CAST('C:dir' AS CHAR) AS \`Body\` UNION ALL SELECT 7 AS \`Id\`, CAST('A_B' AS CHAR) AS \`Body\` UNION ALL SELECT 8 AS \`Id\`, CAST('[x]' AS CHAR) AS \`Body\` UNION ALL SELECT 9 AS \`Id\`, CAST('x' AS CHAR) AS \`Body\` UNION ALL SELECT 10 AS \`Id\`, CAST('who?' AS CHAR) AS \`Body\` UNION ALL SELECT 11 AS \`Id\`, CAST('whom' AS CHAR) AS \`Body\`
+)
+SELECT
+          \`texts\`.\`Id\` AS \`id\`
+        FROM \`texts\`
+        WHERE (CAST(\`texts\`.\`Body\` AS BINARY) LIKE CAST(CONCAT('%', replace(replace(replace(?, '\\\\', '\\\\\\\\'), '%', '\\\\%'), '_', '\\\\_'), '%') AS BINARY) OR CAST(\`texts\`.\`Body\` AS BINARY) LIKE CAST(CONCAT('%', replace(replace(replace(?, '\\\\', '\\\\\\\\'), '%', '\\\\%'), '_', '\\\\_')) AS BINARY) OR CAST(\`texts\`.\`Body\` AS BINARY) LIKE CAST(CONCAT(replace(replace(replace(?, '\\\\', '\\\\\\\\'), '%', '\\\\%'), '_', '\\\\_'), '%') AS BINARY) OR CAST(\`texts\`.\`Body\` AS BINARY) LIKE CAST(CONCAT('%', replace(replace(replace(?, '\\\\', '\\\\\\\\'), '%', '\\\\%'), '_', '\\\\_'), '%') AS BINARY) OR CAST(\`texts\`.\`Body\` AS BINARY) LIKE CAST(CONCAT('%', replace(replace(replace(?, '\\\\', '\\\\\\\\'), '%', '\\\\%'), '_', '\\\\_')) AS BINARY))
+        ORDER BY \`id\` ASC",
+}
+`;
+
+exports[`core SQL (mysql) > union 1`] = `
+{
+  "parameters": [
+    "org_1",
+    "paid",
+    "org_1",
+    "open",
+    "org_1",
+    "void",
+  ],
+  "sql": "SELECT * FROM (
+(
+WITH \`orders\` AS (
+<orders fixture>
+),
+\`customers\` AS (
+<customers fixture>
+)
+SELECT
+          \`orders\`.\`Status\` AS \`status\`,
+          SUM(\`orders\`.\`Amount\`) AS \`total\`
+        FROM \`orders\`
+        WHERE \`orders\`.\`OrgId\` = ?
+          AND \`orders\`.\`Status\` = ?
+        GROUP BY 1
+)
+UNION ALL
+(
+WITH \`orders\` AS (
+<orders fixture>
+),
+\`customers\` AS (
+<customers fixture>
+)
+SELECT
+          \`orders\`.\`Status\` AS \`status\`,
+          SUM(\`orders\`.\`Amount\`) AS \`total\`
+        FROM \`orders\`
+        WHERE \`orders\`.\`OrgId\` = ?
+          AND \`orders\`.\`Status\` = ?
+        GROUP BY 1
+)
+UNION ALL
+(
+WITH \`orders\` AS (
+<orders fixture>
+),
+\`customers\` AS (
+<customers fixture>
+)
+SELECT
+          \`orders\`.\`Status\` AS \`status\`,
+          SUM(\`orders\`.\`Amount\`) AS \`total\`
+        FROM \`orders\`
+        WHERE \`orders\`.\`OrgId\` = ?
+          AND \`orders\`.\`Status\` = ?
+        GROUP BY 1
+)
+) AS \`__union\`
+ORDER BY \`total\` DESC
+LIMIT 2
+OFFSET 1",
+}
+`;
+
+exports[`core SQL (mysql) > union-cross-tenant 1`] = `
+{
+  "parameters": [],
+  "sql": "(
+WITH \`orders\` AS (
+<orders fixture>
+),
+\`customers\` AS (
+<customers fixture>
+)
+SELECT
+          COUNT(*) AS \`orders\`
+        FROM \`orders\`
+)
+UNION ALL
+(
+WITH \`orders\` AS (
+<orders fixture>
+),
+\`customers\` AS (
+<customers fixture>
+)
+SELECT
+          COUNT(*) AS \`orders\`
+        FROM \`orders\`
+)",
+}
+`;
+
 exports[`core SQL (postgres) > and-or 1`] = `
 {
   "parameters": [
@@ -2010,6 +3606,27 @@ SELECT
         WHERE "orders"."OrgId" = $1
           AND "orders"."Id" = $2
         FOR UPDATE SKIP LOCKED",
+}
+`;
+
+exports[`core SQL (postgres) > locking-update-share 1`] = `
+{
+  "parameters": [
+    "org_1",
+    1,
+  ],
+  "sql": "WITH "orders" AS (
+<orders fixture>
+),
+"customers" AS (
+<customers fixture>
+)
+SELECT
+          "orders"."Id" AS "id"
+        FROM "orders"
+        WHERE "orders"."OrgId" = $1
+          AND "orders"."Id" = $2
+        FOR SHARE NOWAIT",
 }
 `;
 

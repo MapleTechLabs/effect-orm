@@ -33,10 +33,18 @@ export interface SqlSyntax {
 	readonly inexactNumberText?: boolean
 	/**
 	 * True when an integer column compares with a fraction numerically (SQLite's
-	 * type affinity), so `integer > 9.75` writes the fraction instead of refusing
+	 * type affinity, MySQL's numeric comparison), so `integer > 9.75` writes the fraction instead of refusing
 	 * it through the column's whole-number codec.
 	 */
 	readonly integerComparesFraction?: boolean
+	/**
+	 * True when LIKE follows a collation that may ignore case and accents
+	 * (MySQL's default), with no ILIKE. A case-sensitive text match then
+	 * compares bytes (`CAST(x AS BINARY) LIKE …`), an insensitive one `LOWER()`.
+	 */
+	readonly likeFollowsCollation?: boolean
+	/** Text concatenation of SQL operands, where it is not `||` (MySQL, whose `||` is OR). */
+	readonly concat?: (parts: ReadonlyArray<string>) => string
 	/** One identifier (a column, alias, table or schema name), quoted as needed. */
 	readonly quoteIdent: (name: string) => string
 	/** A string as a quoted literal. */

@@ -33,6 +33,34 @@ jobs:
                     --health-interval 5s
                     --health-timeout 5s
                     --health-retries 20
+            mysql:
+                image: mysql:8.4
+                env:
+                    MYSQL_ROOT_PASSWORD: maple
+                    MYSQL_DATABASE: maple
+                    MYSQL_USER: maple
+                    MYSQL_PASSWORD: maple
+                ports:
+                    - 3306:3306
+                options: >-
+                    --health-cmd "mysqladmin ping -h 127.0.0.1 -umaple -pmaple"
+                    --health-interval 5s
+                    --health-timeout 5s
+                    --health-retries 30
+            mariadb:
+                image: mariadb:11.4
+                env:
+                    MARIADB_ROOT_PASSWORD: maple
+                    MARIADB_DATABASE: maple
+                    MARIADB_USER: maple
+                    MARIADB_PASSWORD: maple
+                ports:
+                    - 3307:3306
+                options: >-
+                    --health-cmd "healthcheck.sh --connect --innodb_initialized"
+                    --health-interval 5s
+                    --health-timeout 5s
+                    --health-retries 30
         steps:
             - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
             - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
@@ -42,4 +70,6 @@ jobs:
                   EFFECT_ORM_CLICKHOUSE_URL: http://127.0.0.1:8123
                   EFFECT_ORM_CLICKHOUSE_USER: maple
                   EFFECT_ORM_CLICKHOUSE_PASSWORD: maple
+                  EFFECT_ORM_MYSQL_URL: mysql://maple:maple@127.0.0.1:3306/maple
+                  EFFECT_ORM_MARIADB_URL: mysql://maple:maple@127.0.0.1:3307/maple
               run: bun run test:release

@@ -45,8 +45,12 @@ export const runWith = async (
 export interface Semantics {
 	/** A column of an unmatched LEFT JOIN row: SQL NULL, or the column type's default (`''`, `0`). */
 	readonly missingJoinColumn: "null" | "default"
-	/** `/` over two integers: truncating integer division, or float division. */
-	readonly integerDivision: "truncate" | "float"
+	/**
+	 * `/` over two integers: truncating integer division, float division, or
+	 * MySQL's DECIMAL division (four places past the dividend's scale shown,
+	 * nine kept for the rest of the expression).
+	 */
+	readonly integerDivision: "truncate" | "float" | "decimal"
 	/**
 	 * `%`: `truncate` is JS `%` on any operands; `clickhouse` declines what ClickHouse computes its own
 	 * way (signed with unsigned, floats); `integer` casts both operands to integers first (SQLite).

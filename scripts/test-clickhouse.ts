@@ -11,6 +11,12 @@ const program = Effect.gen(function* () {
 		"live-configuration",
 		"EFFECT_ORM_CLICKHOUSE_URL is required; refusing to skip live tests.",
 	)
+	if (release) {
+		for (const name of ["EFFECT_ORM_MYSQL_URL", "EFFECT_ORM_MARIADB_URL"]) {
+			const url = yield* Config.String(name).pipe(Config.withDefault(""))
+			yield* check(url.trim().length > 0, "live-configuration", `${name} is required for a release; refusing to skip the MySQL and MariaDB tests.`)
+		}
+	}
 	const path = yield* Path.Path
 	const root = yield* path.fromFileUrl(new URL("..", import.meta.url))
 	const commands = release

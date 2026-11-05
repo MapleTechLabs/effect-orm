@@ -35,7 +35,7 @@ uniformly, which some codebases prefer for exactly this reason.
 
 ## Query builder (every entry)
 
-Everything in this section is exported, identically, from `/clickhouse`, `/postgres` and `/sqlite`.
+Everything in this section is exported, identically, from `/clickhouse`, `/postgres`, `/sqlite` and `/mysql`.
 
 ### Query construction
 
@@ -694,3 +694,30 @@ drizzle-kit 1.0 writes and names it.
 the `CREATE TABLE` and `CREATE INDEX` statements. `effect-orm generate` with `dialect: "sqlite"`
 writes migrations for them; see [SQLite migrations](./migrations.md#sqlite). The `/migrate`
 runner does not apply SQLite migrations yet.
+
+## MySQL and MariaDB
+
+`@maple-dev/effect-orm/mysql` exports the shared query builder and the four compile functions.
+`mysqlDialect` is the default; a `CurrentDialect` in context, or `options.dialect`, overrides it.
+`mariadbDialect` writes MariaDB's row locks and union branches. See [MySQL and MariaDB](./mysql.md)
+for driver wiring, collations and what differs.
+
+| Export | Purpose |
+| --- | --- |
+| `MysqlType` | A MySQL SQL type with its Effect codec |
+| `text`, `longtext`, `varchar(n)` | Text |
+| `tinyint`, `smallint`, `int`, `intUnsigned`, `bigint` | Integers in the type's range; `bigint` within 2^53 |
+| `double` | A finite number |
+| `decimal(p, s)` | Exact decimal text |
+| `boolean` | A boolean stored as 0/1 |
+| `datetime` | `DATETIME(3)`, an instant in UTC, years 1000-9999 |
+| `date` | `YYYY-MM-DD` text |
+| `blob`, `varbinary(n)` | Bytes |
+| `json(schema)` | JSON decoded through the supplied schema |
+| `mysqlDateTimeText(epochMillis)` | `DATETIME(3)` text for an instant |
+| `dateTimeNow` | A `defaultExpr` for a `datetime` column |
+| `nullable(type)`, `custom`, `brand` | Type composition |
+| `count`, `countDistinct`, `countIf`, `sum`, `avg`, `min`, `max` | MySQL aggregates; the last four can return SQL NULL |
+| `lower`, `upper`, `length`, `coalesce` | MySQL scalar functions |
+| `table` | `(name, columns, TableOptions?) => Table`, a query schema with no DDL |
+| `mysqlDialect`, `mariadbDialect` | The dialects |

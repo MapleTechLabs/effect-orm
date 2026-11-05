@@ -9,10 +9,11 @@ import { DateTime } from "effect"
 import * as CH from "@maple-dev/effect-orm/clickhouse"
 import * as PG from "@maple-dev/effect-orm/postgres"
 import * as SQLite from "@maple-dev/effect-orm/sqlite"
+import * as MySQL from "@maple-dev/effect-orm/mysql"
 
-export type DialectName = "clickhouse" | "postgres" | "sqlite" | "d1"
+export type DialectName = "clickhouse" | "postgres" | "sqlite" | "d1" | "mysql" | "mariadb"
 /** ClickHouse runs twice: `join_use_nulls=0` fills a missing join row with defaults. */
-export type Target = "clickhouse" | "clickhouse-join-nulls" | "postgres" | "sqlite" | "d1"
+export type Target = "clickhouse" | "clickhouse-join-nulls" | "postgres" | "sqlite" | "d1" | "mysql" | "mariadb"
 
 type Col<A> = CH.CHType<string, A, any>
 type Orders = {
@@ -70,21 +71,22 @@ interface FixtureColumn {
 	readonly name: string
 	readonly clickhouse: string
 	readonly postgres: string
+	readonly mysql: string
 }
 const fixtureColumns = {
 	orders: [
-		{ name: "OrgId", clickhouse: "String", postgres: "text" },
-		{ name: "Id", clickhouse: "UInt32", postgres: "int4" },
-		{ name: "Customer", clickhouse: "String", postgres: "text" },
-		{ name: "Amount", clickhouse: "Int64", postgres: "int8" },
-		{ name: "Status", clickhouse: "String", postgres: "text" },
-		{ name: "Note", clickhouse: "Nullable(String)", postgres: "text" },
-		{ name: "Created", clickhouse: "DateTime64(3, 'UTC')", postgres: "timestamptz" },
+		{ name: "OrgId", clickhouse: "String", postgres: "text", mysql: "CHAR" },
+		{ name: "Id", clickhouse: "UInt32", postgres: "int4", mysql: "SIGNED" },
+		{ name: "Customer", clickhouse: "String", postgres: "text", mysql: "CHAR" },
+		{ name: "Amount", clickhouse: "Int64", postgres: "int8", mysql: "SIGNED" },
+		{ name: "Status", clickhouse: "String", postgres: "text", mysql: "CHAR" },
+		{ name: "Note", clickhouse: "Nullable(String)", postgres: "text", mysql: "CHAR" },
+		{ name: "Created", clickhouse: "DateTime64(3, 'UTC')", postgres: "timestamptz", mysql: "DATETIME(3)" },
 	],
 	customers: [
-		{ name: "OrgId", clickhouse: "String", postgres: "text" },
-		{ name: "Name", clickhouse: "String", postgres: "text" },
-		{ name: "Tier", clickhouse: "String", postgres: "text" },
+		{ name: "OrgId", clickhouse: "String", postgres: "text", mysql: "CHAR" },
+		{ name: "Name", clickhouse: "String", postgres: "text", mysql: "CHAR" },
+		{ name: "Tier", clickhouse: "String", postgres: "text", mysql: "CHAR" },
 	],
 } satisfies Record<string, readonly FixtureColumn[]>
 
@@ -122,6 +124,12 @@ export const fixtureSql = (dialect: DialectName, table: keyof typeof fixtureColu
 		// The fixture's timestamps are already SQLite's text form, `YYYY-MM-DD HH:MM:SS.SSS`.
 		const rows = fixtureRows[table].map((row) => `(${row.map(sqlValue).join(", ")})`).join(", ")
 		return `SELECT ${columns.map((column, i) => `column${i + 1} AS "${column.name}"`).join(", ")} FROM (VALUES ${rows})`
+	}
+	if (dialect === "mysql" || dialect === "mariadb") {
+		// MySQL's VALUES rows are `ROW(…)` and MariaDB's are not; UNION ALL reads the same on both.
+		return fixtureRows[table]
+			.map((row) => `SELECT ${row.map((value, i) => `CAST(${sqlValue(value)} AS ${columns[i]!.mysql}) AS \`${columns[i]!.name}\``).join(", ")}`)
+			.join(" UNION ALL ")
 	}
 	const casts = columns.map((column, i) => `CAST("c${i}" AS ${column.postgres}) AS "${column.name}"`).join(", ")
 	const names = columns.map((_, i) => `"c${i}"`).join(", ")
@@ -240,11 +248,56 @@ export const d1Context: CoreContext = {
 	compileUnion: (union, params = {}) => SQLite.compileUnionUnsafe(union, params, { dialect: SQLite.d1Dialect }),
 }
 
+const mysqlTables = {
+	orders: MySQL.table(
+		"orders",
+		{
+			OrgId: MySQL.text,
+			Id: MySQL.int,
+			Customer: MySQL.text,
+			Amount: MySQL.bigint,
+			Status: MySQL.text,
+			Note: MySQL.nullable(MySQL.text),
+			Created: MySQL.datetime,
+		},
+		{ tenantColumn: "OrgId" },
+	),
+	customers: MySQL.table("customers", { OrgId: MySQL.text, Name: MySQL.text, Tier: MySQL.text }, { tenantColumn: "OrgId" }),
+}
+
+export const mysqlContext: CoreContext = {
+	dialect: "mysql",
+	...mysqlTables,
+	from: withFixtures("mysql"),
+	types: { text: MySQL.text, int: MySQL.bigint },
+	fn: {
+		count: () => MySQL.count(),
+		countIf: (condition) => MySQL.countIf(condition),
+		sum: (expr) => MySQL.sum(expr),
+		min: (expr) => MySQL.min(expr),
+		max: (expr) => MySQL.max(expr),
+		coalesce: (expr, fallback) => MySQL.coalesce(expr, fallback),
+	},
+	compile: (query, params = {}) => MySQL.compileUnsafe(query, params),
+	compileUnion: (union, params = {}) => MySQL.compileUnionUnsafe(union, params),
+}
+
+/** MariaDB runs MySQL's SQL, with its own row-lock syntax. */
+export const mariadbContext: CoreContext = {
+	...mysqlContext,
+	dialect: "mariadb",
+	from: withFixtures("mariadb"),
+	compile: (query, params = {}) => MySQL.compileUnsafe(query, params, { dialect: MySQL.mariadbDialect }),
+	compileUnion: (union, params = {}) => MySQL.compileUnionUnsafe(union, params, { dialect: MySQL.mariadbDialect }),
+}
+
 export const contexts: Record<DialectName, CoreContext> = {
 	clickhouse: clickhouseContext,
 	postgres: postgresContext,
 	sqlite: sqliteContext,
 	d1: d1Context,
+	mysql: mysqlContext,
+	mariadb: mariadbContext,
 }
 
 // Cases
@@ -285,17 +338,22 @@ const texts = (ctx: CoreContext) => {
 			? CH.table("texts", { external: true, columns: { Id: CH.uint32, Body: CH.string } })
 			: ctx.dialect === "postgres"
 				? PG.table("texts", { external: true, columns: { Id: PG.int4, Body: PG.text } })
-				: SQLite.table("texts", { external: true, columns: { Id: SQLite.integer, Body: SQLite.text } })
-	// A ClickHouse string literal escapes a backslash; a Postgres or SQLite one does not.
+				: ctx.dialect === "mysql" || ctx.dialect === "mariadb"
+					? MySQL.table("texts", { Id: MySQL.int, Body: MySQL.text })
+					: SQLite.table("texts", { external: true, columns: { Id: SQLite.integer, Body: SQLite.text } })
+	const mysql = ctx.dialect === "mysql" || ctx.dialect === "mariadb"
+	// A ClickHouse or MySQL string literal escapes a backslash; a Postgres or SQLite one does not.
 	const literal = (text: string) =>
-		`'${(ctx.dialect === "clickhouse" ? text.replaceAll("\\", "\\\\") : text).replaceAll("'", "''")}'`
+		`'${(ctx.dialect === "clickhouse" || mysql ? text.replaceAll("\\", "\\\\") : text).replaceAll("'", "''")}'`
 	const tuples = textRows.map(([id, body]) => `(${id}, ${literal(body)})`).join(", ")
 	const body =
 		ctx.dialect === "clickhouse"
 			? `SELECT * FROM values('Id UInt32, Body String', ${tuples})`
-			: ctx.dialect === "sqlite" || ctx.dialect === "d1"
-				? `SELECT column1 AS "Id", column2 AS "Body" FROM (VALUES ${tuples})`
-				: `SELECT CAST("c0" AS int4) AS "Id", CAST("c1" AS text) AS "Body" FROM (VALUES ${tuples}) AS v("c0", "c1")`
+			: mysql
+				? textRows.map(([id, body]) => `SELECT ${id} AS \`Id\`, CAST(${literal(body)} AS CHAR) AS \`Body\``).join(" UNION ALL ")
+				: ctx.dialect === "sqlite" || ctx.dialect === "d1"
+					? `SELECT column1 AS "Id", column2 AS "Body" FROM (VALUES ${tuples})`
+					: `SELECT CAST("c0" AS int4) AS "Id", CAST("c1" AS text) AS "Body" FROM (VALUES ${tuples}) AS v("c0", "c1")`
 	return CH.from(table as CH.Table<"texts", { readonly Id: Col<number>; readonly Body: Col<string> }>).withCTE("texts", body)
 }
 
@@ -367,7 +425,7 @@ export const coreCases: readonly CoreCase[] = [
 				org,
 			),
 		expected: [{ id: 1 }, { id: 2 }],
-		rejects: { sqlite: /ILIKE/, d1: /ILIKE/ },
+		rejects: { sqlite: /ILIKE/, d1: /ILIKE/, mysql: /ILIKE/, mariadb: /ILIKE/ },
 	},
 	{
 		id: "like-escape",
@@ -414,6 +472,9 @@ export const coreCases: readonly CoreCase[] = [
 			postgres: [{ added: 8, subtracted: 6, multiplied: 14, remainder: 1, divided: 3 }],
 			sqlite: [{ added: 8, subtracted: 6, multiplied: 14, remainder: 1, divided: 3 }],
 			d1: [{ added: 8, subtracted: 6, multiplied: 14, remainder: 1, divided: 3 }],
+			// MySQL's `/` is DECIMAL division, four places past the dividend's.
+			mysql: [{ added: 8, subtracted: 6, multiplied: 14, remainder: 1, divided: 3.5 }],
+			mariadb: [{ added: 8, subtracted: 6, multiplied: 14, remainder: 1, divided: 3.5 }],
 		},
 	},
 	{
@@ -768,7 +829,7 @@ export const coreCases: readonly CoreCase[] = [
 		id: "format",
 		covers: q("format"),
 		format: "JSON",
-		rejects: { postgres: /no FORMAT clause/, sqlite: /no FORMAT clause/, d1: /no FORMAT clause/ },
+		rejects: { postgres: /no FORMAT clause/, sqlite: /no FORMAT clause/, d1: /no FORMAT clause/, mysql: /no FORMAT clause/, mariadb: /no FORMAT clause/ },
 		build: (ctx) =>
 			ctx.compile(
 				orgOrders(ctx)
@@ -783,7 +844,7 @@ export const coreCases: readonly CoreCase[] = [
 		id: "union-format",
 		covers: u("format"),
 		format: "JSON",
-		rejects: { postgres: /no FORMAT clause/, sqlite: /no FORMAT clause/, d1: /no FORMAT clause/ },
+		rejects: { postgres: /no FORMAT clause/, sqlite: /no FORMAT clause/, d1: /no FORMAT clause/, mysql: /no FORMAT clause/, mariadb: /no FORMAT clause/ },
 		build: (ctx) => {
 			const one = (id: number) =>
 				orgOrders(ctx)
@@ -844,7 +905,7 @@ export const coreCases: readonly CoreCase[] = [
 					.orderBy(["customer", "asc"], ["id", "desc"]),
 				org,
 			),
-		rejects: { sqlite: /DISTINCT ON/, d1: /DISTINCT ON/ },
+		rejects: { sqlite: /DISTINCT ON/, d1: /DISTINCT ON/, mysql: /DISTINCT ON/, mariadb: /DISTINCT ON/ },
 		expected: [
 			{ customer: "acme", id: 2 },
 			{ customer: "globex", id: 3 },
@@ -861,12 +922,24 @@ export const coreCases: readonly CoreCase[] = [
 	{
 		id: "locking",
 		covers: q("forUpdate", "forNoKeyUpdate", "forShare", "forKeyShare"),
-		rejects: { clickhouse: /no row locks/, sqlite: /no row locks/, d1: /no row locks/ },
+		rejects: { clickhouse: /no row locks/, sqlite: /no row locks/, d1: /no row locks/, mysql: /FOR NO KEY UPDATE/, mariadb: /FOR NO KEY UPDATE/ },
 		build: (ctx) => {
 			// Each strength compiles; the one sent is FOR UPDATE SKIP LOCKED.
 			const base = orgOrders(ctx).select(($) => ({ id: $.Id })).where(($) => [$.Id.eq(1)])
 			for (const locked of [base.forNoKeyUpdate({ noWait: true }), base.forShare(), base.forKeyShare()]) ctx.compile(locked, org)
 			return ctx.compile(base.forUpdate({ skipLocked: true }), org)
+		},
+		expected: [{ id: 1 }],
+	},
+	{
+		id: "locking-update-share",
+		covers: q("forUpdate", "forShare"),
+		rejects: { clickhouse: /no row locks/, sqlite: /no row locks/, d1: /no row locks/ },
+		build: (ctx) => {
+			// The two strengths MySQL and MariaDB have; the one sent is FOR SHARE NOWAIT.
+			const base = orgOrders(ctx).select(($) => ({ id: $.Id })).where(($) => [$.Id.eq(1)])
+			ctx.compile(base.forUpdate({ skipLocked: true }), org)
+			return ctx.compile(base.forShare({ noWait: true }), org)
 		},
 		expected: [{ id: 1 }],
 	},
@@ -942,4 +1015,6 @@ export const coreSkips: Record<DialectName, Record<string, string>> = {
 	postgres: {},
 	sqlite: {},
 	d1: {},
+	mysql: {},
+	mariadb: {},
 }

@@ -55,7 +55,7 @@ export const sqliteDialect: Dialect<"sqlite"> = {
 		groupByAlias: false,
 		parenthesizeUnionBranches: false,
 		wrapUnionBranches: true,
-		offsetRequiresLimit: true,
+		limitForOffset: "-1",
 		returning: true,
 		onConflict: true,
 		onConflictConstraint: false,

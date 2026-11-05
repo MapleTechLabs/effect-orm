@@ -59,7 +59,10 @@ export const fixtureSource = (dialect: string, data: Fixture, table: keyof Fixtu
 	const select = (row: Order | Customer | undefined) => defs.map(([name, ch, pg]) => {
 		const raw = row === undefined ? null : (row as unknown as Record<string, unknown>)[name]
 		const v = name === "Created" && raw !== null ? wireDateTime(raw as number, true) : raw
-		const type = dialect === "clickhouse" ? ch : dialect === "postgres" ? pg : name === "Id" || name === "Amount" ? "INTEGER" : "TEXT"
+		const mysql = dialect === "mysql" || dialect === "mariadb"
+		const type = dialect === "clickhouse" ? ch : dialect === "postgres" ? pg
+			: mysql ? (name === "Id" || name === "Amount" ? "SIGNED" : name === "Created" ? "DATETIME(3)" : "CHAR")
+			: name === "Id" || name === "Amount" ? "INTEGER" : "TEXT"
 		// An empty relation still needs valid values for non-nullable ClickHouse casts.
 		const empty = row === undefined && dialect === "clickhouse" ? (name === "Note" ? null : name === "Created" ? "2026-01-01 00:00:00.000" : type.startsWith("U") || type === "Int64" ? 0 : "") : v
 		return `CAST(${value(empty)} AS ${type}) AS "${name}"`
@@ -88,7 +91,7 @@ export const fixtureSource = (dialect: string, data: Fixture, table: keyof Fixtu
 		}).join(", ")})`).join(", ")
 		return `SELECT ${defs.map(([name], i) => `column${i + 1} AS "${name}"`).join(", ")} FROM (VALUES ${tuples})`
 	}
-	return data[table].length === 0 ? `SELECT ${select(undefined)} WHERE 1 = 0` : data[table].map((row) => `SELECT ${select(row)}`).join(" UNION ALL ")
+	return data[table].length === 0 ? `SELECT ${select(undefined)}${dialect === "mysql" || dialect === "mariadb" ? " FROM DUAL" : ""} WHERE 1 = 0` : data[table].map((row) => `SELECT ${select(row)}`).join(" UNION ALL ")
 }
 
 export const fixtureContext = (dialect: FuzzDialect, data: Fixture): CoreContext => ({

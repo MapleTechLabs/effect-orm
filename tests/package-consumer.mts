@@ -106,6 +106,14 @@ assert.equal(sqliteCompiled.dialect, "sqlite")
 const sqliteDecoded: ReadonlyArray<{ readonly id: number; readonly note: string }> = await Effect.runPromise(sqliteCompiled.decodeRows([{ id: 1, note: "sqlite" }]))
 assert.deepEqual(sqliteDecoded, [{ id: 1, note: "sqlite" }])
 assert.equal(SQLite.compileUnsafe(sqliteQuery, { id: 1 }, { dialect: SQLite.d1Dialect }).dialect, "d1")
+const MySQL = await import("@maple-dev/effect-orm/mysql")
+const mysqlRows = MySQL.table("consumer_rows", { id: MySQL.bigint, note: MySQL.text })
+const mysqlQuery = MySQL.from(mysqlRows).select().where(($) => [$.id.eq(MySQL.param.int("id"))])
+const mysqlCompiled = await Effect.runPromise(MySQL.compile(mysqlQuery, { id: 1 }))
+assert.deepEqual(mysqlCompiled.parameters, [1])
+assert.equal(mysqlCompiled.dialect, "mysql")
+assert.match(mysqlCompiled.sql, /`consumer_rows`\.`id` = \?/)
+assert.equal(MySQL.compileUnsafe(mysqlQuery, { id: 1 }, { dialect: MySQL.mariadbDialect }).dialect, "mariadb")
 const sqliteLinks = SQLite.table("consumer_links", {
 	columns: { id: SQLite.text, orgId: SQLite.column(SQLite.nullable(SQLite.text), { name: "org_id" }) },
 	primaryKey: ["id"],
