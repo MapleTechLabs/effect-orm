@@ -150,8 +150,10 @@ const resolvedMarkdownUrl =
 
     <script>
       import { codeCopy, headingAnchors } from "@cloudflare/nimbus-docs/client";
+      import { startTelemetry } from "@/lib/telemetry";
       codeCopy();
       headingAnchors();
+      startTelemetry();
     </script>
   </body>
 </html>

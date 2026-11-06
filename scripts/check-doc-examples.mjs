@@ -11,7 +11,9 @@ try {
 	for (const page of readdirSync(join(root, "docs"))) {
 		if (!page.endsWith(".md")) continue
 		const markdown = readFileSync(join(root, "docs", page), "utf8")
-		for (const match of markdown.matchAll(/```ts title="([a-z-]+\.ts)"\n([\s\S]*?)\n```/g)) {
+		// A dialect's version of an example adds `dialect="postgres"` and its own
+		// filename (`quick-start.pg.ts`), so every version is compiled.
+		for (const match of markdown.matchAll(/```ts title="([a-z.-]+\.ts)"(?: dialect="[a-z,]+")?\n([\s\S]*?)\n```/g)) {
 			const [, name, source] = match
 			assert(!examples.has(name), `Duplicate example filename: ${name}`)
 			examples.set(name, source)

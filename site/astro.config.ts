@@ -4,7 +4,7 @@ import nimbus, {
   defineConfig as defineNimbusConfig,
 } from "@cloudflare/nimbus-docs";
 import { tableScroll } from "@cloudflare/nimbus-docs/markdown";
-import { groups } from "./scripts/sidebar.mjs";
+import { dialects, groupLabel, groups, pagesFor } from "./scripts/sidebar.mjs";
 
 const nimbusConfig = defineNimbusConfig({
   // Canonical origin (no trailing slash): the package.json `homepage`. Drives
@@ -16,11 +16,25 @@ const nimbusConfig = defineNimbusConfig({
   locale: "en",
   github: "https://github.com/MapleTechLabs/effect-orm",
   socialImageAlt: "effect-orm documentation preview",
-  // The home page, then one group per folder that scripts/sync-docs.mjs writes.
+  // One section per dialect, then the shared groups; each is a header tab, and
+  // the sidebar shows only the current one. The folders are the ones
+  // scripts/sync-docs.mjs writes.
   sidebar: {
+    scope: "section",
     items: [
-      "index",
-      ...groups.map((group) => ({ label: group.label, autogenerate: { directory: group.dir } })),
+      ...dialects.map((dialect) => ({
+        label: dialect.label,
+        segment: `/${dialect.id}`,
+        items: groups
+          .filter((group) => !group.shared && pagesFor(group, dialect).length > 0)
+          .map((group) => ({
+            label: groupLabel(group, dialect),
+            autogenerate: { directory: `${dialect.id}/${group.dir}` },
+          })),
+      })),
+      ...groups
+        .filter((group) => group.shared)
+        .map((group) => ({ label: group.label as string, autogenerate: { directory: group.dir } })),
     ],
   },
 });
