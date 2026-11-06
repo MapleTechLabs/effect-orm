@@ -22,6 +22,17 @@ export const timestampText = (epochMillis: number): string => {
 	return `${iso.slice(0, 10)} ${iso.slice(11, 23)}`
 }
 
+/**
+ * Whether the calendar date that text starts with exists. `Date.parse` moves an
+ * impossible one on (`2023-02-30` is March 2), so it is checked before parsing.
+ */
+const realCalendarDate = (value: string): boolean => {
+	const date = /^\s*(\d{4})-(\d{2})-(\d{2})/.exec(value)
+	if (date === null) return true
+	const [year, month, day] = [Number(date[1]), Number(date[2]), Number(date[3])]
+	return month >= 1 && month <= 12 && day >= 1 && day <= new Date(Date.UTC(year, month, 0)).getUTCDate()
+}
+
 export const textTimestamp = (rules: TextTimestampRules) => {
 	const span = `${String(rules.minYear).padStart(4, "0")}-${rules.maxYear}`
 	const inRange = (epochMillis: number): boolean => {
@@ -46,7 +57,7 @@ export const textTimestamp = (rules: TextTimestampRules) => {
 	)
 	const isText = Schema.makeFilter(
 		(value: string) => {
-			const millis = Date.parse(pgTimestampToIso(value))
+			const millis = realCalendarDate(value) ? Date.parse(pgTimestampToIso(value)) : Number.NaN
 			if (Number.isNaN(millis)) return `\`${value}\` is not ${rules.noun}: expected \`YYYY-MM-DD HH:MM:SS[.SSS]\` or ISO-8601`
 			return inRange(millis) ? undefined : rangeMessage(millis)
 		},
@@ -86,6 +97,7 @@ export const textTimestamp = (rules: TextTimestampRules) => {
 				}),
 			),
 			Schema.String.pipe(
+				Schema.check(Schema.makeFilter((value: string) => (realCalendarDate(value) ? undefined : `\`${value}\` is not a calendar date`), { title: rules.title })),
 				Schema.decodeTo(Schema.Date.pipe(Schema.check(dateInRange)), {
 					decode: SchemaGetter.transform((value: string) => new Date(pgTimestampToIso(value))),
 					encode: SchemaGetter.transform((value: Date) => timestampText(adjust(value.getTime()))),

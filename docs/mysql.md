@@ -124,8 +124,11 @@ export const MysqlLive = Db.layerSqlClient({
 
 For a proxy without prepared statements, such as Cloudflare Hyperdrive (as `@effect/sql-mysql2`
 documents its `disablePreparedStatements` option), pass `disablePreparedStatements: true` to
-`MysqlClient.layer`: mysql2 then writes each value into the statement, escaped. Both paths are
-fuzzed. Over the text protocol the server prints some `DOUBLE` results one ULP off
+`MysqlClient.layer`: mysql2 then writes each value into the statement, escaped with backslashes
+(so the server must not run with `NO_BACKSLASH_ESCAPES`, see below). Both paths are fuzzed. In a
+Worker, mysql2 also needs `disableEval: true`; `MysqlClient.layer` passes `poolConfig` through
+only with `host`, `port`, `database`, `username` and `password`, not with `url`, so give those
+and `poolConfig: { timezone: "Z", disableEval: true }`. Over the text protocol the server prints some `DOUBLE` results one ULP off
 (93188483.89857809 reads back as …808); prepared statements send the exact bits.
 
 `Db.stream` reads through mysql2's row stream. Transactions and nested savepoints use the
@@ -149,7 +152,7 @@ mode alone is one statement. `deferrable` is refused.
 | `datetime` | `datetime(3)` | `DateTime.Utc`, years 1000-9999 |
 | `date` | `date` | `YYYY-MM-DD` text, a calendar date with no time zone |
 | `blob`, `varbinary(n)` | `blob`, `varbinary(n)` | `Uint8Array` |
-| `json(schema)` | `json` | the schema's type; MySQL sends JSON parsed, MariaDB as text |
+| `json(schema)` | `json` | the schema's type; MySQL sends JSON parsed, MariaDB as text. A string on the wire is read as JSON text, so a top-level JSON *string* (`"hello"`, quotes included) reads back as `hello` on MySQL: wrap such a value in an object or array |
 | `nullable`, `custom`, `brand` | | type composition |
 
 `MysqlType` is the descriptor type and `MysqlInteger` the integer wire codec. `dateTimeNow` is a
@@ -158,7 +161,9 @@ session's time zone and the column is read as UTC. A `DATETIME` itself is stored
 mysql2's `timezone: "Z"` is all reading and writing need. And `mysqlDateTimeText(epochMillis)` is the `DATETIME(3)` text of an
 instant, for raw SQL and seeds.
 
-`date` refuses a day that does not exist. MariaDB's default `sql_mode` stores zero dates
+`date` refuses a day that does not exist. mysql2 also builds a `Date` for a year before 100 in
+the 1900s (`0099-01-01` arrives as 1999), which the codec cannot tell from a real date; read
+such dates as text with `dateStrings: ["DATE"]`. MariaDB's default `sql_mode` stores zero dates
 (`2024-02-00`), which mysql2 turns into another day's `Date` before the codec sees it: run with
 `NO_ZERO_IN_DATE,NO_ZERO_DATE`, or read DATE as text (mysql2's `dateStrings: ["DATE"]`).
 
@@ -170,7 +175,9 @@ and `amount.gt(9.75)` compares numerically. Inserting a value outside the type i
 
 With `supportBigNumbers` (which `@effect/sql-mysql2` sets), mysql2 sends a `BIGINT` or a JSON
 integer past 2^53 as a string. `bigint` refuses it; inside `json(schema)` the schema sees a
-string, so declare such a field as one.
+string, so declare such a field as one. mysql2 can only keep a JSON integer exact where the runtime's
+`JSON.parse` hands its reviver the source text (current V8, as in recent Node); elsewhere it is rounded before the schema
+sees it. Store an integer that must stay exact as a JSON string.
 
 MySQL's own JSON parser reads some doubles up to one ULP off (`7.33277286497045e+62`), on every
 path: a JSON column, `CAST(… AS JSON)` and `JSON_EXTRACT`. Store an exact number as `decimal` or
@@ -205,8 +212,11 @@ another dialect is refused in the type and at compile time.
 - **Row locks:** `forUpdate` and `forShare` with `skipLocked`, `noWait` and, on MySQL, `of`.
   MariaDB writes a shared lock as `LOCK IN SHARE MODE`.
 - **`NO_BACKSLASH_ESCAPES` is not supported.** String literals escape `\` with a backslash, as
-  MySQL reads them by default. Bound values are unaffected. A literal containing the builder's
-  reserved `__PARAM_` text is written as a `CONCAT` of parts.
+  MySQL reads them by default. With prepared statements bound values never enter the SQL text,
+  but over the text protocol (`disablePreparedStatements`) mysql2 escapes them with backslashes
+  too, so under `NO_BACKSLASH_ESCAPES` a quote in a value can end the string: an injection. Do not
+  run that mode on such a server. A literal containing the builder's reserved `__PARAM_` text is
+  written as a `CONCAT` of parts.
 - **OFFSET without LIMIT** is written with MySQL's largest row count.
 - **MariaDB 11.4 pages `DISTINCT` over a join wrongly.** It counts `OFFSET` over the join's rows
   before `DISTINCT` removes their duplicates, so a page can repeat a row from the page before.
