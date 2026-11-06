@@ -27,7 +27,7 @@ import {
 } from "./ledger"
 import { ensurePgLedger, isPgApplied, lockPg, readPgApplied, recordPgMigration, transactionOf } from "./pg-ledger"
 import { backfillWindows, renderBackfill, renderBackfillBounds, renderOp } from "../schema/ops"
-import { dialectOf, refuseSqlite, stepsOf, type LoadedMigration, type MigrationStep } from "./source"
+import { dialectOf, refuseUnapplied, stepsOf, type LoadedMigration, type MigrationStep } from "./source"
 
 export interface RunOptions {
 	readonly migrations: ReadonlyArray<LoadedMigration>
@@ -251,7 +251,7 @@ const applyOne = (migration: LoadedMigration, render: RenderOptions, renew: Effe
  * have their hash checked. Returns what ran.
  */
 export const run = (options: RunOptions): Effect.Effect<ReadonlyArray<AppliedMigration>, MigrateError, MigrationDriver> =>
-	Effect.andThen(refuseSqlite(options.migrations, options.dialect), () =>
+	Effect.andThen(refuseUnapplied(options.migrations, options.dialect), () =>
 		resolveDialect(options.migrations, options.dialect) === "postgres" ? runPg(options) : runClickHouse(options),
 	)
 
@@ -338,7 +338,7 @@ export const baseline = (options: BaselineOptions): Effect.Effect<ReadonlyArray<
 	Effect.gen(function* () {
 		const index = options.migrations.findIndex((m) => m.name === options.upTo)
 		if (index === -1) return yield* new MigrateSourceError({ migration: options.upTo, message: "is not one of the migrations" })
-		yield* refuseSqlite(options.migrations, options.dialect)
+		yield* refuseUnapplied(options.migrations, options.dialect)
 		const postgres = resolveDialect(options.migrations, options.dialect) === "postgres"
 		if (postgres) yield* ensurePgLedger
 		else yield* ensureLedger(options.render ?? {})
@@ -359,7 +359,7 @@ export const status = (
 	dialect?: SchemaDialect,
 ): Effect.Effect<ReadonlyArray<MigrationStatus>, MigrateError, MigrationDriver> =>
 	Effect.gen(function* () {
-		yield* refuseSqlite(migrations, dialect)
+		yield* refuseUnapplied(migrations, dialect)
 		if (resolveDialect(migrations, dialect) === "postgres") {
 			yield* ensurePgLedger
 			const applied = new Map((yield* readPgApplied).map((row) => [row.name, row]))
@@ -407,7 +407,7 @@ export interface ResolveStepOptions {
 export const resolveStep = (options: ResolveStepOptions): Effect.Effect<void, MigrateError, MigrationDriver> =>
 	Effect.gen(function* () {
 		const { migration } = options
-		yield* refuseSqlite([migration], options.dialect)
+		yield* refuseUnapplied([migration], options.dialect)
 		if (resolveDialect([migration], options.dialect) === "postgres") {
 			return yield* new MigrateSourceError({
 				migration: migration.name,

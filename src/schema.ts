@@ -2,8 +2,8 @@
 //
 // The tooling under migrations: schema entities, snapshots, DDL rendering and
 // the offline diff that turns two snapshots into migration ops. Tables are
-// declared with `table` from `/clickhouse` or `/postgres`; this entry reads
-// them. Pure: nothing here reads files or opens a connection. See
+// declared with `table` from `/clickhouse`, `/postgres`, `/sqlite` or `/mysql`;
+// this entry reads them. Pure: nothing here reads files or opens a connection. See
 // docs/migrations.md.
 
 export { type SchemaTable, type MaterializedView } from "./schema/define"
@@ -24,6 +24,7 @@ export {
 	Snapshot,
 	SNAPSHOT_VERSION,
 	SqliteSnapshot,
+	MysqlSnapshot,
 	TableEntity,
 	canonicalJson,
 	entityKey,
@@ -114,5 +115,24 @@ export {
 	renderSqliteSchema,
 	sqliteIdent,
 } from "./schema/sqlite-render"
+export { mysqlEntitiesOf, type MysqlSchemaTable } from "./schema/mysql-define"
+export {
+	MysqlColumnEntity,
+	MysqlIndexEntity,
+	MysqlSchemaEntity,
+	MysqlTableEntity,
+	MysqlUniqueEntity,
+	canonicalMysqlType,
+} from "./schema/mysql-entities"
+export { diffMysqlSchemas } from "./schema/mysql-diff"
+export { MysqlMigrationOp, labelOfMysql, renderMysqlMigrationSql, renderMysqlOp, type MysqlOpLabel } from "./schema/mysql-ops"
+export {
+	mysqlIdent,
+	renderMysqlColumnDefinition,
+	renderMysqlCreateIndex,
+	renderMysqlCreateTable,
+	renderMysqlSchema,
+	renderMysqlUnique,
+} from "./schema/mysql-render"
 export { fromDrizzleSnapshot, type DrizzleImport } from "./schema/drizzle"
 export { Hint, Hints, diffSchemas, type DiffResult, type UnsupportedChange } from "./schema/diff"

@@ -20,7 +20,7 @@ import { MigrateSourceError, type MigrateSqlError } from "./errors"
 import { LEDGER_TABLES, readApplied } from "./ledger"
 import { readPgApplied } from "./pg-ledger"
 import { verifyPg, type PgVerifyOptions } from "./pg-verify"
-import { dialectOf, refuseSqlite, type LoadedMigration } from "./source"
+import { dialectOf, refuseUnapplied, type LoadedMigration } from "./source"
 
 export interface Drift {
 	readonly entity: string
@@ -117,14 +117,14 @@ export const verify = (
 	options: VerifyOptions = {},
 ): Effect.Effect<VerifyResult, MigrateSqlError | MigrateSourceError, MigrationDriver> =>
 	Effect.gen(function* () {
-		yield* refuseSqlite(migrations, options.dialect)
+		yield* refuseUnapplied(migrations, options.dialect)
 		const postgres = (options.dialect ?? dialectOf(migrations)) === "postgres"
 		const appliedRows = yield* (postgres ? readPgApplied : readApplied).pipe(Effect.orElseSucceed(() => []))
 		const appliedNames = new Set(appliedRows.map((row) => row.name))
 		const against = [...migrations].reverse().find((m) => appliedNames.has(m.name) && m.snapshot !== undefined)
 		const snapshot = against?.snapshot
 		if (against === undefined || snapshot === undefined) return { against: undefined, drift: [] }
-		if (snapshot.dialect === "sqlite") return yield* refuseSqlite(migrations, "sqlite").pipe(Effect.as({ against: undefined, drift: [] }))
+		if (snapshot.dialect === "sqlite" || snapshot.dialect === "mysql") return yield* refuseUnapplied(migrations, snapshot.dialect).pipe(Effect.as({ against: undefined, drift: [] }))
 		return { against: against.name, drift: yield* verifySnapshot(snapshot, options, against.name) }
 	})
 
@@ -141,12 +141,12 @@ export const verifySnapshot = (
 ): Effect.Effect<ReadonlyArray<Drift>, MigrateSqlError | MigrateSourceError, MigrationDriver> =>
 	snapshot.dialect === "postgres"
 		? verifyPg(snapshot, label, options)
-		: snapshot.dialect === "sqlite"
-			? // No SQLite catalog reader yet: refused rather than compared as ClickHouse.
+		: snapshot.dialect === "sqlite" || snapshot.dialect === "mysql"
+			? // No SQLite or MySQL catalog reader yet: refused rather than compared as ClickHouse.
 				Effect.fail(
 					new MigrateSourceError({
 						migration: label,
-						message: "SQLite databases cannot be verified by effect-orm yet; there is no SQLite catalog reader to compare the definitions with",
+						message: `${snapshot.dialect === "sqlite" ? "SQLite" : "MySQL"} databases cannot be verified by effect-orm yet; there is no ${snapshot.dialect === "sqlite" ? "SQLite" : "MySQL"} catalog reader to compare the definitions with`,
 					}),
 				)
 			: verifyClickHouse(snapshot)

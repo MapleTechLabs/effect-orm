@@ -86,9 +86,11 @@ const foreignSnapshotOf = (text: string): LoadedMigration["foreignSnapshot"] => 
 		: undefined
 }
 
-/** The dialect a drizzle-kit snapshot names: `sqlite` (or `turso`) is SQLite; anything else is read as Postgres, as before. */
-const drizzleDialect = (json: unknown): SchemaDialect =>
-	typeof json === "object" && json !== null && "dialect" in json && (json.dialect === "sqlite" || json.dialect === "turso") ? "sqlite" : "postgres"
+/** The dialect a drizzle-kit snapshot names: `sqlite` (or `turso`) is SQLite, `mysql` MySQL; anything else is read as Postgres, as before. */
+const drizzleDialect = (json: unknown): SchemaDialect => {
+	const named = typeof json === "object" && json !== null && "dialect" in json ? json.dialect : undefined
+	return named === "sqlite" || named === "turso" ? "sqlite" : named === "mysql" ? "mysql" : "postgres"
+}
 
 /**
  * Each migration's parent migrations, from its snapshot's `prevIds`. A custom
@@ -222,17 +224,19 @@ export const dialectOf = (migrations: ReadonlyArray<LoadedMigration>): SchemaDia
 }
 
 /**
- * `generate` writes SQLite migrations, but this runner does not apply them yet:
- * apply the folder with a tool that reads drizzle-kit folders (Alchemy's D1
- * resource, drizzle's migrator). Refused here rather than run with the
- * ClickHouse ledger.
+ * `generate` writes SQLite and MySQL migrations, but this runner does not
+ * apply them yet: apply the folder with a tool that reads drizzle-kit folders
+ * (Alchemy's D1 resource, drizzle's migrator). Refused here rather than run
+ * with the ClickHouse ledger.
  */
-export const refuseSqlite = (migrations: ReadonlyArray<LoadedMigration>, dialect: SchemaDialect | undefined) =>
-	(dialect ?? dialectOf(migrations)) === "sqlite"
+export const refuseUnapplied = (migrations: ReadonlyArray<LoadedMigration>, dialect: SchemaDialect | undefined) => {
+	const resolved = dialect ?? dialectOf(migrations)
+	return resolved === "sqlite" || resolved === "mysql"
 		? Effect.fail(
 				new MigrateSourceError({
 					migration: migrations[0]?.name ?? "(none)",
-					message: "SQLite migrations are not run by effect-orm yet; apply the folder with a tool that reads drizzle-kit folders",
+					message: `${resolved === "sqlite" ? "SQLite" : "MySQL"} migrations are not run by effect-orm yet; apply the folder with a tool that reads drizzle-kit folders`,
 				}),
 			)
 		: Effect.void
+}

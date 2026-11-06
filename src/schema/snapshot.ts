@@ -16,11 +16,14 @@ import {
 	type SchemaEntity,
 	type Snapshot,
 	type SqliteSnapshot,
+	type MysqlSnapshot,
 } from "./entities"
 import { enumProblems, type PgEnum, type PgSchemaTable } from "./pg-define"
 import type { PgEnumEntity, PgSchemaEntity } from "./pg-entities"
 import type { SqliteSchemaTable } from "./sqlite-define"
 import type { SqliteSchemaEntity } from "./sqlite-entities"
+import type { MysqlSchemaTable } from "./mysql-define"
+import type { MysqlSchemaEntity } from "./mysql-entities"
 
 /** Anything a schema module may export that `generate` collects. */
 export type SchemaObject =
@@ -29,6 +32,7 @@ export type SchemaObject =
 	| PgSchemaTable<string, any>
 	| PgEnum
 	| SqliteSchemaTable<string, any>
+	| MysqlSchemaTable<string, any>
 
 export const isSchemaObject = (value: unknown): value is SchemaObject =>
 	typeof value === "object" &&
@@ -40,6 +44,20 @@ export const isSchemaObject = (value: unknown): value is SchemaObject =>
 /** The dialect a definition was written for. */
 export const dialectOfObject = (object: SchemaObject): SchemaDialect =>
 	object._tag === "PgEnum" ? "postgres" : object._tag === "Table" && "dialect" in object.ddl ? object.ddl.dialect : "clickhouse"
+
+/** The `*EntitiesOf` that reads a definition of this dialect, for a refusal that names it. */
+const readerOf = (object: SchemaObject): string => {
+	switch (dialectOfObject(object)) {
+		case "postgres":
+			return "is a Postgres table; use pgEntitiesOf"
+		case "sqlite":
+			return "is a SQLite table; use sqliteEntitiesOf"
+		case "mysql":
+			return "is a MySQL table; use mysqlEntitiesOf"
+		case "clickhouse":
+			return "is a ClickHouse definition; use entitiesOf"
+	}
+}
 
 /** Fail with every problem, or succeed with the sorted entities. */
 const validated = <E extends AnySchemaEntity>(
@@ -55,7 +73,7 @@ export const entitiesOf = (objects: ReadonlyArray<SchemaObject>): Effect.Effect<
 	for (const object of objects) {
 		problems.push(...object.problems)
 		if (dialectOfObject(object) !== "clickhouse") {
-			problems.push({ object: object.name, message: `is a ${dialectOfObject(object) === "postgres" ? "Postgres" : "SQLite"} table; use ${dialectOfObject(object) === "postgres" ? "pgEntitiesOf" : "sqliteEntitiesOf"}` })
+			problems.push({ object: object.name, message: readerOf(object) })
 			continue
 		}
 		if (object._tag === "Table") {
@@ -109,7 +127,7 @@ export const pgEntitiesOf = (objects: ReadonlyArray<SchemaObject>): Effect.Effec
 	for (const object of objects) {
 		if (dialectOfObject(object) !== "postgres") {
 			problems.push(...object.problems)
-			problems.push({ object: object.name, message: dialectOfObject(object) === "sqlite" ? "is a SQLite table; use sqliteEntitiesOf" : "is a ClickHouse definition; use entitiesOf" })
+			problems.push({ object: object.name, message: readerOf(object) })
 			continue
 		}
 		if (object._tag === "PgEnum") {
@@ -188,6 +206,11 @@ export function makeSnapshot(
 	prevIds: ReadonlyArray<string>,
 	dialect: "sqlite",
 ): Effect.Effect<SqliteSnapshot>
+export function makeSnapshot(
+	entities: ReadonlyArray<MysqlSchemaEntity>,
+	prevIds: ReadonlyArray<string>,
+	dialect: "mysql",
+): Effect.Effect<MysqlSnapshot>
 export function makeSnapshot(
 	entities: ReadonlyArray<AnySchemaEntity>,
 	prevIds: ReadonlyArray<string>,
