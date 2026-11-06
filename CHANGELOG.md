@@ -1,5 +1,12 @@
 # @maple-dev/effect-orm
 
+## 0.10.1
+
+### Patch Changes
+
+- eccc9c2: The package homepage and README now link to the new docs site at https://effect-orm.maple.dev.
+- 7b01f01: Tested against Effect 4.1.2. The peer range stays `effect ^4.0.6`, and the docs' pinned install examples now use 4.1.2.
+
 ## 0.10.0
 
 ### Minor Changes
