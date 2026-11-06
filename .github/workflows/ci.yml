@@ -89,3 +89,22 @@ jobs:
                   EFFECT_ORM_MYSQL_URL: mysql://maple:maple@127.0.0.1:3306/maple
                   EFFECT_ORM_MARIADB_URL: mysql://maple:maple@127.0.0.1:3307/maple
               run: bunx vitest run src/mysql tests/core.mysql.test.ts tests/fuzz -t "mysql|mariadb"
+
+    docs:
+        name: Docs site
+        runs-on: ubuntu-latest
+        timeout-minutes: 10
+        defaults:
+            run:
+                working-directory: site
+        steps:
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+              with:
+                  persist-credentials: false
+                  # "Last updated" dates and the sitemap come from git history.
+                  fetch-depth: 0
+            - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+            - run: bun install --frozen-lockfile
+            - name: Build (syncs docs/ into the site, then fails on broken MDX or links)
+              run: bun run build
+            - run: bunx @cloudflare/nimbus-docs check
