@@ -1,7 +1,23 @@
-// The docs sidebar: group folder → pages in reading order. Read by
-// scripts/sync-docs.mjs (which writes the pages) and astro.config.ts (which
-// labels the groups). A page's URL is `/<group>/<slug>/`. `label` shortens the
-// sidebar title; `description` feeds meta tags, search and llms.txt.
+// The docs map. Read by scripts/sync-docs.mjs (which writes the pages) and
+// astro.config.ts (which builds the sidebar and the header tabs).
+//
+// Each dialect is a top-level section with its own URLs: a guide in a dialect
+// group is written once in docs/ and rendered under every dialect it lists, at
+// `/<dialect>/<group>/<slug>/`, keeping only that dialect's blocks (see
+// "Dialect blocks" in ../AGENT.md). Shared groups render once, at `/<group>/<slug>/`.
+//
+// `label` shortens the sidebar title; `description` feeds meta tags, search and
+// llms.txt; `dialects` limits a page to some dialects (default: all of them).
+
+export const dialects = [
+	{ id: "clickhouse", label: "ClickHouse", alias: "CH", entry: "@maple-dev/effect-orm/clickhouse" },
+	{ id: "postgres", label: "Postgres", alias: "PG", entry: "@maple-dev/effect-orm/postgres" },
+	{ id: "sqlite", label: "SQLite", alias: "SQLite", entry: "@maple-dev/effect-orm/sqlite" },
+	{ id: "mysql", label: "MySQL", alias: "MySQL", entry: "@maple-dev/effect-orm/mysql" },
+]
+
+export const dialectIds = dialects.map((d) => d.id)
+
 export const groups = [
 	{
 		dir: "start",
@@ -11,6 +27,17 @@ export const groups = [
 			{ file: "getting-started.md", description: "Install effect-orm, define a table, then build, compile and decode a query." },
 			{ file: "coming-from-drizzle-prisma.md", label: "From Drizzle or Prisma", description: "Drizzle and Prisma operations mapped to effect-orm, and what differs by design." },
 			{ file: "recipes.md", description: "Complete examples for everyday queries." },
+		],
+	},
+	{
+		// The pages that exist for one dialect only.
+		dir: "specifics",
+		label: (dialect) => `${dialect.label} specifics`,
+		pages: [
+			{ file: "postgres.md", slug: "overview", title: "Postgres", dialects: ["postgres"], description: "The Postgres dialect, its column types and functions." },
+			{ file: "sqlite.md", slug: "overview", title: "SQLite and D1", dialects: ["sqlite"], description: "The SQLite entry: codecs, functions, table DDL, drivers and Cloudflare D1." },
+			{ file: "mysql.md", slug: "overview", title: "MySQL", dialects: ["mysql"], description: "The MySQL entry: codecs, functions, @effect/sql-mysql2 wiring, collations and DDL." },
+			{ file: "tinybird.md", label: "Tinybird", dialects: ["clickhouse"], description: "Tinybird datasources and views as query tables." },
 		],
 	},
 	{
@@ -43,18 +70,9 @@ export const groups = [
 		],
 	},
 	{
-		dir: "dialects",
-		label: "Dialects",
-		pages: [
-			{ file: "postgres.md", description: "The Postgres dialect, its column types and functions." },
-			{ file: "sqlite.md", label: "SQLite and D1", description: "The SQLite entry: codecs, functions, table DDL, drivers and Cloudflare D1." },
-			{ file: "mysql.md", description: "The MySQL entry: codecs, functions, @effect/sql-mysql2 wiring, collations and DDL." },
-			{ file: "tinybird.md", label: "Tinybird", description: "Tinybird datasources and views as query tables." },
-		],
-	},
-	{
 		dir: "benchmarks",
 		label: "Benchmarks",
+		shared: true,
 		pages: [
 			{ file: "benchmarking.md", label: "Benchmarking", description: "Define suites, measure baseline and candidate runs, verify results and compare budgets." },
 			{ file: "benchmark-agent.md", description: "A repeatable optimization workflow and evidence checklist for agents." },
@@ -63,9 +81,16 @@ export const groups = [
 	{
 		dir: "reference",
 		label: "Reference",
+		shared: true,
 		pages: [
 			{ file: "reference.md", description: "The full export catalog by module, plus error types." },
 			{ file: "troubleshooting.md", description: "Common failures and sharp edges." },
 		],
 	},
 ]
+
+/** The label of `group` inside `dialect`'s section. */
+export const groupLabel = (group, dialect) => (typeof group.label === "function" ? group.label(dialect) : group.label)
+
+/** The pages of a dialect group that render under `dialect`. */
+export const pagesFor = (group, dialect) => group.pages.filter((p) => !p.dialects || p.dialects.includes(dialect.id))

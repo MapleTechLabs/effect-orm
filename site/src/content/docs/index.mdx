@@ -1,9 +1,8 @@
 ---
 title: effect-orm
 description: Type-safe ClickHouse, Postgres, SQLite and MySQL queries, result decoding, and reproducible benchmarks for Effect and TypeScript.
-sidebar:
-  order: 0
-  label: Introduction
+# Home is in no dialect's section; the tabs and the cards below are the way in.
+sidebar: false
 ---
 
 `@maple-dev/effect-orm` builds SQL from typed TypeScript. Describe a table once, and the query builder infers column types, output row shapes and join accessors from it. A query compiles to a SQL string plus a decoder for its own rows. You bring the database client.
@@ -68,19 +67,23 @@ compiled.sql // SELECT events.Name AS name, quantile(0.95)(events.DurationMs) AS
   </Card>
 </CardGrid>
 
-## Where to start
+## Pick your database
+
+Every database has its own section with the same guides, written with its own examples. The tabs at the top switch between them and keep you on the page you are reading.
 
 <CardGrid>
-  <Card title="Getting started" icon="ph:rocket-launch" href="/start/getting-started/">
-    Compile and decode a query offline in one complete file.
+  <Card title="ClickHouse" icon="ph:lightning" href="/clickhouse/start/getting-started/">
+    Analytics queries, engines and `SETTINGS`, mutations, and Tinybird.
   </Card>
-  <Card title="Run a real query" icon="ph:play" href="/queries/running-queries/">
-    Execute the compiled SQL with a client against a real server.
+  <Card title="Postgres" icon="ph:database" href="/postgres/start/getting-started/">
+    Postgres column types and functions, `RETURNING`, transactions and migrations.
   </Card>
-  <Card title="Recipes" icon="ph:cooking-pot" href="/start/recipes/">
-    Complete examples for everyday queries to adapt to your schema.
+  <Card title="SQLite" icon="ph:feather" href="/sqlite/start/getting-started/">
+    SQLite and Cloudflare D1: codecs, functions, table DDL and drivers.
   </Card>
-  <Card title="From Drizzle or Prisma" icon="ph:arrows-left-right" href="/start/coming-from-drizzle-prisma/">
-    Their operations mapped to effect-orm, and what differs by design.
+  <Card title="MySQL" icon="ph:table" href="/mysql/start/getting-started/">
+    MySQL and MariaDB: codecs, functions, collations and `@effect/sql-mysql2`.
   </Card>
 </CardGrid>
+
+[Benchmarks](/benchmarks/benchmarking/) and the [export reference](/reference/reference/) are shared by every database.

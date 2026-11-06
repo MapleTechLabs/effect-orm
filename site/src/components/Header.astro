@@ -7,7 +7,8 @@ import { LinkButton } from "./ui/link-button";
 import { ThemeToggle } from "./ui/theme-toggle";
 import SearchTrigger from "./ui/search/SearchTrigger.astro";
 import { config } from "virtual:nimbus/config";
-import { getCollectionUrl, getSidebarSections, stripBase, withBase } from "@cloudflare/nimbus-docs/runtime";
+import { getCollectionUrl, stripBase, withBase } from "@cloudflare/nimbus-docs/runtime";
+import { getSiteSections } from "@/lib/sections";
 
 interface Props {
   /** Astro collection id for the current page, forwarded from DocsLayout. */
@@ -30,8 +31,9 @@ const { collection, showSidebar = true, sections: sectionsProp } = Astro.props;
 
 // Normalize trailing slash so isActive matches sidebar hrefs.
 const currentSlug = stripBase(Astro.url.pathname, import.meta.env.BASE_URL).replace(/\/$/, "") || "/";
+// The dialects, then the shared sections; a dialect tab keeps the current guide.
 const sidebarSections =
-  sectionsProp ?? (await getSidebarSections(currentSlug, { collection }));
+  sectionsProp ?? (await getSiteSections(currentSlug));
 // An API reference beside the docs isn't in the docs sidebar, so the docs and
 // each reference become the tabs. A reference served at the root is the site.
 const apiHrefs = (
@@ -55,6 +57,8 @@ const sections =
         })),
       ];
 const showSections = sections.length >= 2;
+// A rule between the dialect tabs and the shared ones (Benchmarks, Reference).
+const firstShared = sections.findIndex((s, i) => i > 0 && "kind" in s && s.kind === "shared");
 const homeHref = withBase("/", import.meta.env.BASE_URL);
 const resolveSectionHref = (href: string): string =>
   withBase(href, import.meta.env.BASE_URL);
@@ -73,7 +77,9 @@ const resolveSectionHref = (href: string): string =>
 
       {showSections && (
         <nav aria-label="Sections" class="hidden md:flex items-center gap-1 ms-4 ps-4 border-s border-border h-6 min-w-0 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-          {sections.map((section) => (
+          {sections.map((section, i) => (
+            <>
+            {i === firstShared && <span aria-hidden="true" class="mx-2 h-4 w-px shrink-0 bg-border" />}
             <a
               href={resolveSectionHref(section.href)}
               aria-current={section.isActive ? "page" : undefined}
@@ -86,6 +92,7 @@ const resolveSectionHref = (href: string): string =>
             >
               {section.label}
             </a>
+            </>
           ))}
         </nav>
       )}
@@ -125,7 +132,9 @@ const resolveSectionHref = (href: string): string =>
   {/* Phones: the tabs on a row of their own under the bar. */}
   {showSections && (
     <nav aria-label="Sections" data-nb-header-tabs class="md:hidden flex items-center gap-1 h-10 px-4 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-      {sections.map((section) => (
+      {sections.map((section, i) => (
+        <>
+        {i === firstShared && <span aria-hidden="true" class="mx-1.5 h-4 w-px shrink-0 bg-border" />}
         <a
           href={resolveSectionHref(section.href)}
           aria-current={section.isActive ? "page" : undefined}
@@ -138,6 +147,7 @@ const resolveSectionHref = (href: string): string =>
         >
           {section.label}
         </a>
+        </>
       ))}
     </nav>
   )}

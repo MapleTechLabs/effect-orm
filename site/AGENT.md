@@ -11,6 +11,41 @@ alerts (`> [!WARNING]`) into callouts. Those folders are gitignored: edit `../do
 The sidebar groups, order, labels and descriptions are in `scripts/sidebar.mjs`; a new
 `docs/*.md` file fails the sync until it is listed there. Only `src/content/docs/index.mdx` is hand-written.
 
+### One section per dialect
+
+ClickHouse, Postgres, SQLite and MySQL are each a top-level section (a header tab, with its own
+sidebar via `sidebar.scope: "section"`). A guide in a dialect group is written once in `docs/` and
+rendered under every dialect, at `/<dialect>/<group>/<slug>/`; set `dialects: [...]` on a page in
+`scripts/sidebar.mjs` to limit it. Shared groups (`shared: true`: Benchmarks, Reference) render once,
+at `/<group>/<slug>/`. A dialect tab keeps the reader on the same guide (`src/lib/sections.ts`).
+URLs from before the split redirect in `public/_redirects`.
+
+### Dialect blocks
+
+Mark the parts of a guide that differ by dialect. GitHub ignores both markers, so `docs/` still reads
+as one page there (every version shown); the site keeps only the reader's dialect.
+
+- **Code:** add `dialect="<ids>"` after the title, and give each version its own filename so
+  `scripts/check-doc-examples.mjs` compiles all of them:
+
+  ````md
+  ```ts title="quick-start.ts" dialect="clickhouse"
+  import * as CH from "@maple-dev/effect-orm/clickhouse"
+  ```
+
+  ```ts title="quick-start.pg.ts" dialect="postgres"
+  import * as PG from "@maple-dev/effect-orm/postgres"
+  ```
+  ````
+
+- **Prose:** wrap it in `<!-- dialect: postgres,mysql -->` … `<!-- /dialect -->`, each marker on its
+  own line.
+
+`<ids>` is a comma list of `clickhouse`, `postgres`, `sqlite`, `mysql`; an unknown id or an unclosed
+marker fails the sync. Unmarked content shows in every dialect. Until a guide has a dialect's version,
+that dialect's copy opens with a note saying which dialect the examples use; the note goes away by
+itself once the page imports the dialect's entry.
+
 Astro-based docs. The `nimbus-docs` package handles content schemas, sidebar/TOC, MDX→markdown, build hooks, and the `nimbus-docs` CLI. Install dependencies first, then run it as `npx @cloudflare/nimbus-docs <command>`: npx uses the project's installed version. Before an install, npx fetches the latest release instead, which may differ from the site's version and give different results. The scoped name keeps npx from fetching the unrelated `nimbus-docs` package. Everything in `src/` is yours to edit.
 
 ## File layout
