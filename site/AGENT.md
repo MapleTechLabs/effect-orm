@@ -8,7 +8,7 @@ The guides live in `../docs/*.md` (shipped in the npm package and checked by `..
 `scripts/sync-docs.mjs` copies them into `src/content/docs/<group>/` before `dev` and `build`, adding
 frontmatter, rewriting `./x.md` links to site URLs and other repo links to GitHub, and turning GitHub
 alerts (`> [!WARNING]`) into callouts. Those folders are gitignored: edit `../docs/` instead.
-The sidebar groups, order, labels and descriptions are in `scripts/sync-docs.mjs`; a new
+The sidebar groups, order, labels and descriptions are in `scripts/sidebar.mjs`; a new
 `docs/*.md` file fails the sync until it is listed there. Only `src/content/docs/index.mdx` is hand-written.
 
 Astro-based docs. The `nimbus-docs` package handles content schemas, sidebar/TOC, MDX→markdown, build hooks, and the `nimbus-docs` CLI. Install dependencies first, then run it as `npx @cloudflare/nimbus-docs <command>`: npx uses the project's installed version. Before an install, npx fetches the latest release instead, which may differ from the site's version and give different results. The scoped name keeps npx from fetching the unrelated `nimbus-docs` package. Everything in `src/` is yours to edit.

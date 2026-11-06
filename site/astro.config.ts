@@ -4,6 +4,7 @@ import nimbus, {
   defineConfig as defineNimbusConfig,
 } from "@cloudflare/nimbus-docs";
 import { tableScroll } from "@cloudflare/nimbus-docs/markdown";
+import { groups } from "./scripts/sidebar.mjs";
 
 const nimbusConfig = defineNimbusConfig({
   // Canonical origin (no trailing slash): the package.json `homepage`. Drives
@@ -15,9 +16,12 @@ const nimbusConfig = defineNimbusConfig({
   locale: "en",
   github: "https://github.com/MapleTechLabs/effect-orm",
   socialImageAlt: "effect-orm documentation preview",
-  // The home page leads the sidebar; every other page joins it automatically.
+  // The home page, then one group per folder that scripts/sync-docs.mjs writes.
   sidebar: {
-    items: ["index", { autogenerate: { collection: "docs" } }],
+    items: [
+      "index",
+      ...groups.map((group) => ({ label: group.label, autogenerate: { directory: group.dir } })),
+    ],
   },
 });
 
