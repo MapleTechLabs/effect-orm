@@ -156,6 +156,23 @@ export const pinned: Record<string, ReadonlyArray<unknown>> = {
 		],
 	],
 
+	// MySQL and MariaDB migrations.
+	"schema changes match a fresh create": [
+		// mariadb-json-check-keeps-old-name: RENAME COLUMN left a JSON column's CHECK (json_valid(...))
+		// named after the old column on MariaDB, where a fresh create names it after the new one.
+		[
+			[{ name: "t0", columns: [{ name: "c3", type: "int", nullable: false, unique: true }, { name: "c2", type: "int", nullable: false, unique: true }, { name: "c0", type: "json", nullable: false, default: { k: "literal" }, unique: false }], primaryKey: [], indexes: [] }],
+			[
+				{ name: "t0", columns: [{ name: "c2", type: "int", nullable: false, unique: true }, { name: "c1", type: "int", nullable: false, unique: true }, { name: "c0", type: "json", nullable: false, default: { k: "literal" }, unique: false }], primaryKey: [], indexes: [] },
+				{ name: "t1", columns: [{ name: "c3", type: "int", nullable: false, unique: true }], primaryKey: [], indexes: [] },
+			],
+			0,
+			[false],
+			{ table: false, column: 51637149, caseOnly: false },
+			{ text: "", int: 0, bigint: -9007199254740991, double: 0, cents: 0, at: 0 },
+		],
+	],
+
 	// Unions.
 	"unions match the model": [
 		// clickhouse-union-variant-order-by: `Id + 1` (UInt64) under `Id + -1` (Int64), ordered by that column.
