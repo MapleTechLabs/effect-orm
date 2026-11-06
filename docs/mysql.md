@@ -31,7 +31,79 @@ export const compiled = MySQL.compileUnsafe(upcoming, { orgId: "org_1", after: n
 export const forMariadb = MySQL.compileUnsafe(upcoming, { orgId: "org_1", after: new Date() }, { dialect: MySQL.mariadbDialect })
 ```
 
-`table(name, columns, options?)` is a query schema only: it carries no DDL yet.
+`table(name, columns, options?)` is a query schema only. Pass `{ columns, primaryKey, indexes }`
+to declare the table's DDL too.
+
+## Declare a table with its DDL
+
+With `{ columns, primaryKey, indexes }`, `table` returns a `MysqlSchemaTable`: still a query
+`Table`, with its DDL beside it. `mysqlEntitiesOf` from `/schema` checks a set of tables as one
+schema, and `renderMysqlSchema` writes their `CREATE TABLE` and `CREATE INDEX` statements:
+
+```ts title="mysql-ddl.ts"
+import { Effect, Schema } from "effect"
+import * as S from "@maple-dev/effect-orm/schema"
+import * as MySQL from "@maple-dev/effect-orm/mysql"
+
+export const Tours = MySQL.table("tours", {
+	casing: "snake_case",
+	columns: {
+		id: MySQL.bigint,
+		orgId: MySQL.varchar(36),
+		title: MySQL.column(MySQL.text, { default: "" }),
+		tags: MySQL.column(MySQL.json(Schema.Array(Schema.String)), { default: [] }),
+		seats: MySQL.column(MySQL.int, { default: 10 }),
+		code: MySQL.column(MySQL.varchar(16), { unique: true }),
+		startsAt: MySQL.column(MySQL.datetime, { defaultExpr: MySQL.dateTimeNow }),
+	},
+	primaryKey: ["orgId", "id"],
+	indexes: [MySQL.index("tours_starts", ["orgId", "startsAt"])],
+	tenantColumn: "orgId",
+})
+
+export const statements = S.mysqlEntitiesOf([Tours]).pipe(Effect.map(S.renderMysqlSchema))
+// CREATE TABLE IF NOT EXISTS `tours` (
+// 	`id` bigint NOT NULL,
+// 	`org_id` varchar(36) NOT NULL,
+// 	`title` text NOT NULL DEFAULT (''),
+// 	`tags` json NOT NULL DEFAULT ('[]'),
+// 	`seats` int NOT NULL DEFAULT 10,
+// 	`code` varchar(16) NOT NULL,
+// 	`starts_at` datetime(3) NOT NULL DEFAULT (UTC_TIMESTAMP(3)),
+// 	PRIMARY KEY (`org_id`, `id`),
+// 	CONSTRAINT `tours_code_unique` UNIQUE (`code`)
+// ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+// CREATE INDEX `tours_starts` ON `tours` (`org_id`, `starts_at`)
+```
+
+- A column is `NOT NULL` unless its type is `nullable(...)`. A primary key column cannot be
+  nullable: MySQL would make it `NOT NULL` without saying so.
+- The primary key is a table constraint, `PRIMARY KEY (...)`; MySQL names every one `PRIMARY`.
+  Tables are `ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`; the collation is the server's default for
+  utf8mb4. Indexes are separate `CREATE [UNIQUE] INDEX` statements (MySQL has no
+  `CREATE INDEX IF NOT EXISTS`).
+- `default` takes a literal of the column type. MySQL takes no literal default on a `TEXT`, `BLOB`
+  or `JSON` column, so there it is written as an expression, `DEFAULT ('…')`, which MySQL 8.0.13+
+  and MariaDB accept. `defaultExpr` takes SQL as written, so add the parentheses MySQL requires
+  around an expression (`"(UUID())"`), or a DSL callback, which is parenthesized for you; a
+  callback may not read another column. `dateTimeNow` is the `defaultExpr` for a `datetime`.
+  Either lets an insert leave the column out.
+- `unique: true` writes `CONSTRAINT <table>_<column>_unique UNIQUE (...)`; a string names it.
+- An index takes column names. MariaDB has no index on an expression, so there is no callback form.
+- A `TEXT`, `BLOB` or `JSON` column cannot be in the primary key, an index or a UNIQUE constraint:
+  MySQL needs a prefix length there, which a column list cannot give. Use `varchar(n)`. A key over
+  `varchar` columns must fit InnoDB's 3072 bytes, four a character in utf8mb4.
+- Table, column, index and constraint names are plain identifiers of at most 64 characters. A
+  table's indexes and UNIQUE constraints share one namespace, and `PRIMARY` is taken. Column names
+  compare without case, so `Id` and `id` collide; so do two table names in one schema.
+- `table(name, { external: true, columns })` declares a table another tool owns: no DDL.
+
+The tests apply this DDL to MySQL 8.4 and MariaDB 11.4 and read every default back through the
+builder. `effect-orm generate` with `dialect: "mysql"` diffs these tables against the migrations
+folder and writes the next migration; see [MySQL migrations](./migrations.md#mysql).
+effect-orm does not apply MySQL migrations yet, and has no MySQL introspection or drift check.
+`AUTO_INCREMENT`, foreign keys, `CHECK` constraints, prefix and expression indexes and column
+collations are not declared yet.
 
 ## Execute through `@effect/sql-mysql2`
 

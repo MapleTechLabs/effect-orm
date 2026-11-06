@@ -1,6 +1,6 @@
 # Schema and migrations
 
-Every table is declared with its DDL: `table` from `/clickhouse`, `/postgres` or `/sqlite` carries the
+Every table is declared with its DDL: `table` from `/clickhouse`, `/postgres`, `/sqlite` or `/mysql` carries the
 engine, keys, indexes, and defaults beside the columns the query builder reads. You can ignore
 that and manage the database elsewhere, or let three opt-in entry points turn the definitions
 into migrations:
@@ -17,7 +17,7 @@ check and folder loading are shared; table definitions, the diff, the DDL, the r
 drift detection are per database, because the two differ where it matters: ClickHouse DDL is
 not transactional and cannot change most things in place, and Postgres DDL is and can. The
 sections below describe ClickHouse first; [Postgres](#postgres) covers what differs.
-[SQLite](#sqlite) has `generate` only: another tool applies its migrations for now.
+[SQLite](#sqlite) and [MySQL](#mysql) have `generate` only: another tool applies their migrations for now.
 
 ## Defining tables
 
@@ -570,3 +570,57 @@ The drizzle-kit 0.x layout (`meta/_journal.json` and flat `.sql` files) is not r
 `/migrate` does not run SQLite folders yet: `run`, `status`, `verify` and `baseline` fail with a
 `MigrateSourceError` for one. Keep applying them with the tool you use now.
 
+## MySQL
+
+Set `dialect: "mysql"` and export `MySQL.table` values with their DDL from the schema module. One
+folder serves MySQL and MariaDB: the DDL is the same.
+
+```ts title="mysql-kit-config.ts"
+import { defineConfig } from "@maple-dev/effect-orm/kit"
+
+export default defineConfig({ dialect: "mysql", schema: "./src/db/schema.ts", out: "./migrations" })
+```
+
+`effect-orm generate` writes `<timestamp>_<name>/migration.sql` and `snapshot.json`
+(`"dialect": "mysql"`), the drizzle-kit 1.0 layout, as for SQLite: one statement per
+`--> statement-breakpoint`, each under a comment naming its label. A MySQL migration is always SQL.
+
+MySQL alters tables in place, so every change is an `ALTER TABLE` of its own:
+
+| Change | SQL |
+| --- | --- |
+| New table, dropped table | `CREATE TABLE`, `DROP TABLE` (confirm the data loss) |
+| New column | `ALTER TABLE ... ADD COLUMN` |
+| Dropped column | `ALTER TABLE ... DROP COLUMN` (confirm the data loss) |
+| A column's type, nullability or default | `ALTER TABLE ... MODIFY COLUMN` with the whole new definition. A new type also needs `confirm_data_loss` for the column: MySQL converts (or refuses) the values |
+| A column made NOT NULL that has a default | `MODIFY COLUMN` to the new type, `UPDATE ... SET <column> = <default> WHERE <column> IS NULL`, then `MODIFY COLUMN ... NOT NULL` |
+| The primary key | `ALTER TABLE ... DROP PRIMARY KEY` before the column changes, `ADD PRIMARY KEY (...)` after |
+| New or changed UNIQUE column, index | `DROP INDEX ... ON`, then `ADD CONSTRAINT ... UNIQUE` or `CREATE [UNIQUE] INDEX` after the column changes |
+| Renamed table or column | `RENAME TABLE`, or `CHANGE COLUMN <old> <new definition>`, only with a `confirm_rename` hint |
+
+A column is renamed with `CHANGE COLUMN` rather than `RENAME COLUMN`: MariaDB names a JSON
+column's automatic `CHECK (json_valid(...))` after the column, and keeps the old name through a
+`RENAME COLUMN`. MySQL compares column names without case, so a column renamed by case only
+(`Url` to `url`) is renamed with no hint. Table names are compared as written. The hints take the
+same form as for [SQLite](#sqlite).
+
+> [!WARNING]
+> MySQL DDL is not transactional: each statement commits on its own, so a migration that fails
+> part way leaves the statements before the failure applied. A `MODIFY COLUMN` over rows the new
+> definition cannot hold fails: a NOT NULL with no default over NULLs, a narrower type over values
+> that do not fit, a new UNIQUE over duplicates. Read the plan before applying it.
+
+`ALTER TABLE ... ADD COLUMN` appends, so a column declared between two existing ones is last in
+the database. A new `NOT NULL` column with no default takes the type's implicit default in
+existing rows (`0`, `''`, a JSON `null` on MySQL), and a `datetime` fails on MySQL, while MariaDB
+writes a zero date that `datetime` refuses to decode. Give it a default, or add it nullable first.
+
+`--from-drizzle` reads only Postgres and SQLite snapshots. To adopt a MySQL database, declare its
+tables and run `generate --baseline`. `/migrate` does not run MySQL folders yet: `run`, `status`,
+`verify` and `baseline` fail with a `MigrateSourceError` for one, and `verify --schema` refuses a
+MySQL config. Apply the folder with a tool that reads drizzle-kit folders.
+
+The fuzzer generates pairs of random schemas (types, nullability, defaults, keys, UNIQUE columns,
+indexes, table and column renames), applies the migration between them to seeded rows on MySQL 8.4
+and MariaDB 11.4, and checks that `information_schema` matches a fresh create and that the rows
+kept their values.

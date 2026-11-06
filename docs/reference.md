@@ -598,7 +598,7 @@ the default.
 | `SqlQuery`, `compileQuery`                                                                       | `/sql`            |
 | `ClickHouseStatement`, `parseStatement`, `renderStatement`, `withSettings`, `withFormat`         | `/sql`            |
 | `ClickHouseStatementFromString`, `splitTerminalClauses`, `maskLiteralsAndComments`               | `/sql`            |
-| Schema tooling: `isSchemaObject`, `makeSnapshot`, `renderSchema`, `diffSchemas`, `diffPgSchemas`, `fromDrizzleSnapshot`, snapshot and entity schemas (`PgEnumEntity`, `PgUniqueEntity`, …), `Hint`; for SQLite, `sqliteEntitiesOf`, `renderSqliteSchema`, `renderSqliteCreateTable`, `renderSqliteCreateIndex`, `diffSqliteSchemas`, `fromDrizzleSqliteSnapshot`, `SqliteMigrationOp`, `renderSqliteOp`, `renderSqliteMigrationSql`, `labelOfSqlite`, `rebuildName`, the `SqliteSnapshot` schema and the `SqliteTableEntity`, `SqliteColumnEntity`, `SqliteIndexEntity`, `SqliteUniqueEntity` schemas | `/schema`         |
+| Schema tooling: `isSchemaObject`, `makeSnapshot`, `renderSchema`, `diffSchemas`, `diffPgSchemas`, `fromDrizzleSnapshot`, snapshot and entity schemas (`PgEnumEntity`, `PgUniqueEntity`, …), `Hint`; for SQLite, `sqliteEntitiesOf`, `renderSqliteSchema`, `renderSqliteCreateTable`, `renderSqliteCreateIndex`, `diffSqliteSchemas`, `fromDrizzleSqliteSnapshot`, `SqliteMigrationOp`, `renderSqliteOp`, `renderSqliteMigrationSql`, `labelOfSqlite`, `rebuildName`, the `SqliteSnapshot` schema and the `SqliteTableEntity`, `SqliteColumnEntity`, `SqliteIndexEntity`, `SqliteUniqueEntity` schemas; for MySQL, `mysqlEntitiesOf`, `renderMysqlSchema`, `renderMysqlCreateTable`, `renderMysqlCreateIndex`, `renderMysqlColumnDefinition`, `renderMysqlUnique`, `mysqlIdent`, `canonicalMysqlType`, `diffMysqlSchemas`, `MysqlMigrationOp`, `renderMysqlOp`, `renderMysqlMigrationSql`, `labelOfMysql`, `MysqlOpLabel`, `MysqlSchemaTable`, the `MysqlSnapshot` schema and the `MysqlTableEntity`, `MysqlColumnEntity`, `MysqlIndexEntity`, `MysqlUniqueEntity`, `MysqlSchemaEntity` schemas | `/schema`         |
 | `run`, `status`, `verify`, `verifySnapshot`, `baseline`, `MigrationDriver` and the migrate errors | `/migrate`        |
 | `Database`, `run`, `runOne`, `runOption`, `runNonEmpty`, `stream`, `paginate`, `sql`, `query`, `execute`, `transaction`, `requireTransaction`, `afterCommit`, `retryContention`, `Transaction` | `/database` |
 | `DatabaseError`, `ResultCardinalityError`, `InvalidCursor`, `TransactionCommitFailed`, `TransactionRollbackFailed` and the other transaction errors | `/database` |
@@ -619,7 +619,7 @@ the default.
 | `runCli`                                                                                         | `/benchmark/cli`  |
 
 `/schema` reads tables; it does not declare them. Declare tables with `table` from `/clickhouse`,
-`/postgres` or `/sqlite`. See [Schema and migrations](./migrations.md), [Database](./database.md),
+`/postgres`, `/sqlite` or `/mysql`. See [Schema and migrations](./migrations.md), [Database](./database.md),
 [Running a query](./running-queries.md) for what the `/sql` statement helpers are for, and
 [Benchmarking](./benchmarking.md) for the complete benchmark API, command workflow, result
 verification, and JSON protocol.
@@ -720,6 +720,56 @@ for driver wiring, collations and what differs.
 | `nullable(type)`, `custom`, `brand` | Type composition |
 | `count`, `countDistinct`, `countIf`, `sum`, `avg`, `min`, `max` | MySQL aggregates; the last four can return SQL NULL |
 | `lower`, `upper`, `length`, `coalesce` | MySQL scalar functions |
-| `table` | `(name, columns, TableOptions?) => Table`, a query schema with no DDL |
+| `table`, `column`, `index`, `uniqueIndex` | Tables with their DDL; see below |
 | `mysqlDialect`, `mariadbDialect` | The dialects |
 | `MysqlInteger` | The integer wire codec: a number, or the numeric string mysql2 sends for a wide one |
+
+### Tables and DDL
+
+```ts
+const Tours = MySQL.table("tours", {
+	casing: "snake_case",
+	columns: {
+		id: MySQL.bigint,
+		orgId: MySQL.varchar(36),
+		code: MySQL.column(MySQL.varchar(16), { unique: true }),
+		seats: MySQL.column(MySQL.int, { default: 10 }),
+		startsAt: MySQL.column(MySQL.datetime, { defaultExpr: MySQL.dateTimeNow }),
+	},
+	primaryKey: ["orgId", "id"],
+	indexes: [MySQL.index("tours_starts", ["orgId", "startsAt"])],
+	tenantColumn: "orgId",
+})
+```
+
+| Export | Signature |
+| --- | --- |
+| `table` | `(name, TableDefinition) => MysqlSchemaTable`, `(name, ExternalTableDefinition) => Table`, or `(name, columns, TableOptions?) => Table`, a query schema with no DDL |
+| `column` | `(type, ColumnOptions) => ColumnSpec` |
+| `index` | `(name, columns) => IndexSpec`: column names only |
+| `uniqueIndex` | The same, `UNIQUE` |
+
+**`TableDefinition`** — `columns` (required), `primaryKey` (column names, written as a
+`PRIMARY KEY (...)` table constraint), `indexes`, `tenantColumn`, `casing`. A column is
+`NOT NULL` unless its type is `nullable(...)`; a primary key column cannot be nullable. A `TEXT`,
+`BLOB` or `JSON` column cannot be in a key, an index or a UNIQUE constraint, and every name is at
+most 64 characters.
+
+**`ExternalTableDefinition`** — `{ external: true, columns, tenantColumn? }`: a view, or a table
+another tool migrates. No DDL. **`TableOptions`** — `tenantColumn`, `defaults`, `computed`, for
+the bare-columns form.
+
+**`ColumnOptions`** — one of `default` (a literal, encoded through the column type; written
+`DEFAULT ('…')` on a `TEXT`, `BLOB` or `JSON` column) or `defaultExpr` (SQL as written, in the
+parentheses MySQL requires, or a DSL callback, parenthesized for you; `dateTimeNow` for a
+`datetime`); either lets an insert leave the column out (`DefaultedColumnsOf`). `defaultFn` and
+`onUpdate` are client-side defaults, as on `/postgres`, with no DDL. Also `name` (the column's
+name in SQL) and `unique` (`true` or a constraint name), `CONSTRAINT <table>_<column>_unique
+UNIQUE (...)` by default.
+
+**Types** — `ColumnInput`, `ColumnSpec`, `ColumnsOf`, `IndexSpec`, `TableDdl`, `MysqlSchemaTable`,
+`DdlExpr`, `DefinitionProblem`, `SchemaDefinitionError`. A definition that cannot render records a
+problem; `S.mysqlEntitiesOf` fails with a `SchemaDefinitionError`, and `S.renderMysqlSchema`
+writes the `CREATE TABLE` and `CREATE INDEX` statements. `effect-orm generate` with
+`dialect: "mysql"` writes migrations for them; see [MySQL migrations](./migrations.md#mysql). The
+`/migrate` runner does not apply MySQL migrations yet.
