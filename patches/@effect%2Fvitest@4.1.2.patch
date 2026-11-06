@@ -1,5 +1,5 @@
 diff --git a/dist/internal/internal.js b/dist/internal/internal.js
-index ba15b512471edc067d9cb27ed7838ab42bba6c44..8e80dd30505e6414a4bd130cd17a72f87184c27f 100644
+index 6c1b1c18bef7e0954d6b338cdbc46408f9415c1f..b14a86851122923ef9326d6879075e28491f8275 100644
 --- a/dist/internal/internal.js
 +++ b/dist/internal/internal.js
 @@ -14,7 +14,8 @@ import * as Scope from "effect/Scope";
@@ -9,10 +9,10 @@ index ba15b512471edc067d9cb27ed7838ab42bba6c44..8e80dd30505e6414a4bd130cd17a72f8
 -const getCurrentSuite = V.TestRunner.getCurrentSuite;
 +// Patched (maple): Bun aliases vitest but does not expose TestRunner. Resolve only for layer tests.
 +const getCurrentSuite = () => V.TestRunner.getCurrentSuite();
- const runPromise = /*#__PURE__*/Effect.fnUntraced(function* (effect, _ctx) {
-   const exit = yield* Effect.exit(effect);
-   if (Exit.isFailure(exit)) {
-@@ -44,7 +45,8 @@ const settleOnAbort = (ctx, promise) => {
+ const runPromise = (effect, ctx) => Effect.runPromise(
+ // Only the test is interruptible: once the signal aborts, the fiber stops
+ // at its next interruptible step, which would skip reporting the defects
+@@ -48,7 +49,8 @@ const settleOnAbort = (ctx, promise) => {
  /** @internal */
  const runTest = ctx => effect => {
    const promise = runPromise(effect, ctx);
@@ -23,7 +23,7 @@ index ba15b512471edc067d9cb27ed7838ab42bba6c44..8e80dd30505e6414a4bd130cd17a72f8
  const TestEnv = /*#__PURE__*/Layer.mergeAll(TestConsole.layer, /*#__PURE__*/TestClock.layer());
  /** @internal */
 diff --git a/src/internal/internal.ts b/src/internal/internal.ts
-index 356c99ebf8d15603ce67bbfd05c05735bf43cd4b..e647e98bdbd8d88ff9ef96d36bfad657e3cb54db 100644
+index e6ab75a733377e72a5fc95292602e3c7474585d6..404a2816af0c2d38a650dc0f86b3548e942bc7b8 100644
 --- a/src/internal/internal.ts
 +++ b/src/internal/internal.ts
 @@ -18,7 +18,8 @@ import * as TestConsole from "effect/testing/TestConsole"
@@ -34,9 +34,9 @@ index 356c99ebf8d15603ce67bbfd05c05735bf43cd4b..e647e98bdbd8d88ff9ef96d36bfad657
 +// Patched (maple): Bun aliases vitest but does not expose TestRunner. Resolve only for layer tests.
 +const getCurrentSuite = () => V.TestRunner.getCurrentSuite()
  
- const runPromise: <E, A>(
-   _: Effect.Effect<A, E, never>,
-@@ -53,7 +54,8 @@ const settleOnAbort = <A>(ctx: Vitest.TestContext, promise: Promise<A>) => {
+ const runPromise = <E, A>(
+   effect: Effect.Effect<A, E>,
+@@ -59,7 +60,8 @@ const settleOnAbort = <A>(ctx: Vitest.TestContext, promise: Promise<A>) => {
  /** @internal */
  const runTest = (ctx?: Vitest.TestContext) => <E, A>(effect: Effect.Effect<A, E>) => {
    const promise = runPromise(effect, ctx)

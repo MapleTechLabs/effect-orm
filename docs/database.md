@@ -5,7 +5,7 @@
 connections: a `Database` is a small object over your client.
 
 ```sh
-npm install @effect/sql-pg@4.0.6   # or @effect/sql-pglite, @effect/sql-clickhouse
+npm install @effect/sql-pg@4.1.2   # or @effect/sql-pglite, @effect/sql-clickhouse
 ```
 
 Transactions are Effect's own `SqlClient.withTransaction`, with four additions:
