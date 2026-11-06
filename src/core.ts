@@ -117,7 +117,7 @@ export {
 	type SourceOf,
 	type SourcesSatisfied,
 } from "./ch/expr"
-export type { ClickHouseOnly, PostgresOnly, SqliteOnly } from "./ch/functions/builtin"
+export type { ClickHouseOnly, MysqlOnly, PostgresOnly, SqliteOnly } from "./ch/functions/builtin"
 
 export {
 	type CHInsert,
@@ -183,6 +183,7 @@ export {
 	type DialectClauses,
 	type DialectTransactions,
 	type IsolationLevel,
+	type LockingSupport,
 	type ParamStyle,
 	type TransactionSettings,
 } from "./ch/dialect"

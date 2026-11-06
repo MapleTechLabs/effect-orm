@@ -15,6 +15,7 @@ const semantics: Semantics = {
 	// `/` is DECIMAL division: four places past the dividend's, nine kept internally.
 	integerDivision: "decimal",
 	// MOD truncates towards zero, as JS `%` does, on integers and on DECIMALs.
+	quotients: "internal",
 	modulo: "truncate",
 	// NULL is MySQL's smallest value.
 	nulls: { asc: "first", desc: "last" },

@@ -89,8 +89,9 @@ read at run time, so the type cannot see it: under a `CurrentDialect` of another
 `options.dialect` too. The compile-time `QueryBuilderDefect` stays, for a caller past the types.
 
 **A clause only some dialects write.** A row lock (`forUpdate`, `forNoKeyUpdate`, `forShare`,
-`forKeyShare`) adds a `RowLock` (`ClauseEntry<"FOR UPDATE", "postgres">`): only Postgres has row
-locks, so compiling or running the query for ClickHouse, SQLite or D1 is a type error
+`forKeyShare`) adds a `RowLock` (`ClauseEntry<"FOR UPDATE", "postgres" | "mysql">`): Postgres
+writes every lock and MySQL `FOR UPDATE` and `FOR SHARE`, so compiling or running the query for
+ClickHouse, SQLite or D1 (or `forNoKeyUpdate` for MySQL) is a type error
 (`unsupportedClause "FOR UPDATE has no meaning for the sqlite dialect"`). On SQLite and D1, claim a
 row with a conditional update instead (`update(…).set(…).where(($) => [$.status.eq("pending")]).returning(…)`),
 or keep the writer single (a Durable Object). As with functions, a dialect typed as a plain `Dialect`

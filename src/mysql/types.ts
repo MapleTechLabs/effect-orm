@@ -14,13 +14,16 @@ export { dateTimeNow, mysqlDateTimeText } from "./datetime"
 /** A MySQL column type. */
 export type MysqlType<Tag extends string, A, I = A> = CHType<Tag, A, I>
 
-/** An integer in range, from a number or the numeric string mysql2 sends for a wide one. */
-const integer = (minimum: number, maximum: number): Schema.Codec<number, number | string> => {
-	const inRange = Schema.Int.check(Schema.isBetween({ minimum, maximum }))
-	return Schema.Union([inRange, Schema.FiniteFromString.pipe(Schema.decodeTo(inRange))]) as unknown as Schema.Codec<number, number | string>
-}
+/** An integer as mysql2 sends one: a number, or the numeric string it sends for a wide one. */
+export const MysqlInteger: Schema.Codec<number, number | string> = Schema.Union([Schema.Int, Schema.FiniteFromString.pipe(Schema.decodeTo(Schema.Int))]) as unknown as Schema.Codec<
+	number,
+	number | string
+>
 
-const SafeInteger = Schema.Union([Schema.Int, Schema.FiniteFromString.pipe(Schema.decodeTo(Schema.Int))]).pipe(
+const integer = (minimum: number, maximum: number): Schema.Codec<number, number | string> =>
+	MysqlInteger.pipe(Schema.decodeTo(Schema.Number.check(Schema.isBetween({ minimum, maximum })))) as unknown as Schema.Codec<number, number | string>
+
+const SafeInteger = MysqlInteger.pipe(
 	Schema.decodeTo(
 		Schema.Number.check(
 			Schema.makeFilter((value: number) => (Number.isSafeInteger(value) ? undefined : `${value} is not a safe integer; a BIGINT past 2^53 loses precision as a JS number`), {
@@ -44,27 +47,42 @@ export const intUnsigned = custom("int unsigned", integer(0, 4294967295), anyInt
 /** A BIGINT within JavaScript's safe integers; a wider value is a decode error, not a different number. */
 export const bigint = custom("bigint", SafeInteger)
 export const double = custom("double", Schema.Union([Schema.Finite, Schema.FiniteFromString]) as unknown as Schema.Codec<number, number | string>)
+const decimalText = Schema.String.check(
+	Schema.makeFilter((value: string) => (/^-?\d+(\.\d+)?$/.test(value) ? undefined : `\`${value}\` is not a decimal number`), { title: "mysqlDecimal" }),
+)
 /** DECIMAL(p, s) as its exact decimal text: mysql2 sends DECIMAL as a string, and a JS number would round it. */
 export const decimal = <const P extends number, const S extends number>(precision: P, scale: S) =>
-	custom(`decimal(${precision},${scale})` as `decimal(${P},${S})`, Schema.Union([Schema.String, Schema.Finite.pipe(Schema.decodeTo(Schema.String, {
-		decode: SchemaGetter.transform((value: number) => String(value)),
-		encode: SchemaGetter.transform((value: string) => Number(value)),
-	}))]) as unknown as Schema.Codec<string, string>)
+	custom(`decimal(${precision},${scale})` as `decimal(${P},${S})`, decimalText)
 /** TINYINT(1), as MySQL spells BOOLEAN. Other integers are not booleans. */
-export const boolean = custom("boolean", Schema.Union([Schema.BooleanFromBit, Schema.Boolean]) as unknown as Schema.Codec<boolean, 0 | 1>)
+export const boolean = custom("boolean", Schema.Union([Schema.BooleanFromBit, Schema.Boolean]) as unknown as Schema.Codec<boolean, 0 | 1 | boolean>)
 
 /** DATETIME(3), an instant read and written in UTC. Give mysql2 `timezone: "Z"` (docs/mysql.md). */
 export const datetime = custom("datetime(3)", MysqlDateTime, MysqlDateTimeLiteral)
 
+/** A real calendar date in 1000-9999: `2024-02-30` and MariaDB's zero dates are not. */
+const isCalendarDate = (value: string): boolean => {
+	const match = /^(\d{4})-\d{2}-\d{2}$/.exec(value)
+	if (match === null || Number(match[1]) < 1000) return false
+	const date = new Date(`${value}T00:00:00.000Z`)
+	return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value
+}
 const dateText = Schema.String.check(
-	Schema.makeFilter((value: string) => (/^\d{4}-\d{2}-\d{2}$/.test(value) ? undefined : `\`${value}\` is not a DATE: expected \`YYYY-MM-DD\``), { title: "mysqlDate" }),
+	Schema.makeFilter((value: string) => (isCalendarDate(value) ? undefined : `\`${value}\` is not a DATE in 1000-9999: expected \`YYYY-MM-DD\``), { title: "mysqlDate" }),
 )
-/** DATE, a calendar date with no time zone, as `YYYY-MM-DD` text. A `Date` from mysql2 (with `timezone: "Z"`) is read in UTC. */
+const validDate = Schema.Date.check(
+	Schema.makeFilter((value: Date) => (Number.isNaN(value.getTime()) ? "an invalid Date (a zero date?)" : undefined), { title: "mysqlDate" }),
+)
+/**
+ * DATE, a calendar date with no time zone, as `YYYY-MM-DD` text. A `Date` from
+ * mysql2 (with `timezone: "Z"`) is read in UTC. mysql2 builds a `Date` from a
+ * MariaDB zero-in-date (`2024-02-00`) as another day, so read DATE as text
+ * (`dateStrings: ["DATE"]`) or run with NO_ZERO_IN_DATE (docs/mysql.md).
+ */
 export const date = custom(
 	"date",
 	Schema.Union([
 		dateText,
-		Schema.Date.pipe(
+		validDate.pipe(
 			Schema.decodeTo(dateText, {
 				decode: SchemaGetter.transform((value: Date) => value.toISOString().slice(0, 10)),
 				encode: SchemaGetter.transform((value: string) => new Date(`${value}T00:00:00.000Z`)),

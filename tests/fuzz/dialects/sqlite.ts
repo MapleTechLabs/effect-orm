@@ -12,6 +12,7 @@ import { runWith, type DialectModule, type FuzzDialect, type Semantics, type Str
 const semantics: Semantics = {
 	missingJoinColumn: "null",
 	integerDivision: "truncate",
+	quotients: "shown",
 	modulo: "integer",
 	// NULL is SQLite's smallest value.
 	nulls: { asc: "first", desc: "last" },

@@ -60,6 +60,7 @@ const runClickHouse = async (compiled: CH.CompiledQuery<any>, settings: Record<s
 const semantics: Semantics = {
 	missingJoinColumn: "default",
 	integerDivision: "float",
+	quotients: "shown",
 	modulo: "clickhouse",
 	nulls: { asc: "last", desc: "last" },
 	// ClickHouse answers an aggregate over no rows with a default its optimizer moves around

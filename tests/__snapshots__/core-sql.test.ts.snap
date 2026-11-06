@@ -2156,7 +2156,7 @@ exports[`core SQL (mariadb) > selected-param 1`] = `
 )
 SELECT
           \`orders\`.\`Id\` AS \`id\`,
-          ? AS \`flagged\`
+          CAST(? AS SIGNED) AS \`flagged\`
         FROM \`orders\`
         WHERE \`orders\`.\`OrgId\` = ?
           AND \`orders\`.\`Id\` = ?",
@@ -2197,7 +2197,7 @@ SELECT 1 AS \`Id\`, CAST('50% off' AS CHAR) AS \`Body\` UNION ALL SELECT 2 AS \`
 SELECT
           \`texts\`.\`Id\` AS \`id\`
         FROM \`texts\`
-        WHERE (LOWER(\`texts\`.\`Body\`) LIKE LOWER(?) OR LOWER(\`texts\`.\`Body\`) LIKE LOWER(?) OR LOWER(\`texts\`.\`Body\`) LIKE LOWER(?) OR LOWER(\`texts\`.\`Body\`) LIKE LOWER(?))
+        WHERE (lower(\`texts\`.\`Body\`) LIKE lower(?) OR lower(\`texts\`.\`Body\`) LIKE lower(?) OR lower(\`texts\`.\`Body\`) LIKE lower(?) OR lower(\`texts\`.\`Body\`) LIKE lower(?))
         ORDER BY \`id\` ASC",
 }
 `;
@@ -2954,7 +2954,7 @@ exports[`core SQL (mysql) > selected-param 1`] = `
 )
 SELECT
           \`orders\`.\`Id\` AS \`id\`,
-          ? AS \`flagged\`
+          CAST(? AS SIGNED) AS \`flagged\`
         FROM \`orders\`
         WHERE \`orders\`.\`OrgId\` = ?
           AND \`orders\`.\`Id\` = ?",
@@ -2995,7 +2995,7 @@ SELECT 1 AS \`Id\`, CAST('50% off' AS CHAR) AS \`Body\` UNION ALL SELECT 2 AS \`
 SELECT
           \`texts\`.\`Id\` AS \`id\`
         FROM \`texts\`
-        WHERE (LOWER(\`texts\`.\`Body\`) LIKE LOWER(?) OR LOWER(\`texts\`.\`Body\`) LIKE LOWER(?) OR LOWER(\`texts\`.\`Body\`) LIKE LOWER(?) OR LOWER(\`texts\`.\`Body\`) LIKE LOWER(?))
+        WHERE (lower(\`texts\`.\`Body\`) LIKE lower(?) OR lower(\`texts\`.\`Body\`) LIKE lower(?) OR lower(\`texts\`.\`Body\`) LIKE lower(?) OR lower(\`texts\`.\`Body\`) LIKE lower(?))
         ORDER BY \`id\` ASC",
 }
 `;

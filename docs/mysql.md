@@ -1,7 +1,7 @@
 # MySQL and MariaDB
 
 Import `@maple-dev/effect-orm/mysql` for the shared query builder, MySQL codecs and functions.
-`mysqlDialect` targets MySQL 8.0 and later; `mariadbDialect` targets MariaDB 10.6 and later.
+`mysqlDialect` targets MySQL 8.0.17 and later (it casts to `DOUBLE`); `mariadbDialect` targets MariaDB 10.6 and later.
 Both compile to backtick identifiers and positional `?` bindings, and the fuzzer runs every
 property on MySQL 8.4 and MariaDB 11.4, over prepared statements and over the text protocol.
 The package opens no connection: use the Effect `SqlClient` you already provide.
@@ -50,15 +50,18 @@ export const MysqlLive = Db.layerSqlClient({
 }).pipe(Layer.provide(MysqlClient.layer({ url: Redacted.make("mysql://app:secret@localhost:3306/app?timezone=Z") })))
 ```
 
-Cloudflare Hyperdrive does not support prepared statements: pass `disablePreparedStatements: true`
-to `MysqlClient.layer`, and mysql2 writes each value into the statement, escaped. Both paths are
+For a proxy without prepared statements, such as Cloudflare Hyperdrive (as `@effect/sql-mysql2`
+documents its `disablePreparedStatements` option), pass `disablePreparedStatements: true` to
+`MysqlClient.layer`: mysql2 then writes each value into the statement, escaped. Both paths are
 fuzzed.
 
 `Db.stream` reads through mysql2's row stream. Transactions and nested savepoints use the
 client's `withTransaction`. `isolationLevel` (`read committed`, `repeatable read`,
 `serializable`) and `accessMode` are applied by the statement that starts the transaction:
 `SET TRANSACTION ISOLATION LEVEL …; START TRANSACTION READ ONLY`, since MySQL refuses
-`SET TRANSACTION` inside a transaction. `deferrable` is refused.
+`SET TRANSACTION` inside a transaction. An isolation level therefore needs a client that runs
+several statements in one; `@effect/sql-mysql2` does (it sets `multipleStatements`). An access
+mode alone is one statement. `deferrable` is refused.
 
 ## Types
 
@@ -76,9 +79,18 @@ client's `withTransaction`. `isolationLevel` (`read committed`, `repeatable read
 | `json(schema)` | `json` | the schema's type; MySQL sends JSON parsed, MariaDB as text |
 | `nullable`, `custom`, `brand` | | type composition |
 
-`MysqlType` is the descriptor type. `dateTimeNow` is a `defaultExpr` for a `datetime` column
-(`CURRENT_TIMESTAMP(3)`), and `mysqlDateTimeText(epochMillis)` is the `DATETIME(3)` text of an
+`MysqlType` is the descriptor type and `MysqlInteger` the integer wire codec. `dateTimeNow` is a
+`defaultExpr` for a `datetime` column: `UTC_TIMESTAMP(3)`, since `CURRENT_TIMESTAMP` is in the
+session's time zone and the column is read as UTC. A `DATETIME` itself is stored as written, so
+mysql2's `timezone: "Z"` is all reading and writing need. And `mysqlDateTimeText(epochMillis)` is the `DATETIME(3)` text of an
 instant, for raw SQL and seeds.
+
+`date` refuses a day that does not exist. MariaDB's default `sql_mode` stores zero dates
+(`2024-02-00`), which mysql2 turns into another day's `Date` before the codec sees it: run with
+`NO_ZERO_IN_DATE,NO_ZERO_DATE`, or read DATE as text (mysql2's `dateStrings: ["DATE"]`).
+
+A JSON column is compared with `CAST(? AS JSON)` on MySQL, which compares documents; MariaDB
+compares the text.
 
 An integer column compares with any number: `id.in_(-1)` on an `intUnsigned` column is false,
 and `amount.gt(9.75)` compares numerically. Inserting a value outside the type is refused.
@@ -104,9 +116,10 @@ another dialect is refused in the type and at compile time.
   `GROUP BY`, `DISTINCT` and `like` ignore case and accents (`'a' = 'Á'`), and under a `PAD SPACE`
   collation such as `utf8mb4_bin` trailing spaces do not count (`'a' = 'a '`). Use a binary,
   no-pad collation (`utf8mb4_0900_bin` on MySQL, `utf8mb4_nopad_bin` on MariaDB) where text must
-  match exactly; the fuzzer runs under these. `contains`, `startsWith` and `endsWith` do not
-  depend on it: a case-sensitive match compares bytes (`CAST(x AS BINARY) LIKE …`) and
-  `{ insensitive: true }` compares `LOWER()` of both sides.
+  match exactly; the fuzzer runs under these. A case-sensitive `contains`, `startsWith` or
+  `endsWith` does not depend on it: it compares bytes (`CAST(x AS BINARY) LIKE …`).
+  `{ insensitive: true }` compares `lower()` of both sides under the collation, so under an
+  accent-insensitive one it ignores accents too (`'é'` matches `'e'`).
 - **`/` is DECIMAL division.** `7 / 2` is `3.5000`: four places past the dividend's, nine kept
   internally. A comparison of a quotient sees the internal digits, and MySQL and MariaDB differ
   there (`1/3*3 = 1` is false on MySQL 8.4, true on MariaDB 11.4).
@@ -115,12 +128,16 @@ another dialect is refused in the type and at compile time.
   or `CAST`.
 - **Not supported, and refused at compile time:** `RETURNING`, `ON CONFLICT` (MySQL's
   `ON DUPLICATE KEY UPDATE` reacts to every unique key, not one target), `DISTINCT ON`, `ILIKE`,
-  `FOR NO KEY UPDATE` and `FOR KEY SHARE`. MariaDB has no `FOR SHARE OF`.
+  `FOR NO KEY UPDATE` and `FOR KEY SHARE`. MariaDB has no lock `OF` at all.
 - **Row locks:** `forUpdate` and `forShare` with `skipLocked`, `noWait` and, on MySQL, `of`.
   MariaDB writes a shared lock as `LOCK IN SHARE MODE`.
 - **`NO_BACKSLASH_ESCAPES` is not supported.** String literals escape `\` with a backslash, as
-  MySQL reads them by default. Bound values are unaffected.
+  MySQL reads them by default. Bound values are unaffected. A literal containing the builder's
+  reserved `__PARAM_` text is written as a `CONCAT` of parts.
 - **OFFSET without LIMIT** is written with MySQL's largest row count.
-- A selected integer literal is written `CAST(10 AS SIGNED)`: MySQL 8.4 replaces an alias with its
-  expression inside a merged derived table, and would read `ORDER BY e1` over `10 AS e1` as a
-  column position.
+- A selected integer literal, and a selected `param.int`, `param.float` or `param.bool`, is
+  written `CAST(… AS SIGNED)` (or `DOUBLE`): MySQL 8.4 replaces an alias with its expression
+  inside a merged derived table, and would read `ORDER BY e1` over `10 AS e1` as column 10, an
+  error, or over `1 AS e1` as the first column, silently. Over the text protocol a param is
+  written into the SQL, so it needs the cast too. A literal of 2^63 or more is left as it is: MySQL
+  reads it as a DECIMAL, no position.

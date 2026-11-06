@@ -149,8 +149,8 @@ const evalExpr = (env: Env, row: Row, e: Expr): V => {
 // four places more than its dividend, `*` the sum of the scales, `+` `-` `%`
 // the larger. `+` `-` `*` `%` are exact; `/` truncates its quotient at whole
 // 9-digit words past both operands' digits and the four (so `94 / 44` is held
-// as 2.136363636). A comparison or a SUM sees the internal digits, which MySQL
-// and MariaDB do not agree on (`1/3*3 = 1`); those are declined (`hasDivision`).
+// as 2.136363636). A comparison or a SUM sees the internal digits
+// (`Semantics.quotients`); those are declined (`hasDivision`).
 interface Decimal {
 	/** The value times 10^frac. */
 	readonly units: bigint
@@ -274,7 +274,7 @@ const evalCond = (env: Env, row: Row, c: Cond): Bool => {
 			return c.op === "isNull" ? isNull : !isNull
 		}
 		case "cmp": {
-			if (env.sem.integerDivision === "decimal" && (hasDivision(c.l) || (c.r.k === "expr" && hasDivision(c.r.e)))) {
+			if (env.sem.quotients === "internal" && (hasDivision(c.l) || (c.r.k === "expr" && hasDivision(c.r.e)))) {
 				skip("MySQL compares a DECIMAL quotient at nine places, not the four it shows")
 			}
 			const l = evalExpr(env, row, c.l)
@@ -305,7 +305,7 @@ const evalCond = (env: Env, row: Row, c: Cond): Bool => {
 			return c.op === "notLike" ? !matched : matched
 		}
 		case "between": {
-			if (env.sem.integerDivision === "decimal" && hasDivision(c.e)) skip("MySQL compares a DECIMAL quotient at nine places, not the four it shows")
+			if (env.sem.quotients === "internal" && hasDivision(c.e)) skip("MySQL compares a DECIMAL quotient at nine places, not the four it shows")
 			const e = evalExpr(env, row, c.e)
 			const lo = evalOperand(env, row, c.lo)
 			const hi = evalOperand(env, row, c.hi)
@@ -315,7 +315,7 @@ const evalCond = (env: Env, row: Row, c: Cond): Bool => {
 		case "in": {
 			// An empty list is written `1 = 0` / `1 = 1`: constant, whatever the left side is.
 			if (c.values.length === 0) return c.neg
-			if (env.sem.integerDivision === "decimal" && hasDivision(c.e)) skip("MySQL compares a DECIMAL quotient at nine places, not the four it shows")
+			if (env.sem.quotients === "internal" && hasDivision(c.e)) skip("MySQL compares a DECIMAL quotient at nine places, not the four it shows")
 			const e = evalExpr(env, row, c.e)
 			if (e === null) return null
 			const found = c.values.some((v) => compare(e, v) === 0)
@@ -370,7 +370,7 @@ const evalAgg = (env: Env, rows: ReadonlyArray<Row>, agg: Agg, global: boolean):
 		default: {
 			const values = rows.map((row) => evalExpr(env, row, agg.e)).filter((v): v is number => v !== null)
 			if (values.length === 0) return global && env.sem.emptyAggregate === "unmodelled" ? skip("aggregate over no rows") : null
-			if (agg.k === "sum" && env.sem.integerDivision === "decimal" && hasDivision(agg.e)) skip("MySQL sums DECIMAL quotients at nine places, not the four each shows")
+			if (agg.k === "sum" && env.sem.quotients === "internal" && hasDivision(agg.e)) skip("MySQL sums DECIMAL quotients at nine places, not the four each shows")
 			if (agg.k === "sum") return values.reduce((a, b) => a + b, 0)
 			return agg.k === "min" ? Math.min(...values) : Math.max(...values)
 		}

@@ -116,7 +116,7 @@ export const postgresDialect: Dialect<"postgres"> = {
 		parenthesizeUnionBranches: true,
 		returning: true,
 		onConflict: true,
-		locking: true,
+		locking: { strengths: ["UPDATE", "NO KEY UPDATE", "SHARE", "KEY SHARE"], of: true },
 	},
 	paramCodecs: {
 		bool: Schema.Boolean,

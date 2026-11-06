@@ -1,5 +1,5 @@
 import * as MysqlClient from "@effect/sql-mysql2/MysqlClient"
-import { DateTime, Effect, Layer, Redacted, Schema, Stream } from "effect"
+import { DateTime, Effect, Redacted, Schema, Stream } from "effect"
 import * as SqlClient from "effect/sql/SqlClient"
 import { describe, expect, it } from "vitest"
 import * as Db from "../database"
@@ -26,8 +26,28 @@ describe("the MySQL dialect", () => {
 
 	it("escapes backslashes in literals and keeps the param marker out of the SQL text", () => {
 		const compiled = MySQL.compileUnsafe(MySQL.from(Items).select(() => ({ v: MySQL.lit("a\\b'\n__PARAM_x") })))
-		expect(compiled.sql).toContain(`'a\\\\b\\'\\n' '__PA' 'RAM_' 'x'`)
+		expect(compiled.sql).toContain(`CONCAT('a\\\\b\\'\\n', '__PA', 'RAM_', 'x')`)
 		expect(compiled.sql).not.toContain("__PARAM_")
+	})
+
+	it("casts a selected small integer, or a numeric param, so ORDER BY cannot read it as a position", () => {
+		const sql = MySQL.compileUnsafe(
+			MySQL.from(Items).select(() => ({ one: MySQL.lit(1), big: MySQL.lit(1e20), n: MySQL.param.int("n"), f: MySQL.param.float("f"), s: MySQL.param.string("s") })),
+			{ n: 1, f: 1, s: "1" },
+		).sql
+		expect(sql).toContain("CAST(1 AS SIGNED) AS `one`")
+		// Past 2^63 a literal is a DECIMAL to MySQL, and no position: a cast would overflow it.
+		expect(sql).toContain("100000000000000000000 AS `big`")
+		expect(sql).toContain("CAST(? AS SIGNED) AS `n`")
+		expect(sql).toContain("CAST(? AS DOUBLE) AS `f`")
+		expect(sql).toContain("? AS `s`")
+	})
+
+	it("compares a JSON column with CAST(? AS JSON) on MySQL, and as text on MariaDB", () => {
+		const Docs = MySQL.table("docs", { id: MySQL.int, body: MySQL.json(Schema.Struct({ a: Schema.Number })) })
+		const query = MySQL.from(Docs).select("id").where(($) => [$.body.eq({ a: 1 })])
+		expect(MySQL.compileUnsafe(query).sql).toContain("`docs`.`body` = CAST(? AS JSON)")
+		expect(MySQL.compileUnsafe(query, {}, { dialect: MySQL.mariadbDialect }).sql).toContain("`docs`.`body` = ?")
 	})
 
 	it("writes OFFSET with the largest LIMIT", () => {
@@ -46,7 +66,7 @@ describe("the MySQL dialect", () => {
 	it("writes text matches that do not depend on the collation", () => {
 		const sql = MySQL.compileUnsafe(MySQL.from(Items).select("id").where(($) => [$.note.contains("50%"), $.note.startsWith("a", { insensitive: true })])).sql
 		expect(sql).toContain("CAST(`items`.`note` AS BINARY) LIKE CAST(? AS BINARY)")
-		expect(sql).toContain("LOWER(`items`.`note`) LIKE LOWER(?)")
+		expect(sql).toContain("lower(`items`.`note`) LIKE lower(?)")
 		const param = MySQL.compileUnsafe(MySQL.from(Items).select("id").where(($) => [$.note.contains(MySQL.param.string("q"))]), { q: "x" }).sql
 		expect(param).toContain("CONCAT('%', replace(")
 	})
@@ -92,7 +112,7 @@ for (const [name, url, dialect] of servers) {
 		const table = `items_${name}_${process.pid}`
 		const T = MySQL.table(table, { id: MySQL.bigint, note: MySQL.text, enabled: MySQL.boolean, score: MySQL.nullable(MySQL.double), at: MySQL.datetime })
 		const client = (prepared: boolean) =>
-			MysqlClient.layer({ url: Redacted.make(`${url}?timezone=Z`), disablePreparedStatements: !prepared })
+			MysqlClient.layer({ url: Redacted.make(`${url}${url?.includes("?") ? "&" : "?"}timezone=Z`), disablePreparedStatements: !prepared })
 		const run = <A, E>(prepared: boolean, body: (db: Db.DatabaseApi<"mysql">) => Effect.Effect<A, E>) =>
 			Effect.runPromise(
 				Effect.gen(function* () {
@@ -100,7 +120,7 @@ for (const [name, url, dialect] of servers) {
 					yield* db.execute({ sql: `DROP TABLE IF EXISTS \`${table}\`` })
 					yield* db.execute({ sql: `CREATE TABLE \`${table}\` (id BIGINT PRIMARY KEY, note TEXT NOT NULL, enabled BOOLEAN NOT NULL, score DOUBLE, at DATETIME(3) NOT NULL)` })
 					return yield* body(db).pipe(Effect.ensuring(Effect.orDie(db.execute({ sql: `DROP TABLE \`${table}\`` }))))
-				}).pipe(Effect.provide(client(prepared) as Layer.Layer<SqlClient.SqlClient>)),
+				}).pipe(Effect.provide(client(prepared))),
 			)
 		const at = DateTime.makeUnsafe("2026-10-01T10:00:00.123Z")
 
@@ -126,6 +146,32 @@ for (const [name, url, dialect] of servers) {
 			})
 		}
 
+		for (const prepared of [true, false]) {
+			it(`orders by a selected number and compares JSON (${prepared ? "prepared" : "text protocol"})`, async () => {
+				const seen = await run(prepared, (db) =>
+					Effect.gen(function* () {
+						yield* db.run(MySQL.insertInto(T).values([1, 2].map((id) => ({ id, note: `${id}`, enabled: true, score: null, at }))))
+						// The text protocol writes the param into the SQL: MySQL would read a bare `10` in the merged
+						// derived table's ORDER BY as column position 10 (an error), and `1` as the first column.
+						const inner = MySQL.from(T).select(($) => ({ id: $.id, n: MySQL.param.int("n") })).orderBy(["n", "asc"], ["id", "desc"])
+						const rows = yield* db.run(MySQL.fromQuery(inner, "w").select("id", "n"), { n: 10 })
+						// A derived table's order is not the outer query's (MariaDB drops it), so compare the rows.
+						const ordered = [...rows].sort((a, b) => a.id - b.id)
+						const Docs = MySQL.table(`${table}_docs`, { id: MySQL.int, body: MySQL.json(Schema.Struct({ a: Schema.Number })) })
+						yield* db.execute({ sql: `CREATE TABLE \`${table}_docs\` (id INT, body JSON)` })
+						yield* db.run(MySQL.insertInto(Docs).values({ id: 1, body: { a: 1 } }))
+						const found = yield* db.run(MySQL.from(Docs).select("id").where(($) => [$.body.eq({ a: 1 })]))
+						yield* db.execute({ sql: `DROP TABLE \`${table}_docs\`` })
+						// A literal holding the reserved marker is a CONCAT; MariaDB's replace() misreads adjacent literals.
+						yield* db.run(MySQL.insertInto(T).values({ id: 3, note: "a__PARAM_b", enabled: true, score: null, at }))
+						const marker = yield* db.run(MySQL.from(T).select("id").where(($) => [$.note.contains(MySQL.lit("__PARAM_")), $.note.startsWith(MySQL.lit("A__param_"), { insensitive: true })]))
+						return { ordered, found, marker }
+					}),
+				)
+				expect(seen).toEqual({ ordered: [{ id: 1, n: 10 }, { id: 2, n: 10 }], found: [{ id: 1 }], marker: [{ id: 3 }] })
+			})
+		}
+
 		// SET TRANSACTION and START TRANSACTION go as one statement: a READ ONLY insert failing proves both ran.
 		it("starts a transaction with its settings and rolls back a failed one", async () => {
 			const seen = await run(true, (db) =>
@@ -133,14 +179,14 @@ for (const [name, url, dialect] of servers) {
 					const readOnly = yield* db
 						.transaction(db.run(MySQL.insertInto(T).values({ id: 4, note: "no", enabled: true, score: null, at })), { isolationLevel: "serializable", accessMode: "read only" })
 						.pipe(Effect.flip, Effect.map((error) => String(error)))
-					yield* db
+					const aborted = yield* db
 						.transaction(Effect.andThen(db.run(MySQL.insertInto(T).values({ id: 3, note: "gone", enabled: true, score: null, at })), Effect.fail("abort" as const)))
-						.pipe(Effect.ignore)
+						.pipe(Effect.flip)
 					const left = yield* db.run(MySQL.from(T).select("id"))
-					return { readOnly: /READ ONLY/i.test(readOnly), left }
+					return { readOnly: readOnly.includes("Cannot execute statement in a READ ONLY transaction"), aborted, left }
 				}),
 			)
-			expect(seen).toEqual({ readOnly: true, left: [] })
+			expect(seen).toEqual({ readOnly: true, aborted: "abort", left: [] })
 		})
 	})
 }

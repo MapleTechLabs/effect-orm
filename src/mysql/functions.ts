@@ -3,6 +3,7 @@ import { makeExpr, type Condition, type Expr } from "../ch/expr"
 import { schemaOf } from "../ch/define-fn"
 import { builtins, type MysqlOnly } from "../ch/functions/builtin"
 import { CHNumber } from "../ch/types"
+import { MysqlInteger } from "./types"
 import { compile } from "../sql/sql-fragment"
 
 // Each result carries `MysqlOnly`, as `builtins("mysql", …)` refuses them for
@@ -12,7 +13,7 @@ const scalar = builtins("mysql", "scalar")
 const sql = (expr: Expr<unknown> | Condition): string => compile(expr.toFragment())
 // SUM and AVG of integers are DECIMAL, which mysql2 sends as a string.
 const nullableNumber = Schema.NullOr(CHNumber)
-const integer = Schema.Union([Schema.Int, Schema.FiniteFromString.pipe(Schema.decodeTo(Schema.Int))])
+const integer = MysqlInteger
 
 export const count = (): Expr<number, MysqlOnly> => makeExpr(aggregate.lazy(() => "COUNT(*)", "count"), integer)
 export const countDistinct = <P>(expr: Expr<unknown, P>): Expr<number, P | MysqlOnly> =>

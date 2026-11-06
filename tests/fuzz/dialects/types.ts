@@ -52,6 +52,12 @@ export interface Semantics {
 	 */
 	readonly integerDivision: "truncate" | "float" | "decimal"
 	/**
+	 * What a comparison or a SUM of a quotient sees: the value it shows, or
+	 * digits kept internally past it (MySQL's DECIMAL, where MySQL and MariaDB
+	 * disagree on `1/3*3 = 1`). The model declines the latter.
+	 */
+	readonly quotients: "shown" | "internal"
+	/**
 	 * `%`: `truncate` is JS `%` on any operands; `clickhouse` declines what ClickHouse computes its own
 	 * way (signed with unsigned, floats); `integer` casts both operands to integers first (SQLite).
 	 */

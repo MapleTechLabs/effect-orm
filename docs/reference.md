@@ -68,7 +68,7 @@ Tables come from the dialect's `table`: [`CH.table`](#tables-and-ddl) or
 | `limit(n)` / `offset(n)`                                | Rounded before emission                                               |
 | `format(fmt)`                                           | `"JSON"` \| `"JSONEachRow"`                                           |
 | `distinct()` / `distinctOn(...aliases)`                 | `SELECT DISTINCT` / `SELECT DISTINCT ON (…)`                          |
-| `forUpdate` / `forNoKeyUpdate` / `forShare` / `forKeyShare` | Postgres row locks; options `LockOptions` (`skipLocked`, `noWait`, `of`). Refused in the type when compiled or run for another dialect |
+| `forUpdate` / `forNoKeyUpdate` / `forShare` / `forKeyShare` | Row locks; options `LockOptions` (`skipLocked`, `noWait`, `of`). Postgres writes all four, MySQL and MariaDB `forUpdate` and `forShare`; refused in the type when compiled or run for another dialect |
 | `innerJoin` / `leftJoin` / `crossJoin`                  | `(table, alias, on?)`                                                 |
 | `innerJoinQuery` / `leftJoinQuery` / `crossJoinQuery`   | `(query, alias, on?)`                                                 |
 | `withCTE(name, query)` / `withCTE(name, sql, options?)` | Typed query derives scope; SQL form can declare `options.tenantScope` |
@@ -117,7 +117,8 @@ to its own dialect; `options.dialect` overrides it.
 | `rawCompiledQuery`   | `({ sql, tenantScope, reason, justification, rowSchema?, route?, dialect?, kind? }) => CompiledQuery` |
 
 `Dialect`, `DialectClauses` and `ParamStyle` describe a database: how identifiers and literals
-are written, how params reach the server, and which clauses exist. Pass one as
+are written, how params reach the server, and which clauses exist (`LockingSupport`: which row
+locks). Pass one as
 `options.dialect`, or provide it as `CurrentDialect`, a `Context.Reference<Dialect | undefined>`
 that `compile` reads when no `options.dialect` is given. `Compile<Default>`, `CompileUnsafe<Default>`,
 `CompileUnion<Default>` and `CompileUnionUnsafe<Default>` are the types of the four compile
@@ -243,8 +244,8 @@ to `compile`.
 `whenTrue`, or one whose name is a union, which the params object may leave out) and
 `ParamsIn<X>` (the params an expression or argument list carries). Beside the params, the same
 channel carries `DialectEntry<Set>` (a built-in function of one dialect: `ClickHouseOnly`,
-`PostgresOnly` or `SqliteOnly`; `DialectsIn<P>` reads the sets), `ClauseEntry<Clause, Sets>` (a
-clause only some dialects write: `RowLock<Clause>` for the Postgres row locks) and `SourceEntry<Name>` (a column of source
+`PostgresOnly`, `SqliteOnly` or `MysqlOnly`; `DialectsIn<P>` reads the sets), `ClauseEntry<Clause, Sets>` (a
+clause only some dialects write: `RowLock<Clause>` for the row locks) and `SourceEntry<Name>` (a column of source
 `Name`; `SourceOf<Name>` is the entry of a ref, `BindSources<P, Sources>` removes the ones a query
 provides). You rarely write them, but `tsc --declaration` names them when a package exports a
 query with a param or a `defineFn` helper, so they are public.
@@ -721,3 +722,4 @@ for driver wiring, collations and what differs.
 | `lower`, `upper`, `length`, `coalesce` | MySQL scalar functions |
 | `table` | `(name, columns, TableOptions?) => Table`, a query schema with no DDL |
 | `mysqlDialect`, `mariadbDialect` | The dialects |
+| `MysqlInteger` | The integer wire codec: a number, or the numeric string mysql2 sends for a wide one |

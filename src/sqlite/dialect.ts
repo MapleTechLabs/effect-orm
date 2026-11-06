@@ -3,6 +3,7 @@ import { noTransactions, type Dialect } from "../ch/dialect"
 import { QueryBuilderError } from "../ch/errors"
 import { fail } from "../ch/failure"
 import { PARAM_MARKER_PREFIX } from "../ch/param"
+import { toSeconds } from "../sql/text-timestamp"
 import { SqliteTimestampLiteral, sqliteTimestampLiteral, sqliteTimestampText } from "./timestamp"
 
 const hex = (value: Uint8Array): string =>
@@ -35,9 +36,9 @@ export const sqliteDialect: Dialect<"sqlite"> = {
 	functions: "sqlite",
 	ilike: false,
 	likeEscape: true,
-	likeIgnoresCase: true,
+	likeCase: "ascii-insensitive",
 	inexactNumberText: true,
-	integerComparesFraction: true,
+	fractionComparableIntegers: ["integer"],
 	quoteIdent: (name) => `"${name.replace(/"/g, '""')}"`,
 	quoteString,
 	literal,
@@ -65,7 +66,7 @@ export const sqliteDialect: Dialect<"sqlite"> = {
 	},
 	paramCodecs: {
 		dateTime: SqliteTimestampLiteral,
-		dateTimeSeconds: sqliteTimestampLiteral((millis) => Math.floor(millis / 1000) * 1000),
+		dateTimeSeconds: sqliteTimestampLiteral(toSeconds),
 	},
 	transactions: {
 		support: "full",

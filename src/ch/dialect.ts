@@ -72,8 +72,14 @@ export interface DialectClauses {
 	/** The LIMIT written before an OFFSET when the caller gave none, where
 	 *  OFFSET needs one: `-1` for SQLite, the largest row count for MySQL. */
 	readonly limitForOffset?: string
-	/** A selected integer literal is cast, as the dialect may read it as an ORDER BY position (MySQL). */
-	readonly integerSelectIsPosition?: boolean
+	/**
+	 * The CAST targets for a selected number (a literal, or a numeric param the
+	 * driver may write into the text), where the dialect could read a bare one as
+	 * an ORDER BY position. MySQL 8.4 puts a merged derived table's select
+	 * expressions in place of their aliases, so `10 AS e1 … ORDER BY e1` is
+	 * `ORDER BY 10`: an unknown column, or, for `1`, silently the first one.
+	 */
+	readonly selectedNumberCast?: { readonly integer: string; readonly float: string }
 	/** `RETURNING` after an INSERT. Absent means no: an insert with
 	 *  `.returning()` fails to compile for the dialect. */
 	readonly returning?: boolean
@@ -91,22 +97,22 @@ export interface DialectClauses {
 	/** `SETTINGS` on an INSERT, UPDATE or DELETE (ClickHouse). Absent means
 	 *  no: a write with `.settings()` fails to compile for the dialect. */
 	readonly writeSettings?: boolean
-	/** Row locking on a SELECT (`FOR UPDATE`, `FOR SHARE`, `SKIP LOCKED`). Absent
-	 *  means no: a query with `.forUpdate()` and the like fails to compile.
-	 *  `true` is every Postgres lock; a `LockingSupport` names what there is. */
-	readonly locking?: boolean | LockingSupport
+	/** Row locking on a SELECT (`FOR UPDATE`, `FOR SHARE`, `SKIP LOCKED`): the
+	 *  locks the dialect writes. Absent means none: a query with `.forUpdate()`
+	 *  and the like fails to compile. */
+	readonly locking?: LockingSupport
 	/** UPDATE is written `ALTER TABLE t UPDATE ... WHERE ...`, a ClickHouse
 	 *  mutation, rather than `UPDATE t SET ... WHERE ...`. */
 	readonly alterTableUpdate?: boolean
 }
 
-/** The row locks of a dialect that has only some of Postgres's. */
+/** The row locks a dialect writes. */
 export interface LockingSupport {
 	readonly strengths: ReadonlyArray<"UPDATE" | "NO KEY UPDATE" | "SHARE" | "KEY SHARE">
 	/** `OF name, ...` after the strength. */
 	readonly of: boolean
-	/** A shared lock is written `LOCK IN SHARE MODE` (MariaDB) rather than `FOR SHARE`. */
-	readonly shareMode?: boolean
+	/** How a shared lock is written: `FOR SHARE`, or MariaDB's `LOCK IN SHARE MODE`. */
+	readonly shareSyntax?: "FOR SHARE" | "LOCK IN SHARE MODE"
 }
 
 /** A transaction isolation level. `read uncommitted` is left out: Postgres runs it as `read committed`. */
@@ -279,11 +285,11 @@ const checkedSyntax = (dialect: Dialect): SqlSyntax => ({
 	dialect: dialect.name,
 	ilike: dialect.ilike,
 	likeEscape: dialect.likeEscape,
-	likeIgnoresCase: dialect.likeIgnoresCase,
+	likeCase: dialect.likeCase,
 	inexactNumberText: dialect.inexactNumberText,
-	integerComparesFraction: dialect.integerComparesFraction,
+	fractionComparableIntegers: dialect.fractionComparableIntegers,
+	comparisonCast: dialect.comparisonCast,
 	concat: dialect.concat,
-	likeFollowsCollation: dialect.likeFollowsCollation,
 	quoteIdent: dialect.quoteIdent,
 	quoteString: (value) => checked(dialect, dialect.quoteString(value), "a string literal"),
 	literal: (value, context) => checkedLiteral(dialect, value, context),

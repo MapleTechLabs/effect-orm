@@ -46,5 +46,6 @@ export const literalExemptions = {
 		dateTimeNow: "SQL default expression, not a descriptor.",
 		mysqlDateTimeText: "DATETIME formatting helper, not a descriptor.",
 		varbinary: "The blob codec under a length-bounded SQL type; blob covers it.",
+		MysqlInteger: "Wire codec; the integer literal cases exercise it with database-generated wire values.",
 	},
 } as const

@@ -62,15 +62,15 @@ const lockClause = (lock: import("./query").LockClause | undefined): string | un
 	if (lock === undefined) return undefined
 	const dialect = currentDialect()
 	const locking = dialect.clauses.locking
-	if (locking === undefined || locking === false) {
+	if (locking === undefined) {
 		return fail(new QueryBuilderDefect({
 			message: `CHQuery: FOR ${lock.strength} has no meaning for the ${dialect.name} dialect, which has no row locks`,
 		}), "")
 	}
-	if (locking !== true && !locking.strengths.includes(lock.strength)) {
+	if (!locking.strengths.includes(lock.strength)) {
 		return fail(new QueryBuilderDefect({ message: `CHQuery: FOR ${lock.strength} has no meaning for the ${dialect.name} dialect` }), "")
 	}
-	if (locking !== true && !locking.of && (lock.of?.length ?? 0) > 0) {
+	if (!locking.of && (lock.of?.length ?? 0) > 0) {
 		return fail(new QueryBuilderDefect({ message: `CHQuery: ${dialect.name} has no FOR ${lock.strength} OF; lock every table of the query` }), "")
 	}
 	if (lock.skipLocked === true && lock.noWait === true) {
@@ -86,7 +86,13 @@ const lockClause = (lock: import("./query").LockClause | undefined): string | un
 	}
 	const of = lock.of !== undefined && lock.of.length > 0 ? ` OF ${lock.of.map(quoteIdent).join(", ")}` : ""
 	const wait = lock.skipLocked === true ? " SKIP LOCKED" : lock.noWait === true ? " NOWAIT" : ""
-	return lock.strength === "SHARE" && locking !== true && locking.shareMode === true ? `LOCK IN SHARE MODE${wait}` : `FOR ${lock.strength}${of}${wait}`
+	return lock.strength === "SHARE" && locking.shareSyntax === "LOCK IN SHARE MODE" ? `LOCK IN SHARE MODE${wait}` : `FOR ${lock.strength}${of}${wait}`
+}
+
+/** The LIMIT an OFFSET without one needs, where the dialect needs one. */
+const limitForOffset = (): SqlFragment | undefined => {
+	const limit = currentDialect().clauses.limitForOffset
+	return limit === undefined ? undefined : raw(limit)
 }
 
 /** `orderBy` takes `[column, direction]` tuples. A bare string is the natural
@@ -1081,8 +1087,8 @@ function compileInner<
 				orderBy: state.orderByFn === undefined
 					? orderByClause(state.orderBySpecs).map(raw)
 					: orderByExprs(state.orderByFn($)).map(raw),
-				limit: state.limitValue == null && state.offsetValue != null && currentDialect().clauses.limitForOffset !== undefined
-					? raw(currentDialect().clauses.limitForOffset!)
+				limit: state.limitValue == null && state.offsetValue != null
+					? limitForOffset()
 					: rowCount("limit", state.limitValue),
 				offset: rowCount("offset", state.offsetValue),
 				format: options?.skipFormat ? undefined : formatClause(state.formatValue),
@@ -1442,15 +1448,17 @@ const castSelectedParam = (expr: unknown, sql: string): string => {
 	return target === undefined ? sql : `CAST(${sql} AS ${target})`
 }
 
-/**
- * A selected non-negative integer literal, where the dialect could read it as a
- * column position. MySQL 8.4 puts a merged derived table's select expressions
- * in place of their aliases, so `10 AS e1 … ORDER BY e1` becomes `ORDER BY 10`:
- * an unknown column, or, for `1`, silently the first one.
- */
+/** A selected integer below 2^63; a larger one is a DECIMAL to MySQL, and no position. */
+const isSmallInteger = (sql: string): boolean => /^\d{1,19}$/.test(sql) && BigInt(sql) <= 9223372036854775807n
+const NUMERIC_PARAM = new RegExp(`^${PARAM_MARKER_PREFIX}(int|float|bool)_.*__$`)
+
+/** A selected number cast where the dialect could read a bare one as a column position (see `selectedNumberCast`). */
 const positionSafe = (sql: string): string => {
-	const dialect = currentDialect()
-	return dialect.clauses.integerSelectIsPosition === true && /^\d+$/.test(sql) ? `CAST(${sql} AS ${dialect.castType?.("bigint") ?? "SIGNED"})` : sql
+	const cast = currentDialect().clauses.selectedNumberCast
+	if (cast === undefined) return sql
+	if (isSmallInteger(sql)) return `CAST(${sql} AS ${cast.integer})`
+	const kind = NUMERIC_PARAM.exec(sql)?.[1]
+	return kind === undefined ? sql : `CAST(${sql} AS ${kind === "float" ? cast.float : cast.integer})`
 }
 
 /** The aliases a query selects, read without compiling it; `undefined` before `select()`. */
