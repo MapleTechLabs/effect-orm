@@ -5,6 +5,6 @@ import { logo } from "./logo";
 
 interface Props { class?: string }
 // Callers give it a whole-pixel box and the drawing centres inside.
-const { class: cls = "h-5 w-8" } = Astro.props;
+const { class: cls = "h-5 w-7.5" } = Astro.props;
 ---
 <svg xmlns="http://www.w3.org/2000/svg" viewBox={`0 0 ${logo.width} ${logo.height}`} class={cls} aria-hidden="true">{logo.paths.map((d) => <path d={d} fill="currentColor" />)}</svg>
