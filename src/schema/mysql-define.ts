@@ -220,12 +220,22 @@ const columnDefault = (
 	return SIMPLE_LITERAL.test(literal) && !isMysqlLobType(spec.type.sql) ? literal : `(${literal})`
 }
 
-/** Bytes a key part can take in an index, for the types that have a declared length; `undefined` for the rest. */
+/** Bytes a fixed-width type takes in a key. */
+const FIXED_BYTES: Record<string, number> = { tinyint: 1, boolean: 1, smallint: 2, int: 4, "int unsigned": 4, bigint: 8, double: 8, float: 4, date: 3 }
+
+/** DECIMAL's packed size: four bytes per nine digits, on each side of the point, and the leftover digits' share. */
+const decimalBytes = (digits: number): number => Math.floor(digits / 9) * 4 + [0, 1, 1, 2, 2, 3, 3, 4, 4, 4][digits % 9]!
+
+/** Bytes a key part can take in an index; `undefined` for a type it does not know. */
 const keyBytes = (type: string): number | undefined => {
-	const match = /^(var)?(char|binary)\((\d+)\)/.exec(type)
-	if (match === null) return undefined
+	const sized = /^(var)?(char|binary)\((\d+)\)/.exec(type)
 	// utf8mb4 takes up to four bytes a character.
-	return Number(match[3]) * (match[2] === "char" ? 4 : 1)
+	if (sized !== null) return Number(sized[3]) * (sized[2] === "char" ? 4 : 1)
+	const datetime = /^datetime(?:\((\d)\))?$/.exec(type)
+	if (datetime !== null) return 5 + Math.ceil(Number(datetime[1] ?? 0) / 2)
+	const decimal = /^decimal\((\d+),(\d+)\)$/.exec(type)
+	if (decimal !== null) return decimalBytes(Number(decimal[1]) - Number(decimal[2])) + decimalBytes(Number(decimal[2]))
+	return FIXED_BYTES[type]
 }
 
 /** InnoDB's limit on an index key, with the default DYNAMIC row format. */

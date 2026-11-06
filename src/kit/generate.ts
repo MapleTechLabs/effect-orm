@@ -233,7 +233,12 @@ export const generate = (config: KitConfig, cwd: string, options: GenerateOption
 		let snapshotEntities: ReadonlyArray<AnySchemaEntity>
 		let prevIds = analysis.baseIds
 		if (options.baseline === "drizzle") {
-			if (dialect === "clickhouse" || dialect === "mysql") return yield* new KitError({ code: "config", message: "--from-drizzle needs dialect: \"postgres\" or \"sqlite\"; use --baseline without it to adopt a MySQL database" })
+			if (dialect === "clickhouse" || dialect === "mysql") {
+				return yield* new KitError({
+					code: "config",
+					message: `--from-drizzle needs dialect: "postgres" or "sqlite"${dialect === "mysql" ? "; use --baseline without it to adopt a MySQL database" : ""}`,
+				})
+			}
 			const source = [...analysis.legacy].reverse().find((m) => m.foreignSnapshot?.tool === "drizzle-kit")
 			if (source === undefined) return yield* new KitError({ code: "config", message: "no drizzle-kit snapshot.json in the folder to start from" })
 			const imported =

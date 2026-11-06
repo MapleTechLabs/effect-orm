@@ -85,6 +85,8 @@ describe("MySQL.table DDL", () => {
 			["a UNIQUE TEXT column", MySQL.table("t", { columns: { id: MySQL.column(MySQL.longtext, { unique: true }) } }), /id is longtext/],
 			["a nullable primary key column", MySQL.table("t", { columns: { id: MySQL.nullable(MySQL.int) }, primaryKey: ["id"] }), /cannot be nullable/],
 			["a key past InnoDB's 3072 bytes", MySQL.table("t", { columns: { a: MySQL.varchar(500), b: MySQL.varchar(400) }, indexes: [MySQL.index("t_ab", ["a", "b"])] }), /3600 bytes; InnoDB allows 3072/],
+			// Fixed-width parts count too: 767 * 4 + 4 + 4 = 3076.
+			["a key whose fixed-width parts take it past 3072 bytes", MySQL.table("t", { columns: { a: MySQL.varchar(767), b: MySQL.int, c: MySQL.int }, indexes: [MySQL.index("t_abc", ["a", "b", "c"])] }), /3076 bytes; InnoDB allows 3072/],
 			["a name past 64 characters", MySQL.table("t", { columns: { id: MySQL.column(MySQL.int, { unique: true, name: "a".repeat(60) }) } }), /_unique" is 69 characters; MySQL allows 64/],
 			["an index named PRIMARY", MySQL.table("t", { columns: { id: MySQL.int }, indexes: [MySQL.index("primary", ["id"])] }), /PRIMARY names the primary key/],
 			["an index and a UNIQUE with one name", MySQL.table("t", { columns: { id: MySQL.column(MySQL.int, { unique: "t_id" }) }, indexes: [MySQL.index("T_ID", ["id"])] }), /share one namespace/],
