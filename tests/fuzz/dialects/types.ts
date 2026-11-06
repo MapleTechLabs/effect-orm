@@ -76,6 +76,12 @@ export interface FuzzTarget {
 	/** False when the database is not reachable here (an env var is unset): the target's live tests skip. */
 	readonly available: boolean
 	readonly semantics: Semantics
+	/**
+	 * Whether a double result can come back one ULP off: MySQL's text protocol
+	 * prints some (`93188483.89857809` reads back `…808`). The literal suite then
+	 * accepts a double within a few ULPs of the expected one on this target.
+	 */
+	readonly approximateDoubles?: boolean
 	readonly run: (compiled: CH.CompiledQuery<any>) => Promise<Outcome>
 }
 

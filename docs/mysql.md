@@ -53,7 +53,8 @@ export const MysqlLive = Db.layerSqlClient({
 For a proxy without prepared statements, such as Cloudflare Hyperdrive (as `@effect/sql-mysql2`
 documents its `disablePreparedStatements` option), pass `disablePreparedStatements: true` to
 `MysqlClient.layer`: mysql2 then writes each value into the statement, escaped. Both paths are
-fuzzed.
+fuzzed. Over the text protocol the server prints some `DOUBLE` results one ULP off
+(93188483.89857809 reads back as …808); prepared statements send the exact bits.
 
 `Db.stream` reads through mysql2's row stream. Transactions and nested savepoints use the
 client's `withTransaction`. `isolationLevel` (`read committed`, `repeatable read`,

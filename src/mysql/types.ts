@@ -50,24 +50,37 @@ export const double = custom("double", Schema.Union([Schema.Finite, Schema.Finit
 const decimalText = Schema.String.check(
 	Schema.makeFilter((value: string) => (/^-?\d+(\.\d+)?$/.test(value) ? undefined : `\`${value}\` is not a decimal number`), { title: "mysqlDecimal" }),
 )
-/** DECIMAL(p, s) as its exact decimal text: mysql2 sends DECIMAL as a string, and a JS number would round it. */
+/**
+ * DECIMAL(p, s) as its exact decimal text: mysql2 sends DECIMAL as a string, and
+ * a JS number would round it. A number (mysql2's `decimalNumbers`) is read as its text.
+ */
 export const decimal = <const P extends number, const S extends number>(precision: P, scale: S) =>
-	custom(`decimal(${precision},${scale})` as `decimal(${P},${S})`, decimalText)
+	custom(
+		`decimal(${precision},${scale})` as `decimal(${P},${S})`,
+		Schema.Union([
+			decimalText,
+			Schema.Finite.pipe(
+				Schema.decodeTo(decimalText, {
+					decode: SchemaGetter.transform((value: number) => String(value)),
+					encode: SchemaGetter.transform((value: string) => Number(value)),
+				}),
+			),
+		]) as unknown as Schema.Codec<string, string | number>,
+	)
 /** TINYINT(1), as MySQL spells BOOLEAN. Other integers are not booleans. */
 export const boolean = custom("boolean", Schema.Union([Schema.BooleanFromBit, Schema.Boolean]) as unknown as Schema.Codec<boolean, 0 | 1 | boolean>)
 
 /** DATETIME(3), an instant read and written in UTC. Give mysql2 `timezone: "Z"` (docs/mysql.md). */
 export const datetime = custom("datetime(3)", MysqlDateTime, MysqlDateTimeLiteral)
 
-/** A real calendar date in 1000-9999: `2024-02-30` and MariaDB's zero dates are not. */
+/** A real calendar date: `2024-02-30` and MariaDB's zero dates are not. */
 const isCalendarDate = (value: string): boolean => {
-	const match = /^(\d{4})-\d{2}-\d{2}$/.exec(value)
-	if (match === null || Number(match[1]) < 1000) return false
+	if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
 	const date = new Date(`${value}T00:00:00.000Z`)
 	return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value
 }
 const dateText = Schema.String.check(
-	Schema.makeFilter((value: string) => (isCalendarDate(value) ? undefined : `\`${value}\` is not a DATE in 1000-9999: expected \`YYYY-MM-DD\``), { title: "mysqlDate" }),
+	Schema.makeFilter((value: string) => (isCalendarDate(value) ? undefined : `\`${value}\` is not a DATE: expected a calendar date \`YYYY-MM-DD\``), { title: "mysqlDate" }),
 )
 const validDate = Schema.Date.check(
 	Schema.makeFilter((value: Date) => (Number.isNaN(value.getTime()) ? "an invalid Date (a zero date?)" : undefined), { title: "mysqlDate" }),

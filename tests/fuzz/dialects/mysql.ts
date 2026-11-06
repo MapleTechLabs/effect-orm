@@ -163,8 +163,9 @@ const fuzzDialect = (server: MysqlServer, dialect: MySQL.Dialect<"mysql">, conte
 		writes: writes(server, (sql) => db.query(sql, [])),
 		targets: [
 			{ name: server.name, available: server.url !== undefined, semantics, run: (compiled) => runWith(compiled, db.query) },
-			// `disablePreparedStatements`, as Cloudflare Hyperdrive needs: mysql2 writes the values into the SQL.
-			{ name: `${server.name}-text`, available: server.url !== undefined, semantics, run: (compiled) => runWith(compiled, text.query) },
+			// `disablePreparedStatements`, as Cloudflare Hyperdrive needs: mysql2 writes the values into the SQL,
+			// and the server prints each value as text, some doubles one ULP off.
+			{ name: `${server.name}-text`, available: server.url !== undefined, semantics, approximateDoubles: true, run: (compiled) => runWith(compiled, text.query) },
 		],
 		close: async () => {
 			await Promise.all([db.close(), text.close()])
