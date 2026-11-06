@@ -5,6 +5,7 @@ import Icon from "@cloudflare/nimbus-docs/components/Icon.astro";
 import { Button } from "./ui/button";
 import { LinkButton } from "./ui/link-button";
 import { ThemeToggle } from "./ui/theme-toggle";
+import { Badge } from "./ui/badge";
 import SearchTrigger from "./ui/search/SearchTrigger.astro";
 import { config } from "virtual:nimbus/config";
 import { getCollectionUrl, stripBase, withBase } from "@cloudflare/nimbus-docs/runtime";
@@ -73,6 +74,7 @@ const resolveSectionHref = (href: string): string =>
           <Logo class="h-4 w-6.5 shrink-0" />
           <span class="ms-2 font-mono text-sm font-semibold tracking-tight">{config.title}</span>
         </a>
+        <Badge variant="warning" class="shrink-0 font-mono uppercase tracking-wider text-[0.625rem] leading-4 px-1.5 py-0" title="Pre-1.0: APIs may change between releases">Alpha</Badge>
       </slot>
 
       {showSections && (
