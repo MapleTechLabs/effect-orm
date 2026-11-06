@@ -135,6 +135,9 @@ another dialect is refused in the type and at compile time.
   MySQL reads them by default. Bound values are unaffected. A literal containing the builder's
   reserved `__PARAM_` text is written as a `CONCAT` of parts.
 - **OFFSET without LIMIT** is written with MySQL's largest row count.
+- **MariaDB 11.4 pages `DISTINCT` over a join wrongly.** It counts `OFFSET` over the join's rows
+  before `DISTINCT` removes their duplicates, so a page can repeat a row from the page before.
+  Page a de-duplicated join from a subquery (`fromQuery(query.distinct(), "d")`) or with `groupBy`.
 - A selected integer literal, and a selected `param.int`, `param.float` or `param.bool`, is
   written `CAST(… AS SIGNED)` (or `DOUBLE`): MySQL 8.4 replaces an alias with its expression
   inside a merged derived table, and would read `ORDER BY e1` over `10 AS e1` as column 10, an

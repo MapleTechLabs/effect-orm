@@ -49,7 +49,16 @@ export interface PlanInput {
 	readonly plan: Plan
 }
 
-const planIssues: ReadonlyArray<KnownIssue<PlanInput>> = []
+const planIssues: ReadonlyArray<KnownIssue<PlanInput>> = [{
+	id: "mariadb-distinct-join-offset",
+	// Server bug, not the builder's: MariaDB 11.4 counts OFFSET over a join's rows before DISTINCT
+	// removes their duplicates, so `SELECT DISTINCT o.x FROM o JOIN c … LIMIT 10 OFFSET 1`, one
+	// distinct row from two joined, returns it. MySQL returns none. The builder could write such a
+	// query as `SELECT * FROM (SELECT DISTINCT …) d … OFFSET 1`, which MariaDB answers correctly.
+	reason: "MariaDB applies OFFSET before DISTINCT over a join",
+	matches: ({ target, plan }) =>
+		target.startsWith("mariadb") && plan.join !== undefined && plan.shape.k === "rows" && plan.shape.distinct && (plan.shape.offset ?? 0) > 0,
+}]
 
 export const knownPlanIssue = (input: PlanInput): string | undefined => firstMatch(planIssues, input)
 
