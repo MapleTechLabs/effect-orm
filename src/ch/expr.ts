@@ -189,7 +189,9 @@ type FunctionSetLabel<Set extends string> = Set extends "clickhouse"
 		? "Postgres"
 		: Set extends "sqlite"
 			? "SQLite"
-			: Set
+			: Set extends "mysql"
+				? "MySQL"
+				: Set
 
 /**
  * `unknown` when the entries `P` can compile for a dialect whose function set
@@ -219,12 +221,13 @@ export type DialectSatisfied<P, Target extends string> =
  * `"both ClickHouse and Postgres"`, `"ClickHouse, Postgres and SQLite"`: the
  * built-in sets of a union, in a fixed order. A custom set is named as it is.
  */
-type JoinLabels<Sets extends string> = [Exclude<Sets, "clickhouse" | "postgres" | "sqlite">] extends [never]
+type JoinLabels<Sets extends string> = [Exclude<Sets, "clickhouse" | "postgres" | "sqlite" | "mysql">] extends [never]
 	? JoinWithAnd<
 			[
 				...("clickhouse" extends Sets ? ["ClickHouse"] : []),
 				...("postgres" extends Sets ? ["Postgres"] : []),
 				...("sqlite" extends Sets ? ["SQLite"] : []),
+				...("mysql" extends Sets ? ["MySQL"] : []),
 			]
 		>
 	: `both ${FunctionSetLabel<Sets>}`
@@ -233,7 +236,9 @@ type JoinWithAnd<Labels extends ReadonlyArray<string>> = Labels extends readonly
 	? `both ${A} and ${B}`
 	: Labels extends readonly [infer A extends string, infer B extends string, infer C extends string]
 		? `${A}, ${B} and ${C}`
-		: Labels[number]
+		: Labels extends readonly [infer A extends string, infer B extends string, infer C extends string, infer D extends string]
+			? `${A}, ${B}, ${C} and ${D}`
+			: Labels[number]
 
 /** The value a param needs: every entry's type for that name, intersected
  *  per entry (a `boolean` entry stays `boolean`, not `true & false`). */
@@ -536,7 +541,7 @@ const describeUntyped = (value: unknown): string =>
  * column at all.
  */
 const comparisonLiteral = (columnType: CHType<string, any, any>, value: unknown, column: string): string => {
-	const literal = sqliteFraction(columnType, value)
+	const literal = comparesAsFraction(columnType, value)
 		? encodeLiteral(Schema.Finite, value, `column ${column}`)
 		: encodeColumnLiteral(columnType, value, column)
 	// Outside a compile, ClickHouse is the default dialect.
@@ -555,17 +560,23 @@ const comparisonLiteral = (columnType: CHType<string, any, any>, value: unknown,
 }
 
 /**
- * A fraction compared with a SQLite `integer` column: `Amount > 9.75` is a
- * meaningful comparison, but the column's codec only encodes whole numbers.
- * SQLite compares an INTEGER with a REAL numerically, so the value is written
- * as the number it is. Inserting a fraction is still refused by the codec.
+ * A fraction compared with an integer column of a dialect whose integers
+ * compare with one numerically (SQLite, MySQL): `Amount > 9.75` is a
+ * meaningful comparison, but the column's codec only encodes whole numbers,
+ * so the value is written as the number it is. Inserting a fraction is still
+ * refused by the codec.
  */
-const sqliteFraction = (columnType: CHType<string, any, any>, value: unknown): boolean =>
-	columnType.sql === "integer" &&
+const comparesAsFraction = (columnType: CHType<string, any, any>, value: unknown): boolean =>
 	typeof value === "number" &&
 	Number.isFinite(value) &&
 	!Number.isInteger(value) &&
-	activeSqlSyntax()?.integerComparesFraction === true
+	activeSqlSyntax()?.fractionComparableIntegers?.includes(columnType.sql) === true
+
+/** The CAST a value compared with a column of `columnType` gets, where the dialect asks for one. */
+const comparedAs = (columnType: CHType<string, any, any>) => (sql: string): string => {
+	const cast = activeSqlSyntax()?.comparisonCast?.(columnType.sql)
+	return cast === undefined ? sql : `CAST(${sql} AS ${cast})`
+}
 
 const POSTGRES_INTEGERS = new Set(["int2", "int4", "int8", "smallint", "integer", "bigint"])
 
@@ -639,7 +650,9 @@ const textPattern = (value: string | Expr<string, any>, match: TextMatch, glob: 
 			: [LIKE_ESCAPE, "%", "_"].map((char) => [char, LIKE_ESCAPE + char] as const)
 		let escaped = compile(value.toFragment())
 		for (const [char, replacement] of replacements) escaped = `replace(${escaped}, ${q(char)}, ${q(replacement)})`
-		return `(${[before && q(before), escaped, after && q(after)].filter(Boolean).join(" || ")})`
+		const parts = [before && q(before), escaped, after && q(after)].filter(Boolean)
+		const concat = activeSqlSyntax()?.concat
+		return concat === undefined ? `(${parts.join(" || ")})` : concat(parts)
 	}
 	return fail(
 		new QueryBuilderError({
@@ -655,16 +668,20 @@ const textPattern = (value: string | Expr<string, any>, match: TextMatch, glob: 
  * insensitive. Where LIKE ignores case and there is no ILIKE (SQLite, whose
  * LIKE folds ASCII unless `PRAGMA case_sensitive_like` is on), a sensitive
  * match is a `GLOB` and an insensitive one a LIKE of `lower()` on both sides.
+ * Where LIKE follows the collation (MySQL), a sensitive match compares bytes.
  */
 const textMatch = (fragment: SqlFragment, value: string | Expr<string, any>, match: TextMatch, options?: TextMatchOptions): Condition<any> =>
 	makeCond(
 		known(() => {
 			const insensitive = options?.insensitive === true
-			if (activeSqlSyntax()?.likeIgnoresCase !== true) {
+			const likeCase = activeSqlSyntax()?.likeCase ?? "sensitive"
+			if (likeCase === "sensitive") {
 				return `${compile(fragment)} ${insensitive ? "ILIKE" : "LIKE"} ${textPattern(value, match, false)}${likeEscape()}`
 			}
-			return insensitive
-				? `lower(${compile(fragment)}) LIKE lower(${textPattern(value, match, false)})${likeEscape()}`
+			if (insensitive) return `lower(${compile(fragment)}) LIKE lower(${textPattern(value, match, false)})${likeEscape()}`
+			return likeCase === "collation"
+				? // Only `%` is a wildcard here and every other character is escaped, so a byte-wise LIKE matches characters.
+					`CAST(${compile(fragment)} AS BINARY) LIKE CAST(${textPattern(value, match, false)} AS BINARY)${likeEscape()}`
 				: `${compile(fragment)} GLOB ${textPattern(value, match, true)}`
 		}),
 	)
@@ -784,11 +801,14 @@ export function makeExpr<T>(
 	 * no type to read fall back to guessing from the JS value.
 	 */
 	literal?: (value: unknown) => SqlFragment,
+	/** Wraps every operand compared with this expression: a column's `comparisonCast`. */
+	operandCast?: (sql: string) => string,
 ): Expr<T, any> {
 	/** An operand: another expression as-is, a plain value through the codec. */
 	function operand(value: unknown): SqlFragment {
 		if (value === null || value === undefined) return refusedNull(value)
-		return literal !== undefined && !isExprLike(value) ? literal(value) : toFragment(value)
+		const sql = literal !== undefined && !isExprLike(value) ? literal(value) : toFragment(value)
+		return operandCast === undefined ? sql : known(() => operandCast(compile(sql)))
 	}
 
 	// Keep operand rendering lazy so nested subqueries reach the owning compiler.
@@ -816,7 +836,7 @@ export function makeExpr<T>(
 		like: (pattern) => makeCond(known(() => `${compile(fragment)} LIKE ${likePattern(pattern)}${likeEscape()}`)),
 		notLike: (pattern) => makeCond(known(() => `${compile(fragment)} NOT LIKE ${likePattern(pattern)}${likeEscape()}`)),
 		ilike: (pattern) => makeCond(known(() => activeSqlSyntax()?.ilike === false
-			? fail(new QueryBuilderDefect({ message: `ILIKE is not supported by the ${activeSqlSyntax()?.dialect} dialect; use LIKE with SQLite's own case rules` }), "FALSE")
+			? fail(new QueryBuilderDefect({ message: `ILIKE is not supported by the ${activeSqlSyntax()?.dialect} dialect; use LIKE, which follows that dialect's own case rules, or contains(…, { insensitive: true })` }), "FALSE")
 			: `${compile(fragment)} ILIKE ${likePattern(pattern)}`)),
 		contains: (value, options) => textMatch(fragment, value, "contains", options),
 		startsWith: (value, options) => textMatch(fragment, value, "startsWith", options),
@@ -866,6 +886,8 @@ export const operandOf = (expr: Expr<any, any>, value: unknown): SqlFragment =>
 export function makeUntypedExpr<T = unknown>(
 	fragment: SqlFragment,
 	literal?: (value: unknown) => SqlFragment,
+	/** Wraps every operand compared with this expression: a column's `comparisonCast`. */
+	operandCast?: (sql: string) => string,
 ): Expr<T, any> {
 	return makeExpr<T>(fragment, undefined, literal)
 }
@@ -925,6 +947,7 @@ export function makeColumnRef<Name extends string, ColType extends CHType<string
 		columnType === undefined
 			? undefined
 			: (value) => known(() => comparisonLiteral(columnType, value, columnName ?? name)),
+		columnType === undefined ? undefined : comparedAs(columnType),
 	)
 	// Without `sqlName`: a query reading this column as a subquery's output sees it under its alias.
 	if (columnType !== undefined) {

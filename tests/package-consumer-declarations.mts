@@ -56,6 +56,10 @@ export const sessionNotNull = CH.from(Events)
 	.select(($) => ({ sessionId: $.s.id }))
 export const sessionFilter = (accessor: CH.JoinedColumnAccessor<typeof Events.columns, { s: typeof Sessions.columns }>) =>
 	accessor.s.id.isNotNull()
+import * as MySQL from "@maple-dev/effect-orm/mysql"
+export const MysqlItems = MySQL.table("mysql_items", { id: MySQL.bigint, label: MySQL.text, at: MySQL.datetime })
+export const mysqlById = MySQL.from(MysqlItems).select().where(($) => [$.id.eq(MySQL.param.int("id"))])
+export const mysqlCompile = () => MySQL.compile(mysqlById, { id: 1 })
 import * as SQLite from "@maple-dev/effect-orm/sqlite"
 export const SqliteItems = SQLite.table("sqlite_items", { id: SQLite.integer, label: SQLite.text })
 export const sqliteById = SQLite.from(SqliteItems).select().where(($) => [$.id.eq(SQLite.param.int("id"))])

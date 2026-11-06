@@ -45,8 +45,18 @@ export const runWith = async (
 export interface Semantics {
 	/** A column of an unmatched LEFT JOIN row: SQL NULL, or the column type's default (`''`, `0`). */
 	readonly missingJoinColumn: "null" | "default"
-	/** `/` over two integers: truncating integer division, or float division. */
-	readonly integerDivision: "truncate" | "float"
+	/**
+	 * `/` over two integers: truncating integer division, float division, or
+	 * MySQL's DECIMAL division (four places past the dividend's scale shown,
+	 * nine kept for the rest of the expression).
+	 */
+	readonly integerDivision: "truncate" | "float" | "decimal"
+	/**
+	 * What a comparison or a SUM of a quotient sees: the value it shows, or
+	 * digits kept internally past it (MySQL's DECIMAL, where MySQL and MariaDB
+	 * disagree on `1/3*3 = 1`). The model declines the latter.
+	 */
+	readonly quotients: "shown" | "internal"
 	/**
 	 * `%`: `truncate` is JS `%` on any operands; `clickhouse` declines what ClickHouse computes its own
 	 * way (signed with unsigned, floats); `integer` casts both operands to integers first (SQLite).
@@ -66,6 +76,12 @@ export interface FuzzTarget {
 	/** False when the database is not reachable here (an env var is unset): the target's live tests skip. */
 	readonly available: boolean
 	readonly semantics: Semantics
+	/**
+	 * Whether a double result can come back one ULP off: MySQL's text protocol
+	 * prints some (`93188483.89857809` reads back `…808`). The literal suite then
+	 * accepts a double within a few ULPs of the expected one on this target.
+	 */
+	readonly approximateDoubles?: boolean
 	readonly run: (compiled: CH.CompiledQuery<any>) => Promise<Outcome>
 }
 

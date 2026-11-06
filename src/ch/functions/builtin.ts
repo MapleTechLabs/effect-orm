@@ -21,7 +21,7 @@ import { QueryBuilderDefect } from "../errors"
 import { type Condition, type DialectEntry, type Expr, makeCond, makeExpr, makeUntypedExpr, type ParamsIn, toFragment } from "../expr"
 import type { FnResult } from "../define-fn"
 
-export type FunctionSet = "clickhouse" | "postgres" | "sqlite"
+export type FunctionSet = "clickhouse" | "postgres" | "sqlite" | "mysql"
 export type BuiltinKind = "scalar" | "aggregate" | "window"
 
 /** The entry a built-in function of `Set` adds to its result: none for `portable`. */
@@ -32,9 +32,12 @@ export type ClickHouseOnly = DialectEntry<"clickhouse">
 export type PostgresOnly = DialectEntry<"postgres">
 /** What a SQLite function adds to its result's params: see `DialectEntry`. */
 export type SqliteOnly = DialectEntry<"sqlite">
+/** What a MySQL / MariaDB function adds to its result's params: see `DialectEntry`. */
+export type MysqlOnly = DialectEntry<"mysql">
 
 const setLabel: Record<FunctionSet, string> = {
 	sqlite: "a SQLite function (from @maple-dev/effect-orm/sqlite)",
+	mysql: "a MySQL function (from @maple-dev/effect-orm/mysql)",
 	clickhouse: "a ClickHouse function (from @maple-dev/effect-orm/clickhouse)",
 	postgres: "a Postgres function (from @maple-dev/effect-orm/postgres)",
 }

@@ -72,6 +72,15 @@ const planIssues: ReadonlyArray<KnownIssue<PlanInput>> = [{
 	// not know its server version, so this skips every ClickHouse target: delete it once CI drops 26.2.
 	reason: "ClickHouse 26.2 computes a column % a negative power-of-two constant wrongly",
 	matches: (input) => input.executed && input.target.startsWith("clickhouse") && negativePowerOfTwoModulo(input.plan),
+}, {
+	id: "mariadb-distinct-join-offset",
+	// Server bug, not the builder's: MariaDB 11.4 counts OFFSET over a join's rows before DISTINCT
+	// removes their duplicates, so `SELECT DISTINCT o.x FROM o JOIN c … LIMIT 10 OFFSET 1`, one
+	// distinct row from two joined, returns it. MySQL returns none. The builder could write such a
+	// query as `SELECT * FROM (SELECT DISTINCT …) d … OFFSET 1`, which MariaDB answers correctly.
+	reason: "MariaDB applies OFFSET before DISTINCT over a join",
+	matches: ({ executed, target, plan }) =>
+		executed && target.startsWith("mariadb") && plan.join !== undefined && plan.shape.k === "rows" && plan.shape.distinct && (plan.shape.offset ?? 0) > 0,
 }]
 
 export const knownPlanIssue = (input: PlanInput): string | undefined => firstMatch(planIssues, input)

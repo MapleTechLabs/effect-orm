@@ -113,6 +113,7 @@ export const postgres: FuzzDialect = {
 			semantics: {
 				missingJoinColumn: "null",
 				integerDivision: "truncate",
+				quotients: "shown",
 				modulo: "truncate",
 				nulls: { asc: "last", desc: "first" },
 				emptyAggregate: "null",

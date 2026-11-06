@@ -109,6 +109,10 @@ const evalExpr = (env: Env, row: Row, e: Expr): V => {
 			return evalExpr(env, row, e.e) ?? evalExpr(env, row, e.fallback)
 		case "arith": {
 			if (!parsed.has(e)) return evalExpr(env, row, asParsed(e))
+			if (env.sem.integerDivision === "decimal") {
+				const d = evalDecimal(env, row, e)
+				return d === null ? null : decimalNumber(d)
+			}
 			const l = evalExpr(env, row, e.l) as number | null
 			const r = typeof e.r === "number" ? e.r : (evalExpr(env, row, e.r) as number | null)
 			if (l === null || r === null) return null
@@ -137,6 +141,72 @@ const evalExpr = (env: Env, row: Row, e: Expr): V => {
 			}
 		}
 	}
+}
+
+// MySQL DECIMAL arithmetic, as the server's decimal library does it. An
+// integer is exact with no fraction digits. A value is kept to `frac` digits
+// internally and shown rounded half away from zero to its `scale`: `/` shows
+// four places more than its dividend, `*` the sum of the scales, `+` `-` `%`
+// the larger. `+` `-` `*` `%` are exact; `/` truncates its quotient at whole
+// 9-digit words past both operands' digits and the four (so `94 / 44` is held
+// as 2.136363636). A comparison or a SUM sees the internal digits
+// (`Semantics.quotients`); those are declined (`hasDivision`).
+interface Decimal {
+	/** The value times 10^frac. */
+	readonly units: bigint
+	readonly frac: number
+	readonly scale: number
+}
+
+const hasDivision = (e: Expr): boolean =>
+	e.k === "arith" ? e.op === "div" || hasDivision(e.l) || (typeof e.r !== "number" && hasDivision(e.r)) : e.k === "coalesce" ? hasDivision(e.e) || hasDivision(e.fallback) : false
+
+const pow10 = (n: number): bigint => 10n ** BigInt(n)
+const at = (d: Decimal, frac: number): bigint => d.units * pow10(frac - d.frac)
+
+const evalDecimal = (env: Env, row: Row, e: Expr | number): Decimal | null => {
+	if (typeof e === "number") return { units: BigInt(e), frac: 0, scale: 0 }
+	if (e.k !== "arith") {
+		const v = evalExpr(env, row, e)
+		if (v === null) return null
+		if (typeof v !== "number" || !Number.isInteger(v)) skip("a MySQL DECIMAL operand that is not an integer")
+		return { units: BigInt(v as number), frac: 0, scale: 0 }
+	}
+	// An argument (`a.sub(b.add(1))`) is its own chain: parse it as `evalExpr` does.
+	if (!parsed.has(e)) return evalDecimal(env, row, asParsed(e))
+	const l = evalDecimal(env, row, e.l)
+	const r = evalDecimal(env, row, e.r)
+	if (l === null || r === null) return null
+	const frac = Math.max(l.frac, r.frac)
+	const scale = Math.max(l.scale, r.scale)
+	switch (e.op) {
+		case "add":
+			return { units: at(l, frac) + at(r, frac), frac, scale }
+		case "sub":
+			return { units: at(l, frac) - at(r, frac), frac, scale }
+		case "mul":
+			return { units: l.units * r.units, frac: l.frac + r.frac, scale: Math.min(l.scale + r.scale, 30) }
+		case "div": {
+			if (r.units === 0n) skip("division by zero")
+			const digits = Math.ceil((l.frac + r.frac + 4) / 9) * 9
+			// (l.units / 10^l.frac) / (r.units / 10^r.frac), truncated at `digits`; BigInt division truncates.
+			return { units: (l.units * pow10(r.frac + digits)) / (r.units * pow10(l.frac)), frac: digits, scale: Math.min(l.scale + 4, 30) }
+		}
+		case "mod":
+			if (r.units === 0n) skip("division by zero")
+			// BigInt % truncates and takes the dividend's sign, as MOD does.
+			return { units: at(l, frac) % at(r, frac), frac, scale }
+	}
+}
+
+/** The value as the server shows it: rounded half away from zero to its scale. */
+const decimalNumber = (d: Decimal): number => {
+	const negative = d.units < 0n
+	const abs = negative ? -d.units : d.units
+	const shown = d.scale >= d.frac ? abs * pow10(d.scale - d.frac) : (abs + 5n * pow10(d.frac - d.scale - 1)) / pow10(d.frac - d.scale)
+	const digits = shown.toString().padStart(d.scale + 1, "0")
+	const text = d.scale === 0 ? digits : `${digits.slice(0, -d.scale)}.${digits.slice(-d.scale)}`
+	return Number(`${negative ? "-" : ""}${text}`)
 }
 
 /** Strings compare by UTF-8 bytes on every target (ClickHouse always, Postgres under the C collation). */
@@ -204,6 +274,9 @@ const evalCond = (env: Env, row: Row, c: Cond): Bool => {
 			return c.op === "isNull" ? isNull : !isNull
 		}
 		case "cmp": {
+			if (env.sem.quotients === "internal" && (hasDivision(c.l) || (c.r.k === "expr" && hasDivision(c.r.e)))) {
+				skip("MySQL compares a DECIMAL quotient at nine places, not the four it shows")
+			}
 			const l = evalExpr(env, row, c.l)
 			const r = evalOperand(env, row, c.r)
 			if (l === null || r === null) return null
@@ -232,6 +305,7 @@ const evalCond = (env: Env, row: Row, c: Cond): Bool => {
 			return c.op === "notLike" ? !matched : matched
 		}
 		case "between": {
+			if (env.sem.quotients === "internal" && hasDivision(c.e)) skip("MySQL compares a DECIMAL quotient at nine places, not the four it shows")
 			const e = evalExpr(env, row, c.e)
 			const lo = evalOperand(env, row, c.lo)
 			const hi = evalOperand(env, row, c.hi)
@@ -241,6 +315,7 @@ const evalCond = (env: Env, row: Row, c: Cond): Bool => {
 		case "in": {
 			// An empty list is written `1 = 0` / `1 = 1`: constant, whatever the left side is.
 			if (c.values.length === 0) return c.neg
+			if (env.sem.quotients === "internal" && hasDivision(c.e)) skip("MySQL compares a DECIMAL quotient at nine places, not the four it shows")
 			const e = evalExpr(env, row, c.e)
 			if (e === null) return null
 			const found = c.values.some((v) => compare(e, v) === 0)
@@ -295,6 +370,7 @@ const evalAgg = (env: Env, rows: ReadonlyArray<Row>, agg: Agg, global: boolean):
 		default: {
 			const values = rows.map((row) => evalExpr(env, row, agg.e)).filter((v): v is number => v !== null)
 			if (values.length === 0) return global && env.sem.emptyAggregate === "unmodelled" ? skip("aggregate over no rows") : null
+			if (agg.k === "sum" && env.sem.quotients === "internal" && hasDivision(agg.e)) skip("MySQL sums DECIMAL quotients at nine places, not the four each shows")
 			if (agg.k === "sum") return values.reduce((a, b) => a + b, 0)
 			return agg.k === "min" ? Math.min(...values) : Math.max(...values)
 		}

@@ -70,10 +70,30 @@ export const pinned: Record<string, ReadonlyArray<unknown>> = {
 			...rows({ k: "rows", select: [["id", { k: "col", col: "Id" }]], distinct: false, orderBy: [] }),
 			where: [{ k: "cmp", op: "gt", l: { k: "col", col: "Amount" }, r: { k: "value", v: 9.75 } }],
 		},
+		// mysql-order-by-integer-alias: MySQL 8.4 merges a derived table and reads `10 AS e1 … ORDER BY e1`
+		// as ORDER BY position 10 (unknown column), and `1 AS e1` as the first column, silently.
+		{
+			...rows({
+				k: "rows",
+				select: [["id", { k: "col", col: "Id" }], ["e0", { k: "num", v: 1 }], ["e1", { k: "num", v: 10 }]],
+				distinct: false,
+				orderBy: [["e0", "asc"], ["e1", "asc"], ["id", "desc"]],
+			}),
+			wrap: "all",
+		},
 	] satisfies ReadonlyArray<Plan>,
 
 	// ClickHouse 26.2 must page a DISTINCT query over generated rows correctly.
 	"generated fixtures: query results agree": [{
+		// MySQL truncates a quotient at whole 9-digit words: `99 % ((94 / 44) / -2)` is 0.72727274, not …73.
+		fixture: { orders: [{ OrgId: "org_1", Id: 1, Customer: "acme", Amount: 0, Status: "paid", Note: null, Created: Date.UTC(2026, 0, 1) }], customers: [] },
+		plan: rows({
+			k: "rows",
+			select: [["id", { k: "col", col: "Id" }], ["e0", { k: "arith", op: "mod", l: { k: "num", v: 99 }, r: { k: "arith", op: "div", l: { k: "arith", op: "div", l: { k: "num", v: 94 }, r: { k: "num", v: 44 } }, r: -2 } }]],
+			distinct: false,
+			orderBy: [],
+		}),
+	}, {
 		fixture: {
 			orders: [1, 2].map((Id) => ({ OrgId: "org_1", Id, Customer: "acme", Amount: 0, Status: "paid", Note: null, Created: Date.UTC(2026, 0, 1) })),
 			customers: [],
@@ -144,6 +164,16 @@ export const pinned: Record<string, ReadonlyArray<unknown>> = {
 			branches: [
 				rows({ k: "rows", select: [["id", { k: "col", col: "Id" }], ["e0", { k: "arith", op: "add", l: { k: "col", col: "Id" }, r: 1 }]], distinct: false, orderBy: [] }),
 				rows({ k: "rows", select: [["id", { k: "col", col: "Id" }], ["e0", { k: "arith", op: "add", l: { k: "col", col: "Id" }, r: -1 }]], distinct: false, orderBy: [] }),
+			],
+			orderBy: [["e0", "asc"], ["id", "asc"]],
+			crossTenant: false,
+		},
+		// An argument chain under DECIMAL division: `6 * ((5 - 2) / Id)` is 9 where Id = 2, not `6 * (5 - 2 / Id)`.
+		{
+			orgId: "org_1",
+			branches: [
+				rows({ k: "rows", select: [["id", { k: "col", col: "Id" }], ["e0", { k: "arith", op: "mul", l: { k: "num", v: 6 }, r: { k: "arith", op: "div", l: { k: "arith", op: "sub", l: { k: "num", v: 5 }, r: { k: "num", v: 2 } }, r: { k: "col", col: "Id" } } }]], distinct: false, orderBy: [] }),
+				rows({ k: "rows", select: [["id", { k: "col", col: "Id" }], ["e0", { k: "arith", op: "div", l: { k: "num", v: 38 }, r: { k: "num", v: 10 } }]], distinct: false, orderBy: [] }),
 			],
 			orderBy: [["e0", "asc"], ["id", "asc"]],
 			crossTenant: false,

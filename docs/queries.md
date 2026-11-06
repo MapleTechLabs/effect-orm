@@ -175,7 +175,7 @@ when you are sending raw SQL somewhere that does not.
 ## Row locks
 
 On Postgres, `forUpdate`, `forNoKeyUpdate`, `forShare` and `forKeyShare` add a locking clause
-after LIMIT. Each takes `{ skipLocked?, noWait?, of? }`. The usual job-queue claim:
+after LIMIT; MySQL and MariaDB have `forUpdate` and `forShare` ([MySQL](./mysql.md)). Each takes `{ skipLocked?, noWait?, of? }`. The usual job-queue claim:
 
 ```ts
 PG.from(Jobs)
@@ -191,7 +191,7 @@ A lock lasts until the transaction ends, so run the query inside `Database.trans
 are a `QueryBuilderDefect`, refused before anything is sent: `skipLocked` and `noWait` together;
 a qualified name in `of` (use the alias or `jobs`, not `public.jobs`); a lock on a query with
 DISTINCT, GROUP BY or HAVING, or on a `unionAll` branch, which Postgres refuses; and any lock on
-ClickHouse, which has no row locks.
+ClickHouse, SQLite or D1, which have no row locks.
 
 ## `withCTE`
 

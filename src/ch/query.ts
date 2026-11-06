@@ -122,11 +122,12 @@ export type InferOutput<S extends SelectRecord> = {
 type OrderBySpec<Output> = [keyof Output & string, "asc" | "desc"]
 
 /**
- * What a row lock adds to a query's params: only Postgres writes it, so
- * `compile` and `run` for ClickHouse, SQLite or D1 refuse the query in the
- * type (see `DialectSatisfied`), as the compile does at run time.
+ * What a row lock adds to a query's params. Postgres writes every lock and
+ * MySQL / MariaDB `FOR UPDATE` and `FOR SHARE`, so `compile` and `run` for
+ * another dialect refuse the query in the type (see `DialectSatisfied`), as
+ * the compile does at run time.
  */
-export type RowLock<Clause extends string> = ClauseEntry<Clause, "postgres">
+export type RowLock<Clause extends string> = ClauseEntry<Clause, Clause extends "FOR UPDATE" | "FOR SHARE" ? "postgres" | "mysql" : "postgres">
 
 /** How a locking clause waits for rows another transaction holds. */
 export interface LockOptions {

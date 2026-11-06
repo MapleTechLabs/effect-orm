@@ -21,22 +21,34 @@ export interface SqlSyntax {
 	 */
 	readonly likeEscape?: boolean
 	/**
-	 * True when LIKE ignores (ASCII) case by default (SQLite), so a
-	 * case-sensitive text match cannot be a LIKE. `contains` and friends write
-	 * GLOB there instead.
+	 * What decides LIKE's case rules. `sensitive` (the default): `LIKE` is
+	 * case-sensitive. `ascii-insensitive` (SQLite): LIKE folds ASCII, so a
+	 * case-sensitive text match is a GLOB. `collation` (MySQL): LIKE follows a
+	 * collation that may ignore case and accents, so a case-sensitive text match
+	 * compares bytes (`CAST(x AS BINARY) LIKE …`). `contains` and friends write
+	 * `lower()` on both sides for an insensitive match where there is no ILIKE.
 	 */
-	readonly likeIgnoresCase?: boolean
+	readonly likeCase?: "sensitive" | "ascii-insensitive" | "collation"
 	/**
 	 * True when the database parses some decimal literals to a neighbouring
 	 * double (SQLite), so a fraction must be bound rather than written as text.
 	 */
 	readonly inexactNumberText?: boolean
 	/**
-	 * True when an integer column compares with a fraction numerically (SQLite's
-	 * type affinity), so `integer > 9.75` writes the fraction instead of refusing
-	 * it through the column's whole-number codec.
+	 * The integer column types (`integer`, `bigint`, …) that compare with a
+	 * fraction numerically (SQLite's type affinity, MySQL's numeric comparison),
+	 * so `integer > 9.75` writes the fraction instead of refusing it through the
+	 * column's whole-number codec.
 	 */
-	readonly integerComparesFraction?: boolean
+	readonly fractionComparableIntegers?: ReadonlyArray<string>
+	/**
+	 * The CAST a value compared with a column of SQL type `sqlType` needs, or
+	 * `undefined` for none: MySQL compares a JSON column with a bound string as
+	 * a JSON string, so the value is `CAST(? AS JSON)`.
+	 */
+	readonly comparisonCast?: (sqlType: string) => string | undefined
+	/** Text concatenation of SQL operands, where it is not `||` (MySQL, whose `||` is OR). */
+	readonly concat?: (parts: ReadonlyArray<string>) => string
 	/** One identifier (a column, alias, table or schema name), quoted as needed. */
 	readonly quoteIdent: (name: string) => string
 	/** A string as a quoted literal. */

@@ -46,7 +46,12 @@ const roundTrip = async (dialect: FuzzDialect, target: FuzzTarget, literal: Lite
 		const expected = path === "select" ? { v: value, p: value } : { v: value }
 		const canonical = (row: unknown) => normalize(literal.normalizeValue === undefined ? row :
 			Object.fromEntries(Object.entries(row as Record<string, unknown>).map(([key, value]) => [key, literal.normalizeValue!(value)])))
-		expect(outcome.rows.map(canonical)).toEqual([canonical(expected)])
+		// A target whose doubles can be one ULP off (`approximateDoubles`) gets the expected value for a near one.
+		const near = (row: unknown) => target.approximateDoubles !== true ? row : Object.fromEntries(Object.entries(row as Record<string, unknown>).map(([key, got]) => {
+			const want = (expected as Record<string, unknown>)[key]
+			return [key, typeof got === "number" && typeof want === "number" && Math.abs(got - want) <= Math.abs(want) * 4 * Number.EPSILON ? want : got]
+		}))
+		expect(outcome.rows.map((row) => canonical(near(row)))).toEqual([canonical(expected)])
 	})
 }
 

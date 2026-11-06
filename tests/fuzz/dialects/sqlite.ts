@@ -6,12 +6,13 @@ import { Arbitrary, DateTime, Schema } from "effect"
 import * as SQLite from "@maple-dev/effect-orm/sqlite"
 import { d1Context, sqliteContext } from "../../core-cases"
 import { d1Database, sqliteDatabase } from "../../sqlite-support"
-import { finite, jsonPayload, jsonPayloadSchema, nastyString, nullOr, utc, type LiteralType } from "../values"
+import { exactDouble, finite, jsonPayload, jsonPayloadSchema, nastyString, nullOr, utc, type LiteralType } from "../values"
 import { runWith, type DialectModule, type FuzzDialect, type Semantics, type StringRules, type WriteSupport } from "./types"
 
 const semantics: Semantics = {
 	missingJoinColumn: "null",
 	integerDivision: "truncate",
+	quotients: "shown",
 	modulo: "integer",
 	// NULL is SQLite's smallest value.
 	nulls: { asc: "first", desc: "last" },
@@ -29,31 +30,6 @@ const MIN_TS = Date.parse("0000-01-01T00:00:00.000Z")
 const MAX_TS = Date.UTC(9999, 11, 31, 23, 59, 59, 999)
 
 const hex = (bytes: Uint8Array) => Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("")
-
-/**
- * A double as SQLite SQL that is exact without parsing a decimal: SQLite reads
- * some decimals (`1.23456789e-95`, as a literal or through json_extract) as a
- * neighbouring double. The integer mantissa is exact, and multiplying or
- * dividing by a power of two below 2^62 is exact while the result is a double.
- */
-const exactReal = (value: number): string => {
-	if (value === 0) return `SELECT 0.0 AS "v"`
-	const view = new DataView(new ArrayBuffer(8))
-	view.setFloat64(0, Math.abs(value))
-	const bits = view.getBigUint64(0)
-	const biased = Number(bits >> 52n)
-	const fraction = bits & ((1n << 52n) - 1n)
-	// value = mantissa * 2^exponent
-	const mantissa = biased === 0 ? fraction : fraction | (1n << 52n)
-	let exponent = (biased === 0 ? 1 : biased) - 1075
-	let sql = `CAST(${value < 0 ? "-" : ""}${mantissa} AS REAL)`
-	while (exponent !== 0) {
-		const step = Math.min(Math.abs(exponent), 62)
-		sql += `${exponent > 0 ? " * " : " / "}${2n ** BigInt(step)}`
-		exponent -= Math.sign(exponent) * step
-	}
-	return `SELECT ${sql} AS "v"`
-}
 
 /** The reference row, read by SQLite's JSON functions rather than written by the builder. */
 const jsonSource = (read: (value: string) => string) => (json: string) =>
@@ -79,7 +55,7 @@ const literals = (dialect: string): ReadonlyArray<LiteralType> => {
 		literal("brand(text)", SQLite.brand(SQLite.text, Schema.String.pipe(Schema.brand("FuzzText"))), nasty),
 		literal("custom(text)", SQLite.custom("text", Schema.String), nasty),
 		literal("integer", SQLite.integer, fc.maxSafeInteger()),
-		literal("real", SQLite.real, finite, { source: (v) => exactReal(v as number) }),
+		literal("real", SQLite.real, finite, { source: (v) => `SELECT ${exactDouble(v as number, "REAL")} AS "v"` }),
 		literal("boolean", SQLite.boolean, Arbitrary.schema(SQLite.boolean.schema)),
 		// The reference row is SQLite's own text: datetime() writes the date and time, so a builder
 		// value compares equal to what the database itself writes, not just to itself.

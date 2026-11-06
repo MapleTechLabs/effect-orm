@@ -61,10 +61,17 @@ export class CompiledQueryEncodeError extends Schema.TaggedError<CompiledQueryEn
 const lockClause = (lock: import("./query").LockClause | undefined): string | undefined => {
 	if (lock === undefined) return undefined
 	const dialect = currentDialect()
-	if (dialect.clauses.locking !== true) {
+	const locking = dialect.clauses.locking
+	if (locking === undefined) {
 		return fail(new QueryBuilderDefect({
 			message: `CHQuery: FOR ${lock.strength} has no meaning for the ${dialect.name} dialect, which has no row locks`,
 		}), "")
+	}
+	if (!locking.strengths.includes(lock.strength)) {
+		return fail(new QueryBuilderDefect({ message: `CHQuery: FOR ${lock.strength} has no meaning for the ${dialect.name} dialect` }), "")
+	}
+	if (!locking.of && (lock.of?.length ?? 0) > 0) {
+		return fail(new QueryBuilderDefect({ message: `CHQuery: ${dialect.name} has no FOR ${lock.strength} OF; lock every table of the query` }), "")
 	}
 	if (lock.skipLocked === true && lock.noWait === true) {
 		return fail(new QueryBuilderDefect({ message: "CHQuery: a lock takes skipLocked or noWait, not both" }), "")
@@ -79,7 +86,13 @@ const lockClause = (lock: import("./query").LockClause | undefined): string | un
 	}
 	const of = lock.of !== undefined && lock.of.length > 0 ? ` OF ${lock.of.map(quoteIdent).join(", ")}` : ""
 	const wait = lock.skipLocked === true ? " SKIP LOCKED" : lock.noWait === true ? " NOWAIT" : ""
-	return `FOR ${lock.strength}${of}${wait}`
+	return lock.strength === "SHARE" && locking.shareSyntax === "LOCK IN SHARE MODE" ? `LOCK IN SHARE MODE${wait}` : `FOR ${lock.strength}${of}${wait}`
+}
+
+/** The LIMIT an OFFSET without one needs, where the dialect needs one. */
+const limitForOffset = (): SqlFragment | undefined => {
+	const limit = currentDialect().clauses.limitForOffset
+	return limit === undefined ? undefined : raw(limit)
 }
 
 /** `orderBy` takes `[column, direction]` tuples. A bare string is the natural
@@ -1027,7 +1040,7 @@ function compileInner<
 				}
 				const fragment = expr.toFragment()
 				const [sql, found] = track(() => compileSqlFragment(fragment))
-				return { alias, sql: castSelectedParam(expr, sql), found, column: plainColumn(fragment) }
+				return { alias, sql: positionSafe(castSelectedParam(expr, sql)), found, column: plainColumn(fragment) }
 			})
 			const where = presentWhere.map((c) => raw(rowFilter("WHERE", c)))
 			const having = (state.havingFn ? state.havingFn($) : [])
@@ -1074,8 +1087,8 @@ function compileInner<
 				orderBy: state.orderByFn === undefined
 					? orderByClause(state.orderBySpecs).map(raw)
 					: orderByExprs(state.orderByFn($)).map(raw),
-				limit: state.limitValue == null && state.offsetValue != null && currentDialect().clauses.offsetRequiresLimit === true
-					? raw("-1")
+				limit: state.limitValue == null && state.offsetValue != null
+					? limitForOffset()
 					: rowCount("limit", state.limitValue),
 				offset: rowCount("offset", state.offsetValue),
 				format: options?.skipFormat ? undefined : formatClause(state.formatValue),
@@ -1426,10 +1439,26 @@ function derivedLiteralSchema(schema: Schema.Codec<any, any>): Schema.Codec<any,
  */
 const castSelectedParam = (expr: unknown, sql: string): string => {
 	const sqlType = paramColumnTypeOf(expr)?.sql
+	const dialect = currentDialect()
 	// Only a lowercase type name: that is how Postgres types are spelled, and a
 	// ClickHouse type (`String`, `Nullable(…)`) handed to a Postgres query would
 	// otherwise become a cast the server rejects.
-	return sqlType && /^[a-z_]/.test(sqlType) && currentDialect().params._tag === "bind" ? `CAST(${sql} AS ${sqlType})` : sql
+	if (!sqlType || !/^[a-z_]/.test(sqlType) || dialect.params._tag !== "bind") return sql
+	const target = dialect.castType === undefined ? sqlType : dialect.castType(sqlType)
+	return target === undefined ? sql : `CAST(${sql} AS ${target})`
+}
+
+/** A selected integer below 2^63; a larger one is a DECIMAL to MySQL, and no position. */
+const isSmallInteger = (sql: string): boolean => /^\d{1,19}$/.test(sql) && BigInt(sql) <= 9223372036854775807n
+const NUMERIC_PARAM = new RegExp(`^${PARAM_MARKER_PREFIX}(int|float|bool)_.*__$`)
+
+/** A selected number cast where the dialect could read a bare one as a column position (see `selectedNumberCast`). */
+const positionSafe = (sql: string): string => {
+	const cast = currentDialect().clauses.selectedNumberCast
+	if (cast === undefined) return sql
+	if (isSmallInteger(sql)) return `CAST(${sql} AS ${cast.integer})`
+	const kind = NUMERIC_PARAM.exec(sql)?.[1]
+	return kind === undefined ? sql : `CAST(${sql} AS ${kind === "float" ? cast.float : cast.integer})`
 }
 
 /** The aliases a query selects, read without compiling it; `undefined` before `select()`. */
@@ -1641,8 +1670,8 @@ function compileUnionInner<Output extends Record<string, any>, Params extends Re
 		}
 		if (state.outerLimitValue != null) {
 			sql += `\nLIMIT ${compileSqlFragment(rowCount("limit", state.outerLimitValue)!)}`
-		} else if (state.outerOffsetValue != null && currentDialect().clauses.offsetRequiresLimit === true) {
-			sql += "\nLIMIT -1"
+		} else if (state.outerOffsetValue != null && currentDialect().clauses.limitForOffset !== undefined) {
+			sql += `\nLIMIT ${currentDialect().clauses.limitForOffset}`
 		}
 		if (state.outerOffsetValue != null) {
 			sql += `\nOFFSET ${compileSqlFragment(rowCount("offset", state.outerOffsetValue)!)}`

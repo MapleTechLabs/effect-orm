@@ -108,6 +108,10 @@ The optional `@maple-dev/effect-orm/benchmark` entry point and bundled
 See [Benchmarking](./benchmarking.md) and the
 [agent playbook](./benchmark-agent.md). The SQL builders remain driver-free.
 
+## MySQL and MariaDB
+
+[MySQL and MariaDB](./mysql.md) covers `@maple-dev/effect-orm/mysql`: its codecs and functions, `@effect/sql-mysql2` wiring (including Cloudflare Hyperdrive's text protocol), collations and what MySQL does differently. Tables are query schemas only for now.
+
 ## SQLite and D1
 
 [SQLite and D1](./sqlite.md) covers `@maple-dev/effect-orm/sqlite`, its codecs and functions, table DDL, Effect SQL drivers, tenant checks and transaction limits. `effect-orm generate` writes SQLite migrations; effect-orm does not apply them yet.

@@ -69,8 +69,17 @@ export interface DialectClauses {
 	readonly parenthesizeUnionBranches: boolean
 	/** SQLite preserves branch-local ORDER BY/LIMIT by selecting from each branch. */
 	readonly wrapUnionBranches?: boolean
-	/** SQLite requires LIMIT -1 before OFFSET when the caller omitted a limit. */
-	readonly offsetRequiresLimit?: boolean
+	/** The LIMIT written before an OFFSET when the caller gave none, where
+	 *  OFFSET needs one: `-1` for SQLite, the largest row count for MySQL. */
+	readonly limitForOffset?: string
+	/**
+	 * The CAST targets for a selected number (a literal, or a numeric param the
+	 * driver may write into the text), where the dialect could read a bare one as
+	 * an ORDER BY position. MySQL 8.4 puts a merged derived table's select
+	 * expressions in place of their aliases, so `10 AS e1 … ORDER BY e1` is
+	 * `ORDER BY 10`: an unknown column, or, for `1`, silently the first one.
+	 */
+	readonly selectedNumberCast?: { readonly integer: string; readonly float: string }
 	/** `RETURNING` after an INSERT. Absent means no: an insert with
 	 *  `.returning()` fails to compile for the dialect. */
 	readonly returning?: boolean
@@ -88,12 +97,22 @@ export interface DialectClauses {
 	/** `SETTINGS` on an INSERT, UPDATE or DELETE (ClickHouse). Absent means
 	 *  no: a write with `.settings()` fails to compile for the dialect. */
 	readonly writeSettings?: boolean
-	/** Row locking on a SELECT (`FOR UPDATE`, `FOR SHARE`, `SKIP LOCKED`). Absent
-	 *  means no: a query with `.forUpdate()` and the like fails to compile. */
-	readonly locking?: boolean
+	/** Row locking on a SELECT (`FOR UPDATE`, `FOR SHARE`, `SKIP LOCKED`): the
+	 *  locks the dialect writes. Absent means none: a query with `.forUpdate()`
+	 *  and the like fails to compile. */
+	readonly locking?: LockingSupport
 	/** UPDATE is written `ALTER TABLE t UPDATE ... WHERE ...`, a ClickHouse
 	 *  mutation, rather than `UPDATE t SET ... WHERE ...`. */
 	readonly alterTableUpdate?: boolean
+}
+
+/** The row locks a dialect writes. */
+export interface LockingSupport {
+	readonly strengths: ReadonlyArray<"UPDATE" | "NO KEY UPDATE" | "SHARE" | "KEY SHARE">
+	/** `OF name, ...` after the strength. */
+	readonly of: boolean
+	/** How a shared lock is written: `FOR SHARE`, or MariaDB's `LOCK IN SHARE MODE`. */
+	readonly shareSyntax?: "FOR SHARE" | "LOCK IN SHARE MODE"
 }
 
 /** A transaction isolation level. `read uncommitted` is left out: Postgres runs it as `read committed`. */
@@ -193,6 +212,13 @@ export interface Dialect<Functions extends string = string> extends Omit<SqlSynt
 	 * Absent: the dialect orders such a column as it is.
 	 */
 	readonly unionNumberOrderKeys?: (column: string) => ReadonlyArray<string>
+	/**
+	 * The CAST target for a column type, where it is not the type's own name
+	 * (MySQL casts to `CHAR` or `SIGNED`, never `text` or `bigint`), or
+	 * `undefined` for no cast. Used for a bound param selected on its own.
+	 * Absent: a lowercase type name is its own target.
+	 */
+	readonly castType?: (sqlType: string) => string | undefined
 }
 
 /** ClickHouse, with params written into the SQL as literals. The default. */
@@ -259,9 +285,11 @@ const checkedSyntax = (dialect: Dialect): SqlSyntax => ({
 	dialect: dialect.name,
 	ilike: dialect.ilike,
 	likeEscape: dialect.likeEscape,
-	likeIgnoresCase: dialect.likeIgnoresCase,
+	likeCase: dialect.likeCase,
 	inexactNumberText: dialect.inexactNumberText,
-	integerComparesFraction: dialect.integerComparesFraction,
+	fractionComparableIntegers: dialect.fractionComparableIntegers,
+	comparisonCast: dialect.comparisonCast,
+	concat: dialect.concat,
 	quoteIdent: dialect.quoteIdent,
 	quoteString: (value) => checked(dialect, dialect.quoteString(value), "a string literal"),
 	literal: (value, context) => checkedLiteral(dialect, value, context),

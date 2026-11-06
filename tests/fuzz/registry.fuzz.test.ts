@@ -10,9 +10,11 @@ import { dialects } from "./dialects"
 import * as ClickHouseTypes from "../../src/ch/types"
 import * as PostgresTypes from "../../src/pg/types"
 import * as SqliteTypes from "../../src/sqlite/types"
+import * as MysqlTypes from "../../src/mysql/types"
 import * as ClickHouse from "@maple-dev/effect-orm/clickhouse"
 import * as Postgres from "@maple-dev/effect-orm/postgres"
 import * as Sqlite from "@maple-dev/effect-orm/sqlite"
+import * as Mysql from "@maple-dev/effect-orm/mysql"
 import { literalCoverage, literalExemptions } from "./literal-inventory"
 
 const sourceFiles = (dir: string): Array<string> =>
@@ -37,6 +39,7 @@ for (const [name, types, entry] of [
 	["clickhouse", ClickHouseTypes, ClickHouse],
 	["postgres", PostgresTypes, Postgres],
 	["sqlite", SqliteTypes, Sqlite],
+	["mysql", MysqlTypes, Mysql],
 ] as const) {
 	it(`every ${name} type export has a literal property or a reason`, () => {
 		const covered = literalCoverage[name]
@@ -45,7 +48,7 @@ for (const [name, types, entry] of [
 		expect([...Object.keys(covered), ...Object.keys(exempt)].sort()).toEqual(publicNames.sort())
 		expect(Object.keys(covered).filter((key) => key in exempt)).toEqual([])
 		for (const reason of Object.values(exempt)) expect(reason.trim().length).toBeGreaterThan(0)
-		for (const dialect of dialects.filter((d) => d.name === name || (name === "sqlite" && d.name === "d1"))) {
+		for (const dialect of dialects.filter((d) => d.name === name || (name === "sqlite" && d.name === "d1") || (name === "mysql" && d.name === "mariadb"))) {
 			const ids = dialect.literals.map((literal) => literal.id)
 			expect(new Set(ids).size).toBe(ids.length)
 			for (const id of Object.values(covered)) expect(ids).toContain(`${dialect.name}:${id}`)
