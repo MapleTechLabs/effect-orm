@@ -22,6 +22,10 @@ import { sqliteEntitiesOf, type SqliteSchemaTable } from "../schema/sqlite-defin
 import { diffSqliteSchemas } from "../schema/sqlite-diff"
 import type { SqliteSchemaEntity } from "../schema/sqlite-entities"
 import { labelOfSqlite, renderSqliteMigrationSql, renderSqliteOp, type SqliteMigrationOp } from "../schema/sqlite-ops"
+import { mysqlEntitiesOf, type MysqlSchemaTable } from "../schema/mysql-define"
+import { diffMysqlSchemas } from "../schema/mysql-diff"
+import type { MysqlSchemaEntity } from "../schema/mysql-entities"
+import { labelOfMysql, renderMysqlMigrationSql, renderMysqlOp, type MysqlMigrationOp } from "../schema/mysql-ops"
 import {
 	dialectOfObject,
 	entitiesOf,
@@ -36,7 +40,7 @@ import { analyze, type GraphProblem } from "./graph"
 export interface KitConfig {
 	/** The database this folder migrates. Default `clickhouse`. */
 	readonly dialect?: SchemaDialect
-	/** Modules whose exports include `table` / `materializedView` values from `/clickhouse`, `/postgres` or `/sqlite`. */
+	/** Modules whose exports include `table` / `materializedView` values from `/clickhouse`, `/postgres`, `/sqlite` or `/mysql`. */
 	readonly schema: string | ReadonlyArray<string>
 	/** The migrations folder. */
 	readonly out: string
@@ -48,7 +52,7 @@ export interface KitConfig {
 	 * What a generated Postgres migration holds. `ops` (default) writes `migration.json`;
 	 * `sql` writes the rendered statements to `migration.sql`, split by
 	 * `--> statement-breakpoint`, so a tool that applies drizzle-kit folders applies it too.
-	 * A SQLite migration is always `migration.sql`.
+	 * A SQLite or MySQL migration is always `migration.sql`.
 	 */
 	readonly emit?: "ops" | "sql"
 }
@@ -100,7 +104,9 @@ export const schemaEntities = (config: KitConfig, cwd: string): Effect.Effect<Re
 				? pgEntitiesOf(objects)
 				: dialect === "sqlite"
 					? sqliteEntitiesOf(objects as ReadonlyArray<SqliteSchemaTable<string, any>>)
-					: entitiesOf(objects)
+					: dialect === "mysql"
+						? mysqlEntitiesOf(objects as ReadonlyArray<MysqlSchemaTable<string, any>>)
+						: entitiesOf(objects)
 		return yield* entities.pipe(
 			Effect.mapError(
 				(error) =>
@@ -222,12 +228,17 @@ export const generate = (config: KitConfig, cwd: string, options: GenerateOption
 		}
 
 		let file: MigrationFile | undefined
-		/** A SQLite migration is SQL: there is no ops file for it. */
-		let sqliteOps: ReadonlyArray<SqliteMigrationOp> | undefined
+		/** A SQLite or MySQL migration is SQL: there is no ops file for it. */
+		let sqlMigration: { readonly contents: string; readonly plan: GenerateResult["plan"] } | undefined
 		let snapshotEntities: ReadonlyArray<AnySchemaEntity>
 		let prevIds = analysis.baseIds
 		if (options.baseline === "drizzle") {
-			if (dialect === "clickhouse") return yield* new KitError({ code: "config", message: "--from-drizzle needs dialect: \"postgres\" or \"sqlite\"" })
+			if (dialect === "clickhouse" || dialect === "mysql") {
+				return yield* new KitError({
+					code: "config",
+					message: `--from-drizzle needs dialect: "postgres" or "sqlite"${dialect === "mysql" ? "; use --baseline without it to adopt a MySQL database" : ""}`,
+				})
+			}
 			const source = [...analysis.legacy].reverse().find((m) => m.foreignSnapshot?.tool === "drizzle-kit")
 			if (source === undefined) return yield* new KitError({ code: "config", message: "no drizzle-kit snapshot.json in the folder to start from" })
 			const imported =
@@ -248,12 +259,14 @@ export const generate = (config: KitConfig, cwd: string, options: GenerateOption
 			else if (options.custom === true) snapshotEntities = analysis.base
 			else {
 				const hints = [...(options.hints ?? [])]
-				const diff = (): DiffResult<MigrationOp | PgMigrationOp | SqliteMigrationOp> =>
+				const diff = (): DiffResult<MigrationOp | PgMigrationOp | SqliteMigrationOp | MysqlMigrationOp> =>
 					dialect === "postgres"
 						? diffPgSchemas(analysis.base as ReadonlyArray<PgSchemaEntity>, next as ReadonlyArray<PgSchemaEntity>, hints)
 						: dialect === "sqlite"
 							? diffSqliteSchemas(analysis.base as ReadonlyArray<SqliteSchemaEntity>, next as ReadonlyArray<SqliteSchemaEntity>, hints)
-							: diffSchemas(analysis.base as ReadonlyArray<SchemaEntity>, next as ReadonlyArray<SchemaEntity>, hints)
+							: dialect === "mysql"
+								? diffMysqlSchemas(analysis.base as ReadonlyArray<MysqlSchemaEntity>, next as ReadonlyArray<MysqlSchemaEntity>, hints)
+								: diffSchemas(analysis.base as ReadonlyArray<SchemaEntity>, next as ReadonlyArray<SchemaEntity>, hints)
 				let result = diff()
 				if (result.unsupported.length > 0) {
 					return yield* new KitError({
@@ -276,8 +289,13 @@ export const generate = (config: KitConfig, cwd: string, options: GenerateOption
 					})
 				}
 				if (result.ops.length === 0) return { written: undefined, plan: [] } satisfies GenerateResult
-				if (dialect === "sqlite") sqliteOps = result.ops as ReadonlyArray<SqliteMigrationOp>
-				else if (dialect === "postgres") file = { version: "1", dialect: "postgres", ops: result.ops as ReadonlyArray<PgMigrationOp> }
+				if (dialect === "sqlite") {
+					const ops = result.ops as ReadonlyArray<SqliteMigrationOp>
+					sqlMigration = { contents: renderSqliteMigrationSql(ops, STATEMENT_BREAKPOINT), plan: ops.map((op) => ({ label: labelOfSqlite(op), sql: renderSqliteOp(op) })) }
+				} else if (dialect === "mysql") {
+					const ops = result.ops as ReadonlyArray<MysqlMigrationOp>
+					sqlMigration = { contents: renderMysqlMigrationSql(ops, STATEMENT_BREAKPOINT), plan: ops.map((op) => ({ label: labelOfMysql(op), sql: renderMysqlOp(op) })) }
+				} else if (dialect === "postgres") file = { version: "1", dialect: "postgres", ops: result.ops as ReadonlyArray<PgMigrationOp> }
 				else file = { version: "1", ops: result.ops as ReadonlyArray<MigrationOp> }
 			}
 		}
@@ -291,8 +309,8 @@ export const generate = (config: KitConfig, cwd: string, options: GenerateOption
 		yield* Effect.gen(function* () {
 			yield* io(() => mkdir(staging, { recursive: true }), `Cannot create ${staging}`)
 			const [fileName, contents] =
-				sqliteOps !== undefined
-					? ["migration.sql", renderSqliteMigrationSql(sqliteOps, STATEMENT_BREAKPOINT)]
+				sqlMigration !== undefined
+					? ["migration.sql", sqlMigration.contents]
 					: file === undefined
 						? [
 								"migration.sql",
@@ -309,8 +327,8 @@ export const generate = (config: KitConfig, cwd: string, options: GenerateOption
 		}).pipe(Effect.onError(() => Effect.promise(() => rm(staging, { recursive: true, force: true }).catch(() => undefined))))
 
 		const plan =
-			sqliteOps !== undefined
-				? sqliteOps.map((op) => ({ label: labelOfSqlite(op), sql: renderSqliteOp(op) }))
+			sqlMigration !== undefined
+				? sqlMigration.plan
 				: file === undefined
 					? []
 					: "dialect" in file

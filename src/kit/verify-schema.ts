@@ -32,11 +32,17 @@ export const verifySchema = (
 		if (driver === undefined) {
 			return yield* new KitError({ code: "config", message: "this command needs a database: set `driver` in the config" })
 		}
-		// `generate` writes SQLite DDL, but nothing reads a SQLite catalog back yet.
+		// `generate` writes SQLite and MySQL DDL, but nothing reads their catalogs back yet.
 		if (config.dialect === "sqlite") {
 			return yield* new KitError({
 				code: "unsupported",
 				message: "verify --schema cannot check a SQLite or D1 database yet: effect-orm has no SQLite catalog reader to compare the definitions with",
+			})
+		}
+		if (config.dialect === "mysql") {
+			return yield* new KitError({
+				code: "unsupported",
+				message: "verify --schema cannot check a MySQL or MariaDB database yet: effect-orm has no MySQL catalog reader to compare the definitions with",
 			})
 		}
 		const entities = yield* schemaEntities(config, cwd)

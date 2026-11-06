@@ -12,7 +12,8 @@ FUZZ_SCALE=20 bun run fuzz   # a soak: 20× each property's runs (the nightly wo
 ```
 
 ClickHouse targets run when `EFFECT_ORM_CLICKHOUSE_URL` (and `_USER`, `_PASSWORD`) are set
-and are skipped otherwise. Postgres runs in-process on PGlite.
+and are skipped otherwise; MySQL and MariaDB when `EFFECT_ORM_MYSQL_URL` / `EFFECT_ORM_MARIADB_URL`
+are (the migration fuzzer creates its databases as `root`, with the URL's password). Postgres runs in-process on PGlite.
 
 ## Suites
 
@@ -24,6 +25,7 @@ and are skipped otherwise. Postgres runs in-process on PGlite.
 | `compile.fuzz.test.ts` | plans compile deterministically, with no leaked JS or misaligned placeholders; hostile values are refused with a typed error | invariants |
 | `migrations.fuzz.test.ts` | a SQLite migration between two random schemas (with table and column renames), run on seeded rows on node:sqlite and on D1 (one batch per migration), gives a fresh create's PRAGMA shape and keeps varied text, numeric and binary payloads; a drizzle-kit snapshot of any schema imports with nothing to generate | a fresh create, the seeded rows, and our own entities |
 | `migrations.postgres.fuzz.test.ts` | random Postgres table/column/default/nullability/index transitions reach a fresh create's shape and preserve scalar, JSON and array rows | PGlite catalogs and independent seed values |
+| `migrations.mysql.fuzz.test.ts` | a MySQL migration between two random schemas (types, nullability, defaults, keys, UNIQUE columns, indexes, table and column renames), run statement by statement on seeded rows in a throwaway database on MySQL 8.4 and MariaDB 11.4, gives a fresh create's `information_schema` and keeps the rows | a fresh create in another database, and the seeded rows |
 | `codecs.fuzz.test.ts` | schema-derived values round-trip through composed codecs and compiled row codecs; malformed wire rows fail with a typed decode error | Effect `TestSchema`, schema equivalence and explicit wire corruptions |
 | `registry.fuzz.test.ts` | every dialect and public type export has fuzz coverage or an explicit reason | public exports and the literal catalog |
 

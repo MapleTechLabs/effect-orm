@@ -23,7 +23,8 @@ optional feature for applications that share tables between tenants.
 The builder does not manage connections, create tables, or run migrations. It builds
 SELECTs, [INSERTs](./inserts.md), and [UPDATEs and DELETEs](./updates-and-deletes.md). Every
 `table` carries its DDL, and opt-in [schema and migration entry points](./migrations.md) turn it
-into migrations for ClickHouse and Postgres. It does not validate SQL against a live server,
+into migrations: generated and applied for ClickHouse and Postgres, generated for SQLite and
+MySQL. It does not validate SQL against a live server,
 choose query plans, enforce authorization, or supply retries. Your existing tables and your
 executor own those responsibilities.
 [Getting started](./getting-started.md) covers npm installation and building from source.
@@ -66,7 +67,7 @@ Roughly in reading order.
 | [Tenant scoping](./tenant-scoping.md)                 | `tenantScope`, what marks a query scoped, `crossTenant()`                           |
 | [Extending the DSL](./extending.md)                   | `defineFn`, raw escape hatches, handwritten SQL                                     |
 | [Postgres](./postgres.md)                             | The Postgres dialect, its column types and functions                                |
-| [Schema and migrations](./migrations.md)              | DDL from `CH.table` / `PG.table`, `materializedView`, `effect-orm generate`, applying migrations, adopting drizzle-kit |
+| [Schema and migrations](./migrations.md)              | DDL from `CH.table` / `PG.table` / `SQLite.table` / `MySQL.table`, `materializedView`, `effect-orm generate`, applying migrations, adopting drizzle-kit |
 | [Statements and transactions](./database.md)          | `Database` over your `SqlClient`: `run`, `execute`, `transaction`, retry, repositories |
 | [Testing your code](./testing.md#testing-your-own-code-layertest) | `layerTest`: a `Database` with no server for unit tests              |
 | [Seeding](./seeding.md)                               | Deterministic test and demo rows from the column Schemas: `rows`, `insert`, `arbitrary` |
@@ -110,7 +111,7 @@ See [Benchmarking](./benchmarking.md) and the
 
 ## MySQL and MariaDB
 
-[MySQL and MariaDB](./mysql.md) covers `@maple-dev/effect-orm/mysql`: its codecs and functions, `@effect/sql-mysql2` wiring (including Cloudflare Hyperdrive's text protocol), collations and what MySQL does differently. Tables are query schemas only for now.
+[MySQL and MariaDB](./mysql.md) covers `@maple-dev/effect-orm/mysql`: its codecs and functions, `@effect/sql-mysql2` wiring (including Cloudflare Hyperdrive's text protocol), collations, table DDL and what MySQL does differently. `effect-orm generate` writes MySQL migrations; effect-orm does not apply them yet.
 
 ## SQLite and D1
 

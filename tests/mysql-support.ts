@@ -52,3 +52,48 @@ export const mysqlDatabase = (
 		},
 	}
 }
+
+/** A database of its own, created as root (the test user may not CREATE DATABASE) and dropped on `close`. */
+export interface ScratchDatabase {
+	readonly name: string
+	/** Statements over the text protocol, so DDL and multi-row reads need no prepared statement. */
+	readonly query: RawQuery
+	/** Drop every table: drop the database and create it again. */
+	readonly reset: () => Promise<void>
+	readonly close: () => Promise<void>
+}
+
+let scratchCount = 0
+
+/**
+ * A throwaway database on `server`, `<prefix>_<pid>_<n>`, reached as `root`
+ * with the URL's password (the CI and local containers share one).
+ */
+export const scratchDatabase = async (server: MysqlServer, prefix: string): Promise<ScratchDatabase> => {
+	const url = new URL(server.url!)
+	url.username = "root"
+	const name = `${prefix}_${process.pid}_${++scratchCount}`
+	const connection = await mysql.createConnection({ uri: url.toString(), timezone: "Z", supportBigNumbers: true })
+	await connection.query("SET time_zone = '+00:00'")
+	const create = async () => {
+		await connection.query(`DROP DATABASE IF EXISTS \`${name}\``)
+		await connection.query(`CREATE DATABASE \`${name}\``)
+		await connection.query(`USE \`${name}\``)
+	}
+	await create()
+	return {
+		name,
+		query: async (sql, parameters) => {
+			const [rows] = await connection.query(sql, parameters as Array<any>)
+			return Array.isArray(rows) ? (rows as Array<Record<string, unknown>>) : []
+		},
+		reset: create,
+		close: async () => {
+			try {
+				await connection.query(`DROP DATABASE IF EXISTS \`${name}\``)
+			} finally {
+				await connection.end()
+			}
+		},
+	}
+}

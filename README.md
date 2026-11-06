@@ -12,7 +12,8 @@ SQLite and Cloudflare D1 use the same builder and row decoder through the new
 [`/sqlite` entry](./docs/sqlite.md), which also writes SQLite table DDL. `effect-orm generate` writes SQLite migrations; effect-orm does not apply them yet.
 
 MySQL 8 and MariaDB 10.6+ use it through the [`/mysql` entry](./docs/mysql.md), with
-`@effect/sql-mysql2`, fuzzed on MySQL 8.4 and MariaDB 11.4.
+`@effect/sql-mysql2`, fuzzed on MySQL 8.4 and MariaDB 11.4. It also writes MySQL table DDL, and
+`effect-orm generate` writes MySQL migrations; effect-orm does not apply them yet.
 
 [Read the documentation](https://effect-clickhouse.maple.dev) ·
 [Getting started](./docs/getting-started.md) · [Recipes](./docs/recipes.md) · [Coming from Drizzle or Prisma](./docs/coming-from-drizzle-prisma.md)

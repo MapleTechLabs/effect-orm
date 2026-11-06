@@ -10,7 +10,7 @@ import { check, generate, KitError, readMigrations, type KitConfig } from "./gen
 import { pull } from "./pull"
 import { verifySchema } from "./verify-schema"
 
-const help = `effect-orm: schema migrations for ClickHouse and Postgres, and generated SQLite migrations
+const help = `effect-orm: schema migrations for ClickHouse and Postgres, and generated SQLite and MySQL migrations
 
   generate [--name x] [--custom]   Diff the schema against the migrations folder and write the next migration
            [--hints <json>] [--hints-file <path>]
@@ -20,7 +20,7 @@ const help = `effect-orm: schema migrations for ClickHouse and Postgres, and gen
                                    Write table definitions from the database (ClickHouse). Default --out: the
                                    config's schema module, when it names one. Then run generate --baseline
   check                            Validate the migrations folder (snapshot chain, branch conflicts)
-  migrate [--strict]               Apply pending migrations (needs config.driver; not SQLite yet)
+  migrate [--strict]               Apply pending migrations (needs config.driver; not SQLite or MySQL yet)
   status                           Applied, pending, partial, or changed, per migration
   verify [--schema]                Compare the database with the last applied snapshot; with --schema, with
                                    the schema modules, without reading the migrations folder or the ledger
