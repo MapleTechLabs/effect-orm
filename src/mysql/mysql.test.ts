@@ -118,8 +118,10 @@ for (const [name, url, dialect] of servers) {
 				Effect.gen(function* () {
 					const db = Db.fromSqlClient(yield* SqlClient.SqlClient, { dialect })
 					yield* db.execute({ sql: `DROP TABLE IF EXISTS \`${table}\`` })
+					yield* db.execute({ sql: `DROP TABLE IF EXISTS \`${table}_docs\`` })
 					yield* db.execute({ sql: `CREATE TABLE \`${table}\` (id BIGINT PRIMARY KEY, note TEXT NOT NULL, enabled BOOLEAN NOT NULL, score DOUBLE, at DATETIME(3) NOT NULL)` })
-					return yield* body(db).pipe(Effect.ensuring(Effect.orDie(db.execute({ sql: `DROP TABLE \`${table}\`` }))))
+					const drop = (name: string) => Effect.orDie(db.execute({ sql: `DROP TABLE IF EXISTS \`${name}\`` }))
+					return yield* body(db).pipe(Effect.ensuring(Effect.andThen(drop(table), drop(`${table}_docs`))))
 				}).pipe(Effect.provide(client(prepared))),
 			)
 		const at = DateTime.makeUnsafe("2026-10-01T10:00:00.123Z")
@@ -161,7 +163,6 @@ for (const [name, url, dialect] of servers) {
 						yield* db.execute({ sql: `CREATE TABLE \`${table}_docs\` (id INT, body JSON)` })
 						yield* db.run(MySQL.insertInto(Docs).values({ id: 1, body: { a: 1 } }))
 						const found = yield* db.run(MySQL.from(Docs).select("id").where(($) => [$.body.eq({ a: 1 })]))
-						yield* db.execute({ sql: `DROP TABLE \`${table}_docs\`` })
 						// A literal holding the reserved marker is a CONCAT; MariaDB's replace() misreads adjacent literals.
 						yield* db.run(MySQL.insertInto(T).values({ id: 3, note: "a__PARAM_b", enabled: true, score: null, at }))
 						const marker = yield* db.run(MySQL.from(T).select("id").where(($) => [$.note.contains(MySQL.lit("__PARAM_")), $.note.startsWith(MySQL.lit("A__param_"), { insensitive: true })]))
