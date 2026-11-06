@@ -836,7 +836,7 @@ export function makeExpr<T>(
 		like: (pattern) => makeCond(known(() => `${compile(fragment)} LIKE ${likePattern(pattern)}${likeEscape()}`)),
 		notLike: (pattern) => makeCond(known(() => `${compile(fragment)} NOT LIKE ${likePattern(pattern)}${likeEscape()}`)),
 		ilike: (pattern) => makeCond(known(() => activeSqlSyntax()?.ilike === false
-			? fail(new QueryBuilderDefect({ message: `ILIKE is not supported by the ${activeSqlSyntax()?.dialect} dialect; use LIKE with SQLite's own case rules` }), "FALSE")
+			? fail(new QueryBuilderDefect({ message: `ILIKE is not supported by the ${activeSqlSyntax()?.dialect} dialect; use LIKE, which follows that dialect's own case rules, or contains(…, { insensitive: true })` }), "FALSE")
 			: `${compile(fragment)} ILIKE ${likePattern(pattern)}`)),
 		contains: (value, options) => textMatch(fragment, value, "contains", options),
 		startsWith: (value, options) => textMatch(fragment, value, "startsWith", options),

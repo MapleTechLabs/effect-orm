@@ -96,6 +96,12 @@ describe("the MySQL dialect", () => {
 		expect(begin({ isolationLevel: "serializable", accessMode: "read write" })).toBe("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE; START TRANSACTION READ WRITE")
 	})
 
+	it("refuses a timestamp on a day that does not exist, which Date.parse would move on", () => {
+		const query = MySQL.from(Items).select("id").where(($) => [$.at.gt(MySQL.param.dateTime("t"))])
+		expect(() => MySQL.compileUnsafe(query, { t: "2023-02-30 10:00:00" })).toThrow()
+		expect(MySQL.compileUnsafe(query, { t: "2023-02-28 10:00:00" }).parameters).toEqual(["2023-02-28 10:00:00.000"])
+	})
+
 	it("refuses a DATETIME outside 1000-9999", () => {
 		expect(() => MySQL.compileUnsafe(MySQL.from(Items).select("id").where(($) => [$.at.gt(DateTime.makeUnsafe(Date.UTC(999, 0, 1)))]))).toThrow(/1000-9999/)
 	})
