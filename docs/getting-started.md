@@ -10,7 +10,7 @@ Effect application: `Effect.runPromise` lets you use it from ordinary async code
 CommonJS code can `require()` every entry point too, on Node 20.19+ or 22.12+, which
 load ES modules synchronously (`require(esm)`). That is the same way such code loads Effect 4,
 which is also ESM-only, so the library and its caller share one Effect.
-These examples are checked against Effect `4.0.6` and the builder in this repository.
+These examples are checked against Effect `4.1.2` and the builder in this repository.
 The package declares `effect ^4.0.6` as a peer dependency; Effect 3 is incompatible.
 
 Install from npm with its Effect 4 peer dependency:
