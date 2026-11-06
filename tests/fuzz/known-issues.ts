@@ -41,23 +41,46 @@ export const knownHostileIssue = (input: HostileInput): string | undefined =>
 
 // Query plans (queries.fuzz.test.ts)
 
-import type { Plan, UnionPlan } from "./plan"
+import { foldConstant } from "./model"
+import type { Expr, Plan, UnionPlan } from "./plan"
 
 export interface PlanInput {
 	/** The target name (`dialects/*.ts`), or the dialect name for compile-only properties. */
 	readonly target: string
 	readonly plan: Plan
+	/** Whether the plan runs on a database: a server bug only matters to properties that run it. */
+	readonly executed: boolean
+}
+
+/** A `%` anywhere in the plan whose divisor folds to -2, -4, -8, …: the divisor is always the node's `r`. */
+const negativePowerOfTwoModulo = (value: unknown): boolean => {
+	if (Array.isArray(value)) return value.some(negativePowerOfTwoModulo)
+	if (value === null || typeof value !== "object") return false
+	const e = value as Expr
+	if (e.k === "arith" && e.op === "mod") {
+		const d = foldConstant(e.r)
+		if (d !== undefined && Number.isInteger(d) && d <= -2 && Number.isInteger(Math.log2(-d))) return true
+	}
+	return Object.values(value).some(negativePowerOfTwoModulo)
 }
 
 const planIssues: ReadonlyArray<KnownIssue<PlanInput>> = [{
+	id: "clickhouse-26.2-negative-power-of-two-modulo",
+	// Server bug, not the builder's: on 26.2.19.43 a column % a constant -2^k is wrong for a negative
+	// dividend — `SELECT (toInt64(number) - 5) % -2 FROM numbers(1)` is 1, not -1, and `% (0 - 2)` the
+	// same. `% -3`, `% 2` and a constant dividend are right; 26.8 is right throughout. The target does
+	// not know its server version, so this skips every ClickHouse target: delete it once CI drops 26.2.
+	reason: "ClickHouse 26.2 computes a column % a negative power-of-two constant wrongly",
+	matches: (input) => input.executed && input.target.startsWith("clickhouse") && negativePowerOfTwoModulo(input.plan),
+}, {
 	id: "mariadb-distinct-join-offset",
 	// Server bug, not the builder's: MariaDB 11.4 counts OFFSET over a join's rows before DISTINCT
 	// removes their duplicates, so `SELECT DISTINCT o.x FROM o JOIN c … LIMIT 10 OFFSET 1`, one
 	// distinct row from two joined, returns it. MySQL returns none. The builder could write such a
 	// query as `SELECT * FROM (SELECT DISTINCT …) d … OFFSET 1`, which MariaDB answers correctly.
 	reason: "MariaDB applies OFFSET before DISTINCT over a join",
-	matches: ({ target, plan }) =>
-		target.startsWith("mariadb") && plan.join !== undefined && plan.shape.k === "rows" && plan.shape.distinct && (plan.shape.offset ?? 0) > 0,
+	matches: ({ executed, target, plan }) =>
+		executed && target.startsWith("mariadb") && plan.join !== undefined && plan.shape.k === "rows" && plan.shape.distinct && (plan.shape.offset ?? 0) > 0,
 }]
 
 export const knownPlanIssue = (input: PlanInput): string | undefined => firstMatch(planIssues, input)
@@ -69,20 +92,7 @@ export interface UnionInput {
 	readonly plan: UnionPlan
 }
 
-/** A `%` by a negative constant anywhere in the input's plans. */
-const negativeModulo = (value: unknown): boolean =>
-	Array.isArray(value) ? value.some(negativeModulo)
-	: value !== null && typeof value === "object"
-		? ((value as { k?: string; op?: string; r?: unknown }).k === "arith" && (value as { op?: string }).op === "mod" && typeof (value as { r?: unknown }).r === "number" && (value as { r: number }).r < 0)
-			|| Object.values(value).some(negativeModulo)
-		: false
-
-const unionIssues: ReadonlyArray<KnownIssue<UnionInput>> = [{
-	id: "clickhouse-26.2-union-negative-modulo",
-	// Server bug, not the builder's: on 26.2, `SELECT A % -4 FROM t UNION ALL SELECT 0 FROM t` with A = -5
-	// returns 3, not -1. 26.8 returns -1. Delete this entry once CI no longer runs 26.2.
-	reason: "ClickHouse 26.2 computes % by a negative divisor wrongly under UNION ALL",
-	matches: (input) => input.target.startsWith("clickhouse") && negativeModulo(input.plan),
-}]
+// Each branch is also checked against the plan issues above.
+const unionIssues: ReadonlyArray<KnownIssue<UnionInput>> = []
 
 export const knownUnionIssue = (input: UnionInput): string | undefined => firstMatch(unionIssues, input)

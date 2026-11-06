@@ -33,7 +33,7 @@ const canonical = (rows: ReadonlyArray<unknown>): Array<unknown> =>
 const sorted = (rows: Array<unknown>) => rows.map((r) => JSON.stringify(r)).sort()
 
 const matchesModel = (dialect: FuzzDialect, target: FuzzTarget, input: Plan, data?: Fixture) => {
-	const known = knownPlanIssue({ target: target.name, plan: input })
+	const known = knownPlanIssue({ target: target.name, plan: input, executed: true })
 	if (known !== undefined) skipKnown(known)
 	return checkRows(target, input.orgId, evaluate(input, target.semantics, data), compilePlan(dialect, data === undefined ? dialect.context : fixtureContext(dialect, data), input), compilePlan(dialect, scopeContext(dialect), input), input.where)
 }
@@ -42,7 +42,7 @@ const unionMatchesModel = (dialect: FuzzDialect, target: FuzzTarget, input: Unio
 	const knownUnion = knownUnionIssue({ target: target.name, plan: input })
 	if (knownUnion !== undefined) skipKnown(knownUnion)
 	for (const branch of input.branches) {
-		const known = knownPlanIssue({ target: target.name, plan: branch })
+		const known = knownPlanIssue({ target: target.name, plan: branch, executed: true })
 		if (known !== undefined) skipKnown(known)
 	}
 	return checkRows(
@@ -111,14 +111,22 @@ describe("generated fixture queries", () => {
 			["empty orders", { orders: [], customers: [] }, undefined],
 			["empty inner join", { orders: [{ OrgId: "org_1", Id: 1, Customer: "acme", Amount: 0, Status: "paid", Note: null, Created: Date.UTC(2026, 0, 1) }], customers: [] }, "inner"],
 		] as const) {
-			it(`constant division is excluded over ${label} (${target.name})`, () => {
-				const input: Plan = {
-					orgId: "org_1", join, where: [], wrap: false, crossTenant: false,
-					shape: { k: "rows", select: [["id", { k: "col", col: "Id" }], ["bad", { k: "arith", op: "div", l: { k: "num", v: 1 }, r: 0 }]], distinct: false, orderBy: [] },
-				}
-				expect(() => evaluate(input, target.semantics, data)).toThrow(Skip)
-				expect(() => evaluate(input, target.semantics, data)).toThrow("division by zero")
-			})
+			for (const [what, bad] of [
+				["1 / 0", { k: "arith", op: "div", l: { k: "num", v: 1 }, r: 0 }],
+				// `(Id + 1) % 0` in the plan is `Id + 1 % 0` in the SQL: the constant `1 % 0` is only there once parsed.
+				["Id + 1 % 0", { k: "arith", op: "mod", l: { k: "arith", op: "add", l: { k: "col", col: "Id" }, r: 1 }, r: { k: "num", v: 0 } }],
+				// ClickHouse runs `%` on an empty block too, so a zero divisor fails with no rows to read.
+				["Id % 0", { k: "arith", op: "mod", l: { k: "col", col: "Id" }, r: 0 }],
+			] as const) {
+				it(`constant division ${what} is excluded over ${label} (${target.name})`, () => {
+					const input: Plan = {
+						orgId: "org_1", join, where: [], wrap: false, crossTenant: false,
+						shape: { k: "rows", select: [["id", { k: "col", col: "Id" }], ["bad", bad]], distinct: false, orderBy: [] },
+					}
+					expect(() => evaluate(input, target.semantics, data)).toThrow(Skip)
+					expect(() => evaluate(input, target.semantics, data)).toThrow("division by zero")
+				})
+			}
 		}
 		it.skipIf(!target.available)(`empty generated tables (${target.name})`, () => matchesModel(dialect, target, {
 			orgId: "org_1", where: [], shape: { k: "rows", select: [["id", { k: "col", col: "Id" }]], distinct: false, orderBy: [] }, wrap: false, crossTenant: false,

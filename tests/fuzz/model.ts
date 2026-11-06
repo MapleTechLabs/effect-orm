@@ -404,6 +404,29 @@ const constant = (expr: Expr): boolean => {
 	}
 }
 
+/**
+ * The number a constant arithmetic expression folds to, as the SQL text parses
+ * it (see {@link asParsed}), or `undefined` when it reads a column or divides
+ * by zero. `/` is float division, as on ClickHouse.
+ */
+export const foldConstant = (e: Expr | number): number | undefined => {
+	if (typeof e === "number") return e
+	if (e.k === "num") return e.v
+	if (e.k !== "arith") return undefined
+	const p = parsed.has(e) ? e : asParsed(e)
+	if (p.k !== "arith") return foldConstant(p)
+	const l = foldConstant(p.l)
+	const r = foldConstant(p.r)
+	if (l === undefined || r === undefined) return undefined
+	switch (p.op) {
+		case "add": return l + r
+		case "sub": return l - r
+		case "mul": return l * r
+		case "div": return r === 0 ? undefined : l / r
+		case "mod": return r === 0 ? undefined : l % r
+	}
+}
+
 export const evaluate = (plan: Plan, sem: Semantics, fixture: Fixture = coreFixture): ModelResult => {
 	const env: Env = { sem, plan, joined: plan.join !== undefined }
 	// A database may evaluate any expression on any row — or fold a constant one at plan time — before
@@ -412,7 +435,13 @@ export const evaluate = (plan: Plan, sem: Semantics, fixture: Fixture = coreFixt
 	// A constant expression never reads this row. Reuse a real fixture row so the evaluator
 	// can check folded subexpressions even when the input fixture or its inner join is empty.
 	const constantRow: Row = { o: coreFixture.orders[0]! }
-	for (const e of all) if (constant(e)) evalExpr(env, constantRow, e)
+	// Check the chains as the SQL parses them, not as the plan nests them: `Id + 1 % 0` holds the
+	// constant `1 % 0` although no plan node is constant. ClickHouse also runs `%` on an empty
+	// block, so `Id % 0` fails over no rows; a constant zero divisor is refused on any data.
+	for (const e of all.flatMap((e) => ariths(e.k === "arith" ? asParsed(e) : e))) {
+		if (constant(e)) evalExpr(env, constantRow, e)
+		if (e.k === "arith" && (e.op === "div" || e.op === "mod") && foldConstant(e.r) === 0) skip("division by zero")
+	}
 	for (const row of sourceRows(env, fixture)) for (const e of all) evalExpr(env, row, e)
 	// A filter pushed below the join reads every order, even one an inner join would drop.
 	if (plan.join !== undefined) for (const o of fixture.orders) for (const e of all) evalExpr(env, { o }, e)
