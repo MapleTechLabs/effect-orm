@@ -15,7 +15,7 @@ MySQL 8 and MariaDB 10.6+ use it through the [`/mysql` entry](./docs/mysql.md), 
 `@effect/sql-mysql2`, fuzzed on MySQL 8.4 and MariaDB 11.4. It also writes MySQL table DDL, and
 `effect-orm generate` writes MySQL migrations; effect-orm does not apply them yet.
 
-[Read the documentation](https://effect-clickhouse.maple.dev) ·
+[Read the documentation](https://effect-orm.maple.dev) ·
 [Getting started](./docs/getting-started.md) · [Recipes](./docs/recipes.md) · [Coming from Drizzle or Prisma](./docs/coming-from-drizzle-prisma.md)
 
 - **Schema-first** — a column type _is_ an Effect `Schema`, so a query compiles

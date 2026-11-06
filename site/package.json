@@ -1,0 +1,42 @@
+{
+  "name": "effect-orm-docs",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "sync": "node scripts/sync-docs.mjs",
+    "predev": "node scripts/sync-docs.mjs",
+    "prebuild": "node scripts/sync-docs.mjs",
+    "dev": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview",
+    "typecheck": "node scripts/sync-docs.mjs && astro check",
+    "lint:docs": "nimbus-docs lint",
+    "lint:docs:fix": "nimbus-docs lint --fix",
+    "prepreview:cf": "node scripts/sync-docs.mjs && astro build",
+    "preview:cf": "wrangler dev",
+    "predeploy": "node scripts/sync-docs.mjs && astro check && astro build",
+    "deploy": "wrangler deploy"
+  },
+  "dependencies": {
+    "@cloudflare/nimbus-docs": "^0.19.3",
+    "@fontsource-variable/inter": "^5.2.8",
+    "@fontsource-variable/jetbrains-mono": "^5.2.8",
+    "@iconify-json/ph": "^1.2.0",
+    "@resvg/resvg-js": "^2.6.2",
+    "astro": "7.3.3",
+    "clsx": "^2.1.1",
+    "satori": "^0.26.0",
+    "sharp": "^0.35.4",
+    "tailwind-merge": "^3.5.0"
+  },
+  "devDependencies": {
+    "@astrojs/check": "^0.9.8",
+    "@astrojs/language-server": "2.16.13",
+    "@tailwindcss/vite": "^4.1.4",
+    "pagefind": "^1.5.2",
+    "tailwindcss": "^4.1.4",
+    "typescript": "^5.8.3",
+    "wrangler": "^4.95.0"
+  }
+}

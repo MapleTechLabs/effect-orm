@@ -1,0 +1,86 @@
+---
+title: effect-orm
+description: Type-safe ClickHouse, Postgres, SQLite and MySQL queries, result decoding, and reproducible benchmarks for Effect and TypeScript.
+sidebar:
+  order: 0
+  label: Introduction
+---
+
+`@maple-dev/effect-orm` builds SQL from typed TypeScript. Describe a table once, and the query builder infers column types, output row shapes and join accessors from it. A query compiles to a SQL string plus a decoder for its own rows. You bring the database client.
+
+<Aside type="caution" title="Alpha">
+  The API is still changing and minor releases may break it. Pin an exact version and read the [changelog](https://github.com/MapleTechLabs/effect-orm/blob/main/CHANGELOG.md) before upgrading.
+</Aside>
+
+## Install
+
+<PackageManagers pkg="@maple-dev/effect-orm effect@^4.0.6" />
+
+`effect` is a peer dependency. Effect 3 and the Effect 4 prereleases are not supported.
+
+## A first query
+
+Each database has one import that holds the whole query builder plus that database's column types, functions, table definitions and `compile`:
+
+```ts
+import * as CH from "@maple-dev/effect-orm/clickhouse"
+
+const Events = CH.table("events", {
+	columns: {
+		OrgId: CH.string,
+		Name: CH.string,
+		Timestamp: CH.dateTime,
+		DurationMs: CH.uint64,
+	},
+	engine: CH.engine.mergeTree(),
+	orderBy: ["OrgId", "Timestamp"],
+})
+
+const query = CH.from(Events)
+	.select(($) => ({
+		name: $.Name,
+		p95: CH.quantile(0.95)($.DurationMs),
+		count: CH.count(),
+	}))
+	.where(($) => [$.OrgId.eq(CH.param.string("orgId"))])
+	.groupBy("name")
+	.orderBy(["count", "desc"])
+	.limit(50)
+
+const compiled = CH.compileUnsafe(query, { orgId: "org_123" })
+compiled.sql // SELECT events.Name AS name, quantile(0.95)(events.DurationMs) AS p95, ...
+```
+
+## Why effect-orm
+
+<CardGrid>
+  <Card title="Schema-first" icon="ph:shapes">
+    A column type is an Effect `Schema`, so a query compiles to its own row schema. Wire quirks, such as 64-bit integers arriving quoted, are modelled once in the types.
+  </Card>
+  <Card title="Type-safe" icon="ph:shield-check">
+    Column types, output row shapes and join accessors are inferred from the table. No stringly-typed columns.
+  </Card>
+  <Card title="Immutable and composable" icon="ph:stack">
+    Every builder method returns a new query, so you can share and extend base queries.
+  </Card>
+  <Card title="Four databases" icon="ph:database">
+    ClickHouse, Postgres, SQLite and Cloudflare D1, MySQL and MariaDB. Each has its own column types, functions and DDL.
+  </Card>
+</CardGrid>
+
+## Where to start
+
+<CardGrid>
+  <Card title="Getting started" icon="ph:rocket-launch" href="/start/getting-started/">
+    Compile and decode a query offline in one complete file.
+  </Card>
+  <Card title="Run a real query" icon="ph:play" href="/queries/running-queries/">
+    Execute the compiled SQL with a client against a real server.
+  </Card>
+  <Card title="Recipes" icon="ph:cooking-pot" href="/start/recipes/">
+    Complete examples for everyday queries to adapt to your schema.
+  </Card>
+  <Card title="From Drizzle or Prisma" icon="ph:arrows-left-right" href="/start/coming-from-drizzle-prisma/">
+    Their operations mapped to effect-orm, and what differs by design.
+  </Card>
+</CardGrid>
