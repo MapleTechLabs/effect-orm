@@ -1,5 +1,6 @@
 # URLs from before the docs split into one section per dialect. The guides
 # then used ClickHouse examples, so they land in the ClickHouse section.
+# No /dialects/* catch-all: in production it wins over the rules above it.
 /start/* /clickhouse/start/:splat 301
 /queries/* /clickhouse/queries/:splat 301
 /database/* /clickhouse/database/:splat 301
@@ -7,4 +8,3 @@
 /dialects/sqlite/ /sqlite/specifics/overview/ 301
 /dialects/mysql/ /mysql/specifics/overview/ 301
 /dialects/tinybird/ /clickhouse/specifics/tinybird/ 301
-/dialects/* /clickhouse/start/overview/ 301
