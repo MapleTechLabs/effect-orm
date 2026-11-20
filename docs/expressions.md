@@ -58,6 +58,10 @@ _(Backed by `src/ch/literal.test.ts` and `src/ch/failure.test.ts`.)_
 
 ## Comparisons
 
+A comparison's right side may be an expression that can be NULL (an aggregate, a LEFT JOIN's
+column): `o.rowid.eq(h.head)` type-checks when `h.head` is `number | null`, and is not true for a
+NULL, as in SQL. A plain `null` value is still refused; see [Testing for NULL](#testing-for-null).
+
 Every `Expr<T>` carries:
 
 | Method                          | SQL                     |

@@ -435,6 +435,35 @@ transaction it fails with `TransactionOptionsRejected`, because the database has
 aborted the whole transaction. `transaction(body, { retry: "contention" })` is shorthand for
 `retryContention(transaction(body))`, so each attempt starts with a fresh BEGIN.
 
+## Batches
+
+`Database.batch(statements, params?)` (or `Db.batch` on the `Database` in context) runs a fixed
+list of queries and writes as one atomic unit and returns a tuple of each statement's decoded
+rows, in order: none for a write without `returning`. On D1, which has no transactions, it is
+one [D1 batch](https://developers.cloudflare.com/d1/worker-api/d1-database/#batch), through the
+`batch` of `@effect/sql-d1`'s client. Elsewhere it runs the statements in a transaction, a
+savepoint inside an open one. A dialect with neither (ClickHouse) fails with
+`TransactionUnsupported`. `params` fills the markers of every statement, and the type checks
+each statement as `run` does: a missing param or a function of another dialect names the
+statement (`batchStatementRefused`). Each write runs its client defaults first.
+
+```ts
+const [identity, logins] = yield* db.batch(
+	[
+		SQLite.insertInto(Identities).values({ identityKey: SQLite.param.string("key"), subjectId: SQLite.param.string("subject") }).onConflictDoNothing(),
+		SQLite.from(Logins).select("credentialId").where(($) => [$.identityKey.eq(SQLite.param.string("key"))]),
+	],
+	{ key, subject },
+)
+// identity: [], logins: ReadonlyArray<{ readonly credentialId: string }>
+```
+
+A statement cannot read the rows of an earlier one in the same batch from JavaScript: they are
+sent together. Make a write depend on data with a condition inside the statement
+(`insertInto(t).select(selectNoFrom(…).where(…))`).
+
+_(Backed by `src/sqlite/query-features.test.ts > batch` and `src/sqlite/d1.test.ts`.)_
+
 ## Batching lookups
 
 Many fibers that each read one row by its id send one statement per fiber: the N+1 problem.
