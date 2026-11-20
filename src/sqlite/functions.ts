@@ -1,5 +1,5 @@
 import { Schema, type DateTime } from "effect"
-import { makeExpr, operandOf, toFragment, type Comparable, type Condition, type Expr, type ParamsIn, type Widen } from "../ch/expr"
+import { isExprLike, makeExpr, operandOf, toFragment, type Comparable, type Condition, type Expr, type ParamsIn, type Widen } from "../ch/expr"
 import { acceptsSqlNull, mergeResultSchemas, schemaOf, withoutNull } from "../ch/define-fn"
 import { QueryBuilderDefect } from "../ch/errors"
 import { fail } from "../ch/failure"
@@ -120,6 +120,19 @@ export const length = <P>(expr: Expr<string | Uint8Array | null, P>): Expr<numbe
 	makeExpr(scalar.lazy(() => `length(${sql(expr)})`, "length"), Schema.NullOr(Schema.Int))
 
 /**
+ * How `coalesce(first, fallback)` decodes: `first`'s codec without its NULL
+ * (kept as it is when it has none), merged with an expression fallback's own
+ * codec, NULL included when the fallback can be NULL. A plain fallback is
+ * written through `first`'s codec, so it decodes as `first` does.
+ */
+const fallbackResult = (first: Expr<unknown, any>, fallback: unknown): Schema.Codec<any, unknown> | undefined => {
+	const own = schemaOf(first)
+	const present = own === undefined ? undefined : (withoutNull(own) ?? (acceptsSqlNull(own) ? undefined : own))
+	if (isExprLike(fallback)) return mergeResultSchemas([present, schemaOf(fallback)])
+	return present ?? valueSchema(fallback)
+}
+
+/**
  * `coalesce(first, fallback)`: `first` unless it is NULL. The fallback is an
  * expression or a plain value, written as a comparison with `first` writes it.
  */
@@ -128,7 +141,7 @@ export function coalesce<A, P1>(first: Expr<A | null, P1>, fallback: Comparable<
 export function coalesce(first: Expr<unknown, any>, fallback: unknown): Expr<unknown, any> {
 	return makeExpr(
 		scalar.lazy(() => `coalesce(${sql(first)}, ${compile(operandOf(first, fallback))})`, "coalesce"),
-		schemaOf(fallback) ?? withoutNull(schemaOf(first)) ?? valueSchema(fallback),
+		fallbackResult(first, fallback),
 	)
 }
 
@@ -138,7 +151,7 @@ export function ifnull<A, P1>(expr: Expr<A | null, P1>, fallback: Comparable<Non
 export function ifnull(expr: Expr<unknown, any>, fallback: unknown): Expr<unknown, any> {
 	return makeExpr(
 		scalar.lazy(() => `ifnull(${sql(expr)}, ${compile(operandOf(expr, fallback))})`, "ifnull"),
-		schemaOf(fallback) ?? withoutNull(schemaOf(expr)) ?? valueSchema(fallback),
+		fallbackResult(expr, fallback),
 	)
 }
 
@@ -231,20 +244,22 @@ export const substr = <A extends string | null, P, const S extends ScalarArg = n
 	expr: Expr<A, P>,
 	start: S,
 	length?: L,
-): Expr<string | Extract<A, null>, P | ParamsIn<S> | ParamsIn<L> | SqliteOnly> =>
+): Expr<string | Extract<A, null> | NullOf<S> | NullOf<L>, P | ParamsIn<S> | ParamsIn<L> | SqliteOnly> =>
 	makeExpr(
 		scalar.lazy(() => `substr(${[sql(expr), arg(start), ...(length === undefined ? [] : [arg(length)])].join(", ")})`, "substr"),
-		nullWith(textSchema, expr),
+		// A NULL start or length makes the result NULL too.
+		nullWith(textSchema, expr, start, ...(length === undefined ? [] : [length])),
 	)
 
 const trimmer = (name: "trim" | "ltrim" | "rtrim") =>
 	<A extends string | null, P, const C extends ScalarArg = string>(
 		expr: Expr<A, P>,
 		characters?: C,
-	): Expr<string | Extract<A, null>, P | ParamsIn<C> | SqliteOnly> =>
+	): Expr<string | Extract<A, null> | NullOf<C>, P | ParamsIn<C> | SqliteOnly> =>
 		makeExpr(
 			scalar.lazy(() => `${name}(${[sql(expr), ...(characters === undefined ? [] : [arg(characters)])].join(", ")})`, name),
-			nullWith(textSchema, expr),
+			// A NULL character set makes the result NULL too; an omitted one is spaces.
+			nullWith(textSchema, expr, ...(characters === undefined ? [] : [characters])),
 		)
 
 /** `trim(expr, characters)`: without spaces (or `characters`) at either end. */
