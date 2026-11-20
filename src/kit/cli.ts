@@ -55,7 +55,11 @@ const options = {
 	version: { type: "boolean" },
 } as const
 
-const commands = ["generate", "pull", "check", "migrate", "status", "verify", "baseline", "resolve"]
+// The one list of commands: the `switch` below is over this type and ends in a `never`, so a
+// command in one and not the other does not compile.
+const commands = ["generate", "pull", "check", "migrate", "status", "verify", "baseline", "resolve"] as const
+type Command = (typeof commands)[number]
+const isCommand = (name: string): name is Command => (commands as ReadonlyArray<string>).includes(name)
 
 const decodeHints = Schema.decodeUnknownEffect(Schema.fromJsonString(Hints))
 
@@ -109,7 +113,7 @@ const program = (args: ReadonlyArray<string>, print: (line: string) => void) =>
 			return 0
 		}
 		// Before the config is read: a mistyped command is not a missing config file.
-		if (!commands.includes(command)) {
+		if (!isCommand(command)) {
 			return yield* new KitError({ code: "config", message: `unknown command ${JSON.stringify(command)}. Run effect-orm --help.` })
 		}
 		const cwd = process.cwd()
@@ -247,8 +251,7 @@ const program = (args: ReadonlyArray<string>, print: (line: string) => void) =>
 				return result.drift.length === 0 ? 0 : 3
 			}
 			default:
-				print(help)
-				return 1
+				return command satisfies never
 		}
 	})
 
