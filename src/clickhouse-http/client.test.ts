@@ -99,6 +99,21 @@ describe("ClickhouseHttpClient", () => {
 		}).pipe(Effect.provide(live))
 	})
 
+	// The element type used to come from the first element alone: a null in a later subarray
+	// became `''`, and a later integer past Int64 wrapped.
+	it.effect("reads an array's element type from all of its elements", () => {
+		const { sent, live } = fake(() => json([]))
+		return Effect.gen(function* () {
+			const sql = yield* SqlClient.SqlClient
+			yield* sql`SELECT ${[["a"], [null]]}, ${[[null], ["a"]]}, ${[[["a"]], [[null]]]}, ${[1n, 2n ** 64n - 1n]}, ${[[1n], [-(2n ** 100n)]]}, ${[[], []]}, ${[1, null]}`
+			expect(sent[0]?.body).toBe(
+				"SELECT {p1: Array(Array(Nullable(String)))}, {p2: Array(Array(Nullable(String)))}, {p3: Array(Array(Array(Nullable(String))))}, " +
+					"{p4: Array(UInt64)}, {p5: Array(Array(Int128))}, {p6: Array(Array(String))}, {p7: Array(Nullable(Float64))}\nFORMAT JSON",
+			)
+			expect(sent[0]?.url.searchParams.get("param_p1")).toBe("[['a'],[NULL]]")
+		}).pipe(Effect.provide(live))
+	})
+
 	it.effect("sends a command without a format, and returns no rows", () => {
 		const { sent, live } = fake(() => ({ body: "" }))
 		return Effect.gen(function* () {

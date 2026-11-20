@@ -658,6 +658,8 @@ the default.
 | `runCli`                                                                                         | `/benchmark/cli`  |
 
 Every export of every entry is named on this page; `bun run test` fails when one is not. The
+check reads the built declarations (`dist/*.d.mts`), so run `bun run build` after adding an
+export; `bun run test:release`, which CI runs, builds first. The
 dialect entries, `/database`, `/migrate`, `/seed` and `/clickhouse-http` are the application API.
 `/schema`, `/kit`, `/sql`, `/tinybird` and `/benchmark` also export the pieces their own tools
 are built from (entity schemas, renderers, op labels), for tools built on top of them; those

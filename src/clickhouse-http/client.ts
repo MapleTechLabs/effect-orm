@@ -51,8 +51,10 @@ export interface ClickhouseHttpClientConfig {
 	 * first rows were sent says so in the reply instead of cutting the connection.
 	 *
 	 * A `readonly=1` user may not change a setting, only repeat its current value:
-	 * for one, set both here to what the server has (`0` unless its profile says
-	 * otherwise). A late failure then arrives as a `ConnectionError`.
+	 * for one, set both here to what the server has (`system.settings`). The
+	 * first is `0` unless a profile says otherwise; the second is `1` before
+	 * ClickHouse 25.11 and `0` from it, where a late failure then arrives as a
+	 * `ConnectionError`.
 	 */
 	readonly settings?: Readonly<Record<string, ClickhouseSetting>> | undefined
 	readonly spanAttributes?: Readonly<Record<string, unknown>> | undefined
@@ -181,32 +183,45 @@ const validateUrl = (raw: string): URL => {
 	return url
 }
 
-const INT64_MIN = -(2n ** 63n)
-const UINT64_MAX = 2n ** 64n - 1n
+// Integer types in the order tried, each with the range it holds.
+const INTEGER_TYPES: ReadonlyArray<readonly [string, bigint, bigint]> = [
+	["Int64", -(2n ** 63n), 2n ** 63n - 1n],
+	["UInt64", 0n, 2n ** 64n - 1n],
+	["Int128", -(2n ** 127n), 2n ** 127n - 1n],
+	["UInt256", 0n, 2n ** 256n - 1n],
+	["Int256", -(2n ** 255n), 2n ** 255n - 1n],
+]
 
-/** The narrowest of the types a bigint is most often compared with that holds it: Int64 wraps above 2^63. */
-const integerType = (value: bigint): string =>
-	value >= INT64_MIN && value < 2n ** 63n ? "Int64"
-	: value >= 0n && value <= UINT64_MAX ? "UInt64"
-	: value >= -(2n ** 127n) && value < 2n ** 127n ? "Int128"
-	: value >= 0n ? "UInt256"
-	: "Int256"
+/** The narrowest of those types that holds every value: Int64 wraps above 2^63. */
+const integerType = (values: ReadonlyArray<bigint>): string =>
+	INTEGER_TYPES.find(([, min, max]) => values.every((value) => value >= min && value <= max))?.[0] ?? "Int256"
 
 const isNullish = (value: unknown): value is null | undefined => value === null || value === undefined
 
+/**
+ * The type of an array's elements, read from all of them: a null anywhere makes
+ * the element Nullable (ClickHouse reads NULL into a non-nullable element as the
+ * type's default), integers take a type wide enough for the largest, and nested
+ * arrays are read together, so `[["a"], [null]]` is `Array(Array(Nullable(String)))`.
+ */
+const elementType = (values: ReadonlyArray<unknown>): string => {
+	const present = values.filter((item) => !isNullish(item))
+	// An array cannot be Nullable: a null beside arrays is left for ClickHouse to refuse.
+	if (present.length > 0 && present.every((item) => Array.isArray(item))) return `Array(${elementType(present.flat())})`
+	const base =
+		present.length === 0 ? "String"
+		: present.every((item) => typeof item === "bigint") ? integerType(present as ReadonlyArray<bigint>)
+		: typeFromUnknown(present[0])
+	return present.length < values.length ? `Nullable(${base})` : base
+}
+
 const typeFromUnknown = (value: unknown): string => {
-	if (Array.isArray(value)) {
-		// The element type comes from the first element that has one; a null among
-		// them makes it Nullable, or ClickHouse reads NULL as the type's default.
-		const first = value.find((item) => !isNullish(item))
-		const element = first === undefined ? "String" : typeFromUnknown(first)
-		return `Array(${value.some(isNullish) && !element.startsWith("Array(") ? `Nullable(${element})` : element})`
-	}
+	if (Array.isArray(value)) return `Array(${elementType(value)})`
 	switch (typeof value) {
 		case "number":
 			return "Float64"
 		case "bigint":
-			return integerType(value)
+			return integerType([value])
 		case "boolean":
 			return "Bool"
 		case "object":

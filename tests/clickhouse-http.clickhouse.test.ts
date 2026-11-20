@@ -87,6 +87,14 @@ describe.skipIf(!endpoint)("ClickhouseHttpClient on ClickHouse", () => {
 			}),
 		)
 
+		it.effect("keeps a null in a later subarray, and an integer past Int64 beside a small one", () =>
+			Effect.gen(function* () {
+				const sql = yield* SqlClient.SqlClient
+				const rows = yield* sql`SELECT ${[["a"], [null]]} AS nested, arrayMap(x -> toString(x), ${[1n, 2n ** 64n - 1n]}) AS wide`
+				expect(rows).toEqual([{ nested: [["a"], [null]], wide: ["1", "18446744073709551615"] }])
+			}),
+		)
+
 		// A query can fail after ClickHouse has answered 200 and sent rows. The rows
 		// are not a result: both paths fail, with the server's reason. This used to
 		// succeed with the rows so far on servers before 25.11.

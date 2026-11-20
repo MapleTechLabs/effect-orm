@@ -115,8 +115,9 @@ What it does for you:
   ClickHouse 23.9 or later, the first with that setting.
 - **A `readonly = 1` user cannot change settings,** only repeat their current values. For one,
   put `cancel_http_readonly_queries_on_client_close` and `http_write_exception_in_output_format`
-  in `settings` with the server's values (`0` unless its profile says otherwise). A failure
-  after the first rows then arrives as a `ConnectionError`.
+  in `settings` with the values the server has (`SELECT name, value FROM system.settings`). The
+  first is `0` unless a profile sets it. The second is `1` before ClickHouse 25.11 and `0` from
+  it; at `0`, a failure after the first rows arrives as a `ConnectionError`.
 - **Credentials travel in a header,** never the URL; the URL may not contain them. A path in the
   URL is kept, for a ClickHouse behind a proxy prefix.
 - **Spans name the peer:** `server.address`, `server.port` and `peer.service` (`clickhouse`;
@@ -126,7 +127,8 @@ What it does for you:
   server, as `{pN: Type}` placeholders: a string as `String`, a number as `Float64`, a `bigint`
   as the narrowest of `Int64`, `UInt64`, `Int128` and the 256-bit types that holds it, a `Date`
   as `DateTime64(3)`, `null` as a `Nullable(String)` NULL, and an array as an `Array` of its
-  first element's type, `Nullable` when it holds a null.
+  elements' type, read from all of them: `Nullable` when any is null, at any depth, and wide
+  enough for the largest `bigint`.
 
 It opens no connection at startup, so a Worker's first request pays nothing extra. Its spans
 are `Database`'s, described in [Running statements: tracing](./database.md#tracing).
