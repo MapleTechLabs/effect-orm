@@ -77,6 +77,8 @@ export interface CHUpdateState extends WriteState {
 	readonly set?: ConflictSet<any, any> | (($: any) => ConflictSet<any, any>)
 	/** Set by `from`: `UPDATE ... FROM source AS alias`. */
 	readonly from?: UpdateFromSource
+	/** Set by a second `from`, which the types refuse: compiling it is a defect. */
+	readonly fromTwice?: true
 }
 
 /** @internal — runtime delete state */
@@ -231,12 +233,24 @@ export type CHUpdateStart<
 	from<JName extends string, JCols extends ColumnDefs, Alias extends string, TParams = never>(
 		source: Table<JName, JCols> | TableFunction<JName, JCols, TParams>,
 		alias: FreshAlias<Alias, Cols, Joins>,
-	): CHUpdateStart<Cols, Computed, Req, Joins & { readonly [K in Alias]: JCols }, Params | TParams | UpdateFromClause>
+	): CHUpdateFromStart<Cols, Computed, Req, Joins & { readonly [K in Alias]: JCols }, Params | TParams | UpdateFromClause>
 	from<JOutput extends Record<string, any>, Alias extends string, JParams = never>(
 		source: CHQuery<any, JOutput, any, string | undefined, JParams> & NeedsSelect<JOutput>,
 		alias: FreshAlias<Alias, Cols, Joins>,
-	): CHUpdateStart<Cols, Computed, Req, Joins & { readonly [K in Alias]: OutputToColumnDefs<JOutput> }, Params | JParams | UpdateFromClause>
+	): CHUpdateFromStart<Cols, Computed, Req, Joins & { readonly [K in Alias]: OutputToColumnDefs<JOutput> }, Params | JParams | UpdateFromClause>
 }
+
+/**
+ * An update after `from`, with no SET yet: only `set`. An UPDATE has one FROM
+ * source, so a second `from` is not offered (and is a defect past the types).
+ */
+export type CHUpdateFromStart<
+	Cols extends ColumnDefs,
+	Computed extends string,
+	Req,
+	Joins extends Record<string, ColumnDefs>,
+	Params,
+> = Pick<CHUpdate<Cols, Computed, never, "needs where() or allRows()", Params, Req, Joins>, "set">
 
 /** `returning(...)`'s arguments as a select callback, shared with inserts. */
 export const returningFnOf =
@@ -262,7 +276,8 @@ const makeUpdate = (state: CHUpdateState): CHUpdate<any, any, any, any, any, any
 	_state: state,
 	...writeClauses(state, makeUpdate),
 	set: (set: CHUpdateState["set"]) => makeUpdate({ ...state, set }),
-	from: ((source: any, alias: string) => makeUpdate({ ...state, from: updateFromSource(source, alias) })) as any,
+	from: ((source: any, alias: string) =>
+		makeUpdate({ ...state, from: updateFromSource(source, alias), ...(state.from === undefined ? undefined : { fromTwice: true as const }) })) as any,
 })
 
 const updateFromSource = (

@@ -2435,6 +2435,9 @@ function compileUpdateOrDelete(
 	const dialect = currentDialect()
 	const { values, cell } = valueCells(table, params, where)
 	const from = write._tag === "CHUpdate" ? (write as CHUpdate<any, any, any, any, any, any, any>)._state.from : undefined
+	if ((write as CHUpdate<any, any, any, any, any, any, any>)._state.fromTwice === true) {
+		return fail(new QueryBuilderDefect({ message: `${where}: from() was called twice; an UPDATE has one FROM source` }), failedQuery<any, undefined>())
+	}
 	if (from !== undefined && dialect.clauses.updateFrom !== true) {
 		return fail(new QueryBuilderDefect({ message: `${where}: UPDATE ... FROM has no meaning for the ${dialect.name} dialect` }), failedQuery<any, undefined>())
 	}
@@ -2474,7 +2477,6 @@ function compileUpdateOrDelete(
 				} else if (from.fragment !== undefined) {
 					fromSql = `\nFROM ${compileSqlFragment(from.fragment)} AS ${quoteIdent(from.alias)}`
 				} else {
-					reads.push(from.tenantColumn === undefined ? { scope: "untenanted" } : { column: `${from.alias}.${from.tenantColumn}`, scope: "cross-tenant" })
 					fromSql = `\nFROM ${quoteIdentPath(from.tableName ?? "")} AS ${quoteIdent(from.alias)}`
 				}
 			}
@@ -2513,11 +2515,18 @@ function compileUpdateOrDelete(
 	// rows to another tenant reaches past it.
 	let tenantScope: TenantScope = "untenanted"
 	let tenantBound: string | undefined
-	if (tenant !== undefined) {
-		// The FROM source's tenant column, when it is a table with one, is joined to the target's through the WHERE.
-		const fromTenant = from?.tenantColumn === undefined || from.tableName === undefined ? [] : [{ column: `${from.alias}.${from.tenantColumn}`, scope: "cross-tenant" as const }]
+	// A FROM table with a tenant column is a source of the same scope, tied to
+	// the target's tenant (or pinned) through the WHERE, as a join would be.
+	const fromTenant =
+		from?.tenantColumn === undefined || from.tableName === undefined
+			? []
+			: [{ column: `${from.alias}.${from.tenantColumn}`, scope: "cross-tenant" as const }]
+	if (tenant !== undefined || fromTenant.length > 0) {
 		const derived = deriveTenantScope(
-			[{ column: from === undefined ? tenant : `${table.name}.${tenant}`, scope: "cross-tenant" }, ...fromTenant],
+			[
+				...(tenant === undefined ? [] : [{ column: from === undefined ? tenant : `${table.name}.${tenant}`, scope: "cross-tenant" as const }]),
+				...fromTenant,
+			],
 			[{ predicates: conditions.flatMap((c) => tenantPredicatesOf(c)) }],
 			(value) => inlineParams(compileSqlFragment(value), values),
 		)
@@ -2542,7 +2551,6 @@ function compileUpdateOrDelete(
 				? `ALTER TABLE ${target} UPDATE ${assignments.join(", ")}`
 				: `UPDATE ${target} SET ${assignments.join(", ")}`
 	const rendered = renderParams(`${head}${fromSql}${whereSql}${returning?.sql ?? ""}${settings}`, values, dialect)
-	// A FROM table with a tenant column is a source of the WHERE's scope above, not a separate read.
 	const scope = withReads({ scope: tenantScope, bound: tenantScope === "single-tenant" ? tenantBound : undefined }, reads)
 	return writeCompiledQuery(rendered, kind, scope.scope, scope.bound, returning, state.crossTenant, table.name)
 }

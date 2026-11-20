@@ -25,13 +25,15 @@ import type {
 	LockOptions,
 	NarrowJoins,
 	NarrowSource,
+	TableFunctionOf,
+	TableParams,
 	NeedsSelect,
 	OwnSources,
 	RowCount,
 	RowLock,
 	SelectRecord,
 } from "./query"
-import type { Table } from "./table"
+import type { Table, TableFunction } from "./table"
 import type { ColumnDefs, InferTS, NullableColumnDefs, OutputToColumnDefs } from "./types"
 
 export { from, fromQuery, fromUnion } from "./query"
@@ -194,7 +196,7 @@ export const limit: {
 	): CHQuery<Cols, Output, Joins, Route, Params, Source>
 } = dual(2, (self: CHQuery<any, any, any, any, any>, n: number) => self.limit(n))
 
-/** `query.innerJoin(table, alias, on)`: `$.<alias>` reads the joined table. */
+/** `query.innerJoin(source, alias, on)`: `$.<alias>` reads the joined source, a table, a table-valued function or a callback building one. */
 export const innerJoin: {
 	<
 		Cols extends ColumnDefs,
@@ -204,13 +206,14 @@ export const innerJoin: {
 		JCols extends ColumnDefs,
 		Alias extends string,
 		OnParams = never,
+		TParams = never,
 	>(
-		table: Table<JName, JCols>,
+		table: Table<JName, JCols> | TableFunction<JName, JCols, TParams> | TableFunctionOf<Cols, Joins, Source, JName, JCols, TParams>,
 		alias: FreshAlias<Alias, Cols, Joins>,
 		on: JoinOnCallback<Cols, JCols, OnParams, Source, Alias, Joins>,
 	): <Output extends Record<string, any>, Route extends string | undefined, Params>(
 		self: CHQuery<Cols, Output, Joins, Route, Params, Source>,
-	) => CHQuery<Cols, Output, Joins & { readonly [K in Alias]: JCols }, Route, JoinParams<Params, OnParams, Source, Joins, Alias>, Source>
+	) => CHQuery<Cols, Output, Joins & { readonly [K in Alias]: JCols }, Route, JoinParams<Params, OnParams, Source, Joins, Alias> | TableParams<TParams, Source, Joins, Alias>, Source>
 	<
 		Cols extends ColumnDefs,
 		Output extends Record<string, any>,
@@ -222,13 +225,14 @@ export const innerJoin: {
 		JCols extends ColumnDefs,
 		Alias extends string,
 		OnParams = never,
+		TParams = never,
 	>(
 		self: CHQuery<Cols, Output, Joins, Route, Params, Source>,
-		table: Table<JName, JCols>,
+		table: Table<JName, JCols> | TableFunction<JName, JCols, TParams> | TableFunctionOf<Cols, Joins, Source, JName, JCols, TParams>,
 		alias: FreshAlias<Alias, Cols, Joins>,
 		on: JoinOnCallback<Cols, JCols, OnParams, Source, Alias, Joins>,
-	): CHQuery<Cols, Output, Joins & { readonly [K in Alias]: JCols }, Route, JoinParams<Params, OnParams, Source, Joins, Alias>, Source>
-} = dual(4, (self: CHQuery<any, any, any, any, any>, table: Table<any, any>, alias: any, on: any) =>
+	): CHQuery<Cols, Output, Joins & { readonly [K in Alias]: JCols }, Route, JoinParams<Params, OnParams, Source, Joins, Alias> | TableParams<TParams, Source, Joins, Alias>, Source>
+} = dual(4, (self: CHQuery<any, any, any, any, any>, table: any, alias: any, on: any) =>
 	self.innerJoin(table, alias, on),
 )
 
@@ -242,13 +246,14 @@ export const leftJoin: {
 		JCols extends ColumnDefs,
 		Alias extends string,
 		OnParams = never,
+		TParams = never,
 	>(
-		table: Table<JName, JCols>,
+		table: Table<JName, JCols> | TableFunction<JName, JCols, TParams> | TableFunctionOf<Cols, Joins, Source, JName, JCols, TParams>,
 		alias: FreshAlias<Alias, Cols, Joins>,
 		on: JoinOnCallback<Cols, JCols, OnParams, Source, Alias, Joins>,
 	): <Output extends Record<string, any>, Route extends string | undefined, Params>(
 		self: CHQuery<Cols, Output, Joins, Route, Params, Source>,
-	) => CHQuery<Cols, Output, Joins & { readonly [K in Alias]: NullableColumnDefs<JCols> }, Route, JoinParams<Params, OnParams, Source, Joins, Alias>, Source>
+	) => CHQuery<Cols, Output, Joins & { readonly [K in Alias]: NullableColumnDefs<JCols> }, Route, JoinParams<Params, OnParams, Source, Joins, Alias> | TableParams<TParams, Source, Joins, Alias>, Source>
 	<
 		Cols extends ColumnDefs,
 		Output extends Record<string, any>,
@@ -260,24 +265,25 @@ export const leftJoin: {
 		JCols extends ColumnDefs,
 		Alias extends string,
 		OnParams = never,
+		TParams = never,
 	>(
 		self: CHQuery<Cols, Output, Joins, Route, Params, Source>,
-		table: Table<JName, JCols>,
+		table: Table<JName, JCols> | TableFunction<JName, JCols, TParams> | TableFunctionOf<Cols, Joins, Source, JName, JCols, TParams>,
 		alias: FreshAlias<Alias, Cols, Joins>,
 		on: JoinOnCallback<Cols, JCols, OnParams, Source, Alias, Joins>,
-	): CHQuery<Cols, Output, Joins & { readonly [K in Alias]: NullableColumnDefs<JCols> }, Route, JoinParams<Params, OnParams, Source, Joins, Alias>, Source>
-} = dual(4, (self: CHQuery<any, any, any, any, any>, table: Table<any, any>, alias: any, on: any) =>
+	): CHQuery<Cols, Output, Joins & { readonly [K in Alias]: NullableColumnDefs<JCols> }, Route, JoinParams<Params, OnParams, Source, Joins, Alias> | TableParams<TParams, Source, Joins, Alias>, Source>
+} = dual(4, (self: CHQuery<any, any, any, any, any>, table: any, alias: any, on: any) =>
 	self.leftJoin(table, alias, on),
 )
 
 /** `query.crossJoin(table, alias)`: every pair of rows. */
 export const crossJoin: {
-	<Cols extends ColumnDefs, Joins extends Record<string, ColumnDefs>, Source extends string, JName extends string, JCols extends ColumnDefs, Alias extends string>(
-		table: Table<JName, JCols>,
+	<Cols extends ColumnDefs, Joins extends Record<string, ColumnDefs>, Source extends string, JName extends string, JCols extends ColumnDefs, Alias extends string, TParams = never>(
+		table: Table<JName, JCols> | TableFunction<JName, JCols, TParams> | TableFunctionOf<Cols, Joins, Source, JName, JCols, TParams>,
 		alias: FreshAlias<Alias, Cols, Joins>,
 	): <Output extends Record<string, any>, Route extends string | undefined, Params>(
 		self: CHQuery<Cols, Output, Joins, Route, Params, Source>,
-	) => CHQuery<Cols, Output, Joins & { readonly [K in Alias]: JCols }, Route, Params, Source>
+	) => CHQuery<Cols, Output, Joins & { readonly [K in Alias]: JCols }, Route, BindSources<Params, Alias> | TableParams<TParams, Source, Joins, Alias>, Source>
 	<
 		Cols extends ColumnDefs,
 		Output extends Record<string, any>,
@@ -288,12 +294,13 @@ export const crossJoin: {
 		JName extends string,
 		JCols extends ColumnDefs,
 		Alias extends string,
+		TParams = never,
 	>(
 		self: CHQuery<Cols, Output, Joins, Route, Params, Source>,
-		table: Table<JName, JCols>,
+		table: Table<JName, JCols> | TableFunction<JName, JCols, TParams> | TableFunctionOf<Cols, Joins, Source, JName, JCols, TParams>,
 		alias: FreshAlias<Alias, Cols, Joins>,
-	): CHQuery<Cols, Output, Joins & { readonly [K in Alias]: JCols }, Route, Params, Source>
-} = dual(3, (self: CHQuery<any, any, any, any, any>, table: Table<any, any>, alias: any) => self.crossJoin(table, alias))
+	): CHQuery<Cols, Output, Joins & { readonly [K in Alias]: JCols }, Route, BindSources<Params, Alias> | TableParams<TParams, Source, Joins, Alias>, Source>
+} = dual(3, (self: CHQuery<any, any, any, any, any>, table: any, alias: any) => self.crossJoin(table, alias))
 
 /** `query.having(fn)`: post-aggregation conditions, AND-joined with the earlier ones. */
 export const having: {

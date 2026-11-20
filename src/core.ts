@@ -145,6 +145,7 @@ export {
 export {
 	type CHDelete,
 	type CHUpdate,
+	type CHUpdateFromStart,
 	type CHUpdateStart,
 	type UpdateSet,
 	type UpdateSetOf,
