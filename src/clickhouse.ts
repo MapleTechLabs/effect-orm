@@ -181,6 +181,7 @@ export {
 	preceding,
 	following,
 	rowsBetween,
+	rangeBetween,
 	windowSpec,
 	over,
 	lagInFrame,

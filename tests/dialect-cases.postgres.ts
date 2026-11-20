@@ -119,6 +119,39 @@ export const postgresCases: readonly PostgresCase[] = [
 		],
 	},
 	{
+		id: "window-functions",
+		covers: pg("over", "lead", "lag", "rowNumber", "rank", "denseRank", "firstValue", "lastValue"),
+		build: () =>
+			PG.compileUnsafe(
+				orgOrders()
+					.select(($) => {
+						const byCustomer = PG.windowSpec({ partitionBy: [$.Customer], orderBy: [[$.Id, "asc"]] })
+						const byAmount = PG.windowSpec({ orderBy: [[$.Customer, "asc"]] })
+						return {
+							id: $.Id,
+							next: PG.over(PG.lead($.Amount), byCustomer),
+							previous: PG.over(PG.lag($.Amount, 1, 0), byCustomer),
+							position: PG.over(PG.rowNumber(), byCustomer),
+							rank: PG.over(PG.rank(), byAmount),
+							dense: PG.over(PG.denseRank(), byAmount),
+							first: PG.over(PG.firstValue($.Amount), byCustomer),
+							last: PG.over(
+								PG.lastValue($.Amount),
+								PG.windowSpec({ partitionBy: [$.Customer], orderBy: [[$.Id, "asc"]], frame: PG.rowsBetween(PG.unboundedPreceding, PG.unboundedFollowing) }),
+							),
+						}
+					})
+					.orderBy(["id", "asc"]),
+				org,
+			),
+		expected: [
+			{ id: 1, next: 20, previous: 0, position: 1, rank: 1, dense: 1, first: 10, last: 20 },
+			{ id: 2, next: null, previous: 10, position: 2, rank: 1, dense: 1, first: 10, last: 20 },
+			{ id: 3, next: null, previous: 0, position: 1, rank: 3, dense: 2, first: 5, last: 5 },
+			{ id: 4, next: null, previous: 0, position: 1, rank: 4, dense: 3, first: 7, last: 7 },
+		],
+	},
+	{
 		id: "aggregates-over-no-rows",
 		covers: pg("arrayAgg"),
 		build: () =>

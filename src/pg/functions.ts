@@ -16,6 +16,7 @@ import { encodeLiteral } from "../ch/literal"
 import { jsonPathSchema, type JsonContained, type JsonKey, type JsonPath, type JsonPathValue } from "../ch/json-path"
 import type { CHType } from "../ch/types"
 import { builtins, type PostgresOnly } from "../ch/functions/builtin"
+import { sqlWindowFunctions } from "../ch/functions/sql-window"
 import * as T from "./types"
 
 const sql = (expr: Expr<unknown> | Condition): string => compile(expr.toFragment())
@@ -295,3 +296,40 @@ export const asBoolean = <Q = never>(condition: Condition<Q>): Expr<boolean, Q |
  */
 export const typedValue = <A>(type: CHType<string, A, any>, value: A): Expr<A> =>
 	makeExpr(known(() => encodeLiteral(type.literalSchema, value, "typedValue")), type.schema as Schema.Codec<A, unknown>)
+
+// Window functions, used through `over(expr, windowSpec(...))`.
+
+const windows = sqlWindowFunctions("postgres", int8)
+
+/** `expr OVER (spec)`: an aggregate or window function over a window; see `windowSpec`. */
+export const over = windows.over
+/** `lead(expr, offset, fallback)`: `expr` of a later row of the window, NULL past its end unless a fallback is given. */
+export const lead = windows.lead
+/** `lag(expr, offset, fallback)`: `expr` of an earlier row of the window. */
+export const lag = windows.lag
+/** `row_number()`: the 1-based position in the partition. */
+export const rowNumber = windows.rowNumber
+/** `rank()`: the rank, with gaps after ties. */
+export const rank = windows.rank
+/** `dense_rank()`: the rank, without gaps. */
+export const denseRank = windows.denseRank
+/** `first_value(expr)`: `expr` of the frame's first row. */
+export const firstValue = windows.firstValue
+/** `last_value(expr)`: `expr` of the frame's last row. */
+export const lastValue = windows.lastValue
+
+export {
+	currentRow,
+	following,
+	preceding,
+	rangeBetween,
+	rowsBetween,
+	unboundedFollowing,
+	unboundedPreceding,
+	windowSpec,
+	type CompiledWindowSpec,
+	type WindowFrameBound,
+	type WindowOrderDirection,
+	type WindowRowsFrame,
+	type WindowSpec,
+} from "../ch/functions/window"

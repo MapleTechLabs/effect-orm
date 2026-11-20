@@ -424,6 +424,7 @@ export const dialectCases: readonly DialectCase[] = [
 			...fn(
 				"windowSpec",
 				"rowsBetween",
+				"rangeBetween",
 				"unboundedPreceding",
 				"currentRow",
 				"over",
@@ -465,15 +466,22 @@ export const dialectCases: readonly DialectCase[] = [
 								frame: CH.rowsBetween(CH.unboundedPreceding, CH.unboundedFollowing),
 							}),
 						),
+						ranged: CH.over(
+							CH.sum($.total),
+							CH.windowSpec({
+								orderBy: [[$.key, "asc"]],
+								frame: CH.rangeBetween(CH.unboundedPreceding, CH.currentRow),
+							}),
+						),
 					}))
 					.orderBy(["key", "asc"]),
 				{},
 			)
 		},
 		expected: [
-			{ key: 1, running: 1, previous: 0, all: 6 },
-			{ key: 2, running: 3, previous: 1, all: 6 },
-			{ key: 3, running: 6, previous: 2, all: 6 },
+			{ key: 1, running: 1, previous: 0, all: 6, ranged: 1 },
+			{ key: 2, running: 3, previous: 1, all: 6, ranged: 3 },
+			{ key: 3, running: 6, previous: 2, all: 6, ranged: 6 },
 		],
 	},
 	{
