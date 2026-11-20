@@ -221,6 +221,17 @@ another dialect is refused in the type and at compile time.
 - **MariaDB 11.4 pages `DISTINCT` over a join wrongly.** It counts `OFFSET` over the join's rows
   before `DISTINCT` removes their duplicates, so a page can repeat a row from the page before.
   Page a de-duplicated join from a subquery (`fromQuery(query.distinct(), "d")`) or with `groupBy`.
+- **MariaDB 11.4 orders a VARCHAR by a NUL-padded key,** so values that differ only in trailing
+  NUL bytes (`''` and `'\0'`) tie in `ORDER BY` under `utf8mb4_nopad_bin`, although `=` and `<`
+  tell them apart and a `TEXT` column sorts them. MySQL 8.4 orders them.
+- **A `unionAll` column is a DECIMAL of its widest branch.** `14 / 3` is `4.6667` alone and
+  `4.66666667` beside a branch of scale 8: the value is stored from the nine digits kept
+  internally. On MariaDB a branch with `distinct`, `limit` or `offset` is computed first, at its
+  own scale, and comes back `4.66670000`.
+- On MariaDB a selected integer literal is written `CAST(… AS SIGNED) + 0`. MariaDB 11.4 sizes
+  an integer literal one digit short when a union branch is a derived table, which is how this
+  dialect writes branches, and cuts it down to fit a DECIMAL the same column has in another
+  branch: `97` beside a `DECIMAL(5,4)` came back `9.9999`. The sum has the room.
 - A selected integer literal, and a selected `param.int`, `param.float` or `param.bool`, is
   written `CAST(… AS SIGNED)` (or `DOUBLE`): MySQL 8.4 replaces an alias with its expression
   inside a merged derived table, and would read `ORDER BY e1` over `10 AS e1` as column 10, an
