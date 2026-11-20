@@ -40,28 +40,26 @@ const quoteString = (value: string): string => (activeSqlSyntax()?.quoteString ?
 
 const PLAIN_CLICKHOUSE_IDENT = /^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$/
 
-// The words ClickHouse reads as something else where the builder writes a bare
-// name: a literal (`ORDER BY null`), a modifier (`GROUP BY rollup`, `FROM x AS
-// all`) or the start of a query (`WITH select AS (…)`). Found by using each of
-// `system.keywords` (25.8 and 26.8) as a select alias, in GROUP BY, ORDER BY
-// and HAVING, as a table and join alias and as a CTE name; every other keyword
-// is an ordinary name in all of those.
-const RESERVED_CLICKHOUSE_IDENTS = new Set([
+// The words ClickHouse reads as something else where a statement names something of its own:
+// a literal (`ORDER BY null`), a modifier (`GROUP BY rollup`, `FROM x AS all`) or the start
+// of a query (`WITH select AS (…)`). Found by using each of `system.keywords` (25.8 and 26.8)
+// as a select key in GROUP BY, ORDER BY and HAVING, as a table and join alias and as a CTE
+// name; every other keyword is an ordinary name in all of those.
+const RESERVED_CLICKHOUSE_NAMES = new Set([
 	"all", "cube", "distinct", "false", "inf", "infinity", "nan", "not", "null", "recursive", "rollup", "select", "top", "true",
 ])
 
 /**
- * One ClickHouse identifier. A plain name (letters, digits, `_`, and dots for a
- * Nested column such as `Events.Name`) is written bare; any other is quoted in
- * backticks, so a name with a space or a `-` is one name and a name can never
- * be read as SQL. The escapes are the string literal's, `;` and the param
- * marker included, for the reasons given there.
+ * One ClickHouse identifier: a column where it is read or written. A plain name
+ * (letters, digits, `_`, and dots for a Nested column such as `Events.Name`) is
+ * written bare, as it always was, so the SQL of a table's own expressions (an
+ * index, a MATERIALIZED column) does not change under a schema snapshot. Any
+ * other is quoted in backticks, so a name with a space or a `-` is one name and
+ * a name can never be read as SQL. The escapes are the string literal's, `;`
+ * and the param marker included, for the reasons given there.
  */
 export const quoteClickHouseIdent = (name: string): string =>
-	PLAIN_CLICKHOUSE_IDENT.test(name) && !name.includes("__PARAM_") &&
-		!name.split(".").some((segment) => RESERVED_CLICKHOUSE_IDENTS.has(segment.toLowerCase()))
-		? name
-		: backticked(name)
+	PLAIN_CLICKHOUSE_IDENT.test(name) && !name.includes("__PARAM_") ? name : backticked(name)
 
 const backticked = (name: string): string => `\`${escapeClickHouseString(name).replace(/`/g, "\\`")}\``
 
@@ -70,19 +68,21 @@ const backticked = (name: string): string => `\`${escapeClickHouseString(name).r
 export const quoteIdent = (name: string): string => (activeSqlSyntax()?.quoteIdent ?? quoteClickHouseIdent)(name)
 
 /**
- * A name the statement itself introduces: a select key, and the same key where
- * GROUP BY, ORDER BY or DISTINCT ON names it. It is never a path, so a dot in
- * one is quoted even where a column of that name is written bare: ClickHouse
- * reads `spans.Events.Name` as the Nested column, and `AS Events.Name` as a
- * syntax error.
+ * A name the statement itself introduces, and that name wherever the statement
+ * uses it: a select key (also in GROUP BY, ORDER BY and DISTINCT ON), a source
+ * or join alias, a CTE name. Where the dialect would write it bare (ClickHouse),
+ * two kinds are quoted all the same. One with a dot, since it is never a path:
+ * `spans.Events.Name` reads the Nested column, and `AS Events.Name` is a syntax
+ * error. And the words above: a column named `null` is fine as `t.null`, but
+ * `ORDER BY null` orders by the literal.
  */
 export const quoteAlias = (name: string): string => {
 	const quoted = quoteIdent(name)
-	return quoted === name && name.includes(".") ? backticked(name) : quoted
+	return quoted === name && (name.includes(".") || RESERVED_CLICKHOUSE_NAMES.has(name.toLowerCase())) ? backticked(name) : quoted
 }
 
-/** A dotted path (`db.table`, `alias.Column`) with each segment quoted. */
-export const quoteIdentPath = (path: string): string => path.split(".").map(quoteIdent).join(".")
+/** A dotted path of names the statement refers to (`db.table`, an alias in front of a column), each segment quoted. */
+export const quoteIdentPath = (path: string): string => path.split(".").map(quoteAlias).join(".")
 
 /**
  * A table where a statement names one: a dotted path of identifiers. A name

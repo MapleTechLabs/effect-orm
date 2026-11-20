@@ -379,9 +379,16 @@ CH.from(Events)
 ```
 
 That includes a key built from input (a dashboard grouping by a user's choice of label): it
-reaches the SQL as a quoted name and comes back as the row's key, never as SQL. The few words
-ClickHouse reads as something else where a name goes (`null`, `true`, `all`, `select`,
-`distinct`, …) are quoted too.
+reaches the SQL as a quoted name and comes back as the row's key, never as SQL.
+
+A few words mean something else to ClickHouse where a statement names something of its own:
+`ORDER BY null` orders by the literal, and `FROM t AS all` does not parse. As a select key, a
+source or join alias or a CTE name, these are quoted: `all`, `cube`, `distinct`, `false`, `inf`,
+`infinity`, `nan`, `not`, `null`, `recursive`, `rollup`, `select`, `top`, `true`. A column of
+such a name is read and written bare (`events.top`), as it always was, so the SQL of a table's
+index and `MATERIALIZED` expressions does not change, and `generate` does not treat a
+materialized view as changed over the backticks. ClickHouse 25.8 and 26.2 refuse `all` as an
+`ORDER BY` key whatever the quoting, unless `enable_order_by_all = 0`; 26.8 accepts it.
 
 A select key with a dot is quoted as well, since a key is one name and not a path. Selecting a
 Nested column by name reads `spans.Events.Name` and returns it under the key `Events.Name`:

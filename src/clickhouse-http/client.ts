@@ -136,8 +136,9 @@ const markedException = (body: string): string | undefined => {
 }
 
 // JSONEachRow's exception line. A row with one String column named `exception`
-// is `{"exception":"…"}`: rows never have the space after the colon, so the
-// prefix alone tells the two apart.
+// (`SELECT exception FROM system.query_log`, whose values are these very
+// messages) is `{"exception":"…"}`: rows never have the space after the colon,
+// so the prefix alone tells the two apart.
 const EXCEPTION_ROW = '{"exception": "'
 
 const exceptionOf = (parsed: unknown): string | undefined =>

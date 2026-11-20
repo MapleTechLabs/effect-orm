@@ -282,6 +282,28 @@ describe("ClickHouse identifiers", () => {
 		},
 	)
 
+	// Only where the statement names something of its own. A column of that name is read and
+	// written bare, as before, so a table's index and MATERIALIZED expressions keep their text
+	// and a schema snapshot taken before does not differ.
+	it("quotes such a word as a key, a source alias and a CTE name, not as a column", () => {
+		const words = CH.table("words", { OrgId: CH.string, null: CH.uint64, top: CH.uint64 })
+		expect(flat(compileCHUnsafe(CH.from(words).select(($) => ({ n: $.null, top: $.top })).where(($) => [$.null.gt(1)]), {}))).toBe(
+			"SELECT words.null AS n, words.top AS `top` FROM words WHERE words.null > 1",
+		)
+		expect(flat(compileCHUnsafe(CH.from(words, "all").select(($) => ({ n: $.null })), {}))).toBe("SELECT `all`.null AS n FROM words AS `all`")
+		const joined = CH.from(events).innerJoin(words, "top", (e, w) => e.OrgId.eq(w.OrgId)).select(($) => ({ n: $.top.null }))
+		expect(flat(compileCHUnsafe(joined, {}))).toBe(
+			"SELECT `top`.null AS n FROM events INNER JOIN words AS `top` ON events.OrgId = `top`.OrgId",
+		)
+		const named = Entry.table("select", { external: true, columns: { x: CH.uint8 } })
+		expect(flat(compileCHUnsafe(CH.from(named).select("x").withCTE("select", "SELECT 1 AS x"), {}))).toBe(
+			"WITH `select` AS ( SELECT 1 AS x ) SELECT `select`.x AS x FROM `select`",
+		)
+		expect(flat(compileCHUnsafe(CH.insertInto(words).values([{ OrgId: "o", null: 1, top: 2 }]), {}))).toBe(
+			"INSERT INTO words (OrgId, null, top) VALUES ('o', 1, 2)",
+		)
+	})
+
 	it("cannot spell a param: the marker is escaped inside the quotes", () => {
 		const query = CH.from(events)
 			.select(($) => ({ __PARAM_string_orgId__: $.Count }))

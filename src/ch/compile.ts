@@ -25,7 +25,7 @@ import {
 	type ParamsSatisfied,
 	type SourcesSatisfied,
 } from "./expr"
-import { raw, identPath, known, quoteAlias, quoteIdent, quoteIdentPath, quoteTable, compile as compileSqlFragment, type SqlFragment } from "../sql/sql-fragment"
+import { raw, known, quoteAlias, quoteIdent, quoteIdentPath, quoteTable, compile as compileSqlFragment, type SqlFragment } from "../sql/sql-fragment"
 import { splitTerminalClauses } from "../sql/terminal-clauses"
 import { activeLiteralBinder, withLiteralBinder } from "../sql/literal-binder"
 import { compileQuery, type SqlQuery } from "../sql/sql-query"
@@ -84,7 +84,7 @@ const lockClause = (lock: import("./query").LockClause | undefined): string | un
 			}), "")
 		}
 	}
-	const of = lock.of !== undefined && lock.of.length > 0 ? ` OF ${lock.of.map(quoteIdent).join(", ")}` : ""
+	const of = lock.of !== undefined && lock.of.length > 0 ? ` OF ${lock.of.map(quoteAlias).join(", ")}` : ""
 	const wait = lock.skipLocked === true ? " SKIP LOCKED" : lock.noWait === true ? " NOWAIT" : ""
 	return lock.strength === "SHARE" && locking.shareSyntax === "LOCK IN SHARE MODE" ? `LOCK IN SHARE MODE${wait}` : `FOR ${lock.strength}${of}${wait}`
 }
@@ -941,12 +941,12 @@ function compileInner<
 				enclosingCtes: visibleCtes,
 			})
 			fromSource = sourceOf(inner)
-			fromFragment = raw(`(${inner.sql}) AS ${quoteIdent(state.fromQueryAlias ?? "")}`)
+			fromFragment = raw(`(${inner.sql}) AS ${quoteAlias(state.fromQueryAlias ?? "")}`)
 		} else if (state.fromUnion) {
 			const inner = compileUnionInner(state.fromUnion, params, { deferParams, nested: true, enclosingCtes: visibleCtes })
 			fromSource = sourceOf(inner)
 			const body = currentDialect().clauses.format ? splitTerminalClauses(inner.sql).body : inner.sql
-			fromFragment = raw(`(\n${body}\n) AS ${quoteIdent(state.fromQueryAlias ?? "")}`)
+			fromFragment = raw(`(\n${body}\n) AS ${quoteAlias(state.fromQueryAlias ?? "")}`)
 		} else if (state.noFrom === true) {
 			fromSource = { scope: "untenanted" }
 			fromFragment = currentDialect().clauses.fromlessSelect === undefined ? undefined : raw(currentDialect().clauses.fromlessSelect!)
@@ -960,9 +960,9 @@ function compileInner<
 			if (options?.correlatedTenant !== undefined && fromSource.column !== undefined) {
 				fromSource = { ...fromSource, bound: correlatedBound(options.correlatedTenant) }
 			}
-			fromFragment = mainAlias !== state.tableName
-				? raw(`${quoteTable(state.tableName)} AS ${quoteIdentPath(mainAlias)}`)
-				: identPath(state.tableName)
+			// Written the way the columns' qualifier is, so a table named for a word the
+			// qualifier quotes (`select`) is quoted here too.
+			fromFragment = raw(mainAlias !== state.tableName ? `${quoteTable(state.tableName)} AS ${quoteIdentPath(mainAlias)}` : quoteTable(state.tableName))
 		}
 
 		const sources: TenantSource[] = [fromSource]
@@ -1033,7 +1033,7 @@ function compileInner<
 				return {
 					type: j.type,
 					table: tableSql,
-					alias: quoteIdent(j.alias),
+					alias: quoteAlias(j.alias),
 					on: on ? rowFilter(`the ON clause of join ${JSON.stringify(j.alias)}`, on) : undefined,
 				}
 			})
@@ -1109,7 +1109,7 @@ function compileInner<
 
 		// Prepend CTE definitions
 		if (resolvedCtes.length > 0) {
-			const cteDefs = resolvedCtes.map((c) => `${quoteIdent(c.name)} AS (\n${c.sql}\n)`).join(",\n")
+			const cteDefs = resolvedCtes.map((c) => `${quoteAlias(c.name)} AS (\n${c.sql}\n)`).join(",\n")
 			sql = `WITH ${cteDefs}\n${sql}`
 		}
 
@@ -2473,11 +2473,11 @@ function compileUpdateOrDelete(
 				if (from.query !== undefined) {
 					const inner = compileInner(from.query, values, { skipFormat: true, nested: true })
 					reads.push({ scope: inner.tenantScope, bound: tenantBoundOf(inner) })
-					fromSql = `\nFROM (${inner.sql}) AS ${quoteIdent(from.alias)}`
+					fromSql = `\nFROM (${inner.sql}) AS ${quoteAlias(from.alias)}`
 				} else if (from.fragment !== undefined) {
-					fromSql = `\nFROM ${compileSqlFragment(from.fragment)} AS ${quoteIdent(from.alias)}`
+					fromSql = `\nFROM ${compileSqlFragment(from.fragment)} AS ${quoteAlias(from.alias)}`
 				} else {
-					fromSql = `\nFROM ${quoteTable(from.tableName ?? "")} AS ${quoteIdent(from.alias)}`
+					fromSql = `\nFROM ${quoteTable(from.tableName ?? "")} AS ${quoteAlias(from.alias)}`
 				}
 			}
 			let assignments: ReadonlyArray<string> = []

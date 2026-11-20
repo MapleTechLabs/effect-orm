@@ -162,6 +162,43 @@ describe("diffSchemas", () => {
 		expect(S.diffSchemas(base, base)).toEqual({ ops: [], missingHints: [], unsupported: [] })
 	})
 
+	// A column named for a word the builder quotes elsewhere (`top`) is written bare in the
+	// table's own expressions, as every release has: quoting it would change the snapshot, and
+	// `generate` would rebuild the index and re-declare the column.
+	it("writes a table's index and MATERIALIZED expressions as it always has", () => {
+		const Tops = CH.table("tops", {
+			columns: { OrgId: CH.string, top: CH.uint64, shown: CH.column(CH.string, { materialized: ($) => CH.toString($.top) }) },
+			engine: CH.engine.mergeTree(),
+			orderBy: ["OrgId", "top"],
+			indexes: [CH.index("idx_top", ($) => $.top, "minmax")],
+		})
+		const sql = S.renderSchema(Effect.runSync(S.entitiesOf([Tops]))).join("\n")
+		expect(sql).toContain("shown String MATERIALIZED toString(top)")
+		expect(sql).toContain("INDEX idx_top top TYPE minmax")
+		expect(sql).toContain("ORDER BY (OrgId, top)")
+		expect(sql).not.toContain("`")
+	})
+
+	// 1.0 quotes a few words (`top`, `all`, `null`, …) as select keys, which earlier releases wrote
+	// bare. A snapshot from before differs from the schema by those backticks alone, and that is
+	// not a changed view.
+	it("does not recreate a view whose only change is the quoting of a plain name", () => {
+		const Tops = CH.table("tops", { columns: { OrgId: CH.string, top: CH.uint64, all: CH.uint64 }, engine: CH.engine.summingMergeTree(), orderBy: ["OrgId"] })
+		const TopsMv = CH.materializedView("tops_mv", {
+			to: Tops,
+			as: CH.from(Spans).select(($) => ({ OrgId: $.OrgId, top: CH.max($.Duration), all: CH.count() })).groupBy("OrgId"),
+		})
+		const now = Effect.runSync(S.entitiesOf([Spans, Tops, TopsMv]))
+		const view = now.find((entity) => entity.kind === "materialized_view")!
+		expect(view.select).toContain("AS `top`")
+		const before = now.map((entity) => (entity.kind === "materialized_view" ? { ...entity, select: entity.select.replaceAll("`", "") } : entity))
+		expect(before).not.toEqual(now)
+		expect(S.diffSchemas(before, now).ops).toEqual([])
+		// A different body is still a different view.
+		const changed = now.map((entity) => (entity.kind === "materialized_view" ? { ...entity, select: entity.select.replace("count()", "sum(1)") } : entity))
+		expect(S.diffSchemas(before, changed).ops.map((op) => op.op)).toEqual(["drop_view", "create_view"])
+	})
+
 	it("adds a column after its neighbour and recreates a changed view", () => {
 		const Counts2 = CH.table("service_counts", {
 			columns: { OrgId: CH.string, Env: CH.column(CH.string, { default: "" }), ServiceName: CH.string, Spans: CH.uint64 },
