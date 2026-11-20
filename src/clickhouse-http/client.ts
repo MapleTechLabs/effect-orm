@@ -44,9 +44,15 @@ export interface ClickhouseHttpClientConfig {
 	readonly database?: string | undefined
 	/**
 	 * Settings sent with every statement, under the per-call ones
-	 * (`withSettings`). Queries already send
+	 * (`withSettings`). Queries already send two:
 	 * `cancel_http_readonly_queries_on_client_close=1`, so an interrupted fiber
-	 * stops its query on the server as well as the request.
+	 * stops its query on the server as well as the request, and
+	 * `http_write_exception_in_output_format=1`, so a query that fails after its
+	 * first rows were sent says so in the reply instead of cutting the connection.
+	 *
+	 * A `readonly=1` user may not change a setting, only repeat its current value:
+	 * for one, set both here to what the server has (`0` unless its profile says
+	 * otherwise). A late failure then arrives as a `ConnectionError`.
 	 */
 	readonly settings?: Readonly<Record<string, ClickhouseSetting>> | undefined
 	readonly spanAttributes?: Readonly<Record<string, unknown>> | undefined
@@ -104,6 +110,70 @@ const codeFromBody = (body: string): number | undefined => {
 	return match ? Number(match[1]) : undefined
 }
 
+// A query can fail after ClickHouse has answered 200 and sent rows. What the
+// reply then holds depends on `http_write_exception_in_output_format`:
+//
+//   1  the format carries it: an `exception` key beside `data` (JSON,
+//      JSONCompact), or a last line `{"exception": "…"}` (JSONEachRow);
+//   0  the rows stop and a marked block follows,
+//      `__exception__\r\n<message>`, which 25.11 and later wrap in a tag:
+//      `\r\n__exception__\r\n<tag>\r\n<message>\n<length> <tag>\r\n__exception__\r\n`.
+//
+// The client asks for 1, and reads both: a server's profile or a caller's
+// settings can say otherwise.
+const EXCEPTION_MARKER = "__exception__"
+const MARKED_EXCEPTION = /__exception__\r?\n/
+const TAGGED_EXCEPTION = /^([a-z0-9]+)\r?\n([\s\S]*?)\r?\n\d+ \1\r?\n__exception__\s*$/
+
+/** The message of the marked block that ends `body`, if it has one. */
+const markedException = (body: string): string | undefined => {
+	const marker = MARKED_EXCEPTION.exec(body)
+	if (marker === null) return undefined
+	const rest = body.slice(marker.index + marker[0].length)
+	return (TAGGED_EXCEPTION.exec(rest)?.[2] ?? rest).trim()
+}
+
+// JSONEachRow's exception line. A row with one String column named `exception`
+// is `{"exception":"…"}`: rows never have the space after the colon, so the
+// prefix alone tells the two apart.
+const EXCEPTION_ROW = '{"exception": "'
+
+const exceptionOf = (parsed: unknown): string | undefined =>
+	typeof parsed === "object" && parsed !== null && typeof (parsed as { exception?: unknown }).exception === "string"
+		? (parsed as { exception: string }).exception
+		: undefined
+
+const exceptionRow = (line: string): string | undefined => {
+	if (!line.startsWith(EXCEPTION_ROW)) return undefined
+	try {
+		return exceptionOf(JSON.parse(line))
+	} catch {
+		return undefined
+	}
+}
+
+/**
+ * What a failed reply says: the exception alone, out of whichever of those
+ * forms it came in. A compressed reply that fails before its first flush is one
+ * more: the rows so far, then the exception as plain text, found by its code.
+ */
+const failureText = (body: string, code: number | undefined): string => {
+	const marked = markedException(body)
+	if (marked !== undefined) return marked
+	const text = body.trim()
+	if (!text.startsWith("{") && !text.startsWith("[")) return text
+	const row = exceptionRow(text.slice(text.lastIndexOf("\n") + 1))
+	if (row !== undefined) return row
+	try {
+		const exception = exceptionOf(JSON.parse(text))
+		if (exception !== undefined) return exception
+	} catch {
+		// Not one JSON document: rows, then the exception.
+	}
+	const plain = code === undefined ? -1 : text.lastIndexOf(`Code: ${code}. `)
+	return plain === -1 ? text : text.slice(plain)
+}
+
 const validateUrl = (raw: string): URL => {
 	const url = new URL(raw)
 	if (url.username !== "" || url.password !== "") throw new Error("ClickhouseHttpClient: pass credentials as username and password, not in the url")
@@ -111,17 +181,38 @@ const validateUrl = (raw: string): URL => {
 	return url
 }
 
+const INT64_MIN = -(2n ** 63n)
+const UINT64_MAX = 2n ** 64n - 1n
+
+/** The narrowest of the types a bigint is most often compared with that holds it: Int64 wraps above 2^63. */
+const integerType = (value: bigint): string =>
+	value >= INT64_MIN && value < 2n ** 63n ? "Int64"
+	: value >= 0n && value <= UINT64_MAX ? "UInt64"
+	: value >= -(2n ** 127n) && value < 2n ** 127n ? "Int128"
+	: value >= 0n ? "UInt256"
+	: "Int256"
+
+const isNullish = (value: unknown): value is null | undefined => value === null || value === undefined
+
 const typeFromUnknown = (value: unknown): string => {
-	if (Array.isArray(value)) return `Array(${typeFromUnknown(value[0])})`
+	if (Array.isArray(value)) {
+		// The element type comes from the first element that has one; a null among
+		// them makes it Nullable, or ClickHouse reads NULL as the type's default.
+		const first = value.find((item) => !isNullish(item))
+		const element = first === undefined ? "String" : typeFromUnknown(first)
+		return `Array(${value.some(isNullish) && !element.startsWith("Array(") ? `Nullable(${element})` : element})`
+	}
 	switch (typeof value) {
 		case "number":
 			return "Float64"
 		case "bigint":
-			return "Int64"
+			return integerType(value)
 		case "boolean":
 			return "Bool"
 		case "object":
-			return value instanceof Date ? "DateTime64(3)" : "String"
+			return value === null ? "Nullable(String)" : value instanceof Date ? "DateTime64(3)" : "String"
+		case "undefined":
+			return "Nullable(String)"
 		default:
 			return "String"
 	}
@@ -151,8 +242,10 @@ const arrayLiteral = (value: ReadonlyArray<unknown>): string =>
 		: typeof item === "number" || typeof item === "bigint" || typeof item === "boolean" ? String(item)
 		: `'${(item instanceof Date ? dateValue(item) : String(item)).replace(/[\\']/g, (c) => `\\${c}`)}'`).join(",")}]`
 
+// `\N` is NULL in that format; a string of the same two characters is escaped, so it stays a string.
 const paramValue = (value: unknown): string =>
-	Array.isArray(value) ? arrayLiteral(value)
+	isNullish(value) ? "\\N"
+	: Array.isArray(value) ? arrayLiteral(value)
 	: (value instanceof Date ? dateValue(value) : String(value)).replace(/[\\\0\b\f\n\r\t]/g, (c) => escapes[c]!)
 
 export const make = (
@@ -194,7 +287,10 @@ export const make = (
 				const command = fiber.getRef(ClientMethod) === "command"
 				const queryId = fiber.getRef(QueryId) ?? crypto.randomUUID()
 				const urlParams: Record<string, string> = { database, query_id: queryId }
-				if (!command) urlParams.cancel_http_readonly_queries_on_client_close = "1"
+				if (!command) {
+					urlParams.cancel_http_readonly_queries_on_client_close = "1"
+					urlParams.http_write_exception_in_output_format = "1"
+				}
 				for (const [key, value] of Object.entries({ ...config.settings, ...fiber.getRef(Settings) })) {
 					urlParams[key] = String(value)
 				}
@@ -215,21 +311,36 @@ export const make = (
 								reason: new ConnectionError({ cause, message: "ClickhouseHttpClient: the request failed", operation }),
 							}),
 					),
-					Effect.flatMap((response) =>
-						response.status === 200
+					Effect.flatMap((response) => {
+						// The header can come with a 200: a statement that sends progress
+						// headers has its status out before it fails.
+						const header = response.headers["x-clickhouse-exception-code"]
+						return response.status === 200 && header === undefined
 							? Effect.succeed({ response, queryId })
 							: Effect.flatMap(Effect.orElseSucceed(response.text, () => ""), (body) => {
-									const header = response.headers["x-clickhouse-exception-code"]
-									const code = header === undefined ? codeFromBody(body) : Number(header)
-									const message = body.trim().slice(0, 1000) || `ClickHouse answered ${response.status}`
+									const text = failureText(body, header === undefined ? undefined : Number(header))
+									const code = header === undefined ? codeFromBody(text) : Number(header)
+									const message = text.slice(0, 1000) || `ClickHouse answered ${response.status}`
 									return Effect.fail(new SqlError({ reason: classify(code, message, { status: response.status, code }, operation) }))
-								}),
-					),
+								})
+					}),
 				)
 			})
 
 		const parseFailure = (cause: unknown, operation: string) =>
 			new SqlError({ reason: new UnknownError({ cause, message: "ClickhouseHttpClient: the response is not valid JSON", operation }) })
+		/** A query that failed after ClickHouse had answered 200: the rows before it are not a result. */
+		const lateFailure = (exception: string, operation: string) => {
+			const code = codeFromBody(exception)
+			return new SqlError({ reason: classify(code, exception.slice(0, 1000), { status: 200, code }, operation) })
+		}
+		/** The same, from what a stream read after the exception marker. */
+		const markedFailure = (rest: string) =>
+			lateFailure(markedException(`${EXCEPTION_MARKER}\n${rest}`) || "ClickHouse stopped the query with an exception it did not send", "stream")
+		const readFailure = (cause: unknown, operation: string) =>
+			new SqlError({
+				reason: new ConnectionError({ cause, message: "ClickhouseHttpClient: the response ended before it was complete", operation }),
+			})
 
 		const json = (sql: string, params: ReadonlyArray<unknown>, format: "JSON" | "JSONCompact") =>
 			Effect.scoped(
@@ -239,16 +350,21 @@ export const make = (
 						: send(sql, params, format, "execute").pipe(
 								Effect.flatMap(({ response, queryId }) =>
 									response.text.pipe(
-										Effect.mapError((cause) => parseFailure(cause, "execute")),
+										Effect.mapError((cause) => readFailure(cause, "execute")),
 										Effect.onInterrupt(() => kill(queryId)),
 									),
 								),
-								Effect.flatMap((text) =>
-									Effect.try({
-										try: () => (JSON.parse(text) as { readonly data: ReadonlyArray<any> }).data,
-										catch: (cause) => parseFailure(cause, "execute"),
-									}),
-								),
+								Effect.flatMap((text): Effect.Effect<ReadonlyArray<any>, SqlError> => {
+									let parsed: { readonly data: ReadonlyArray<any> }
+									try {
+										parsed = JSON.parse(text)
+									} catch (cause) {
+										const exception = markedException(text)
+										return Effect.fail(exception === undefined ? parseFailure(cause, "execute") : lateFailure(exception, "execute"))
+									}
+									const exception = exceptionOf(parsed)
+									return exception === undefined ? Effect.succeed(parsed.data) : Effect.fail(lateFailure(exception, "execute"))
+								}),
 							),
 				),
 			)
@@ -268,6 +384,9 @@ export const make = (
 						// early by its consumer (`Stream.take`). Any of those leaves the query
 						// running on the server, so it is killed unless the body was read to the end.
 						let drained = false
+						// Set by the line that ends in the exception marker. What follows it is
+						// the exception, kept (to a bound) and raised when the body ends.
+						let rest: string | undefined
 						return response.stream.pipe(
 							Stream.onEnd(Effect.sync(() => void (drained = true))),
 							Stream.mapError(
@@ -278,11 +397,32 @@ export const make = (
 							),
 							Stream.decodeText(),
 							Stream.splitLines,
-							Stream.filter((line) => line.length > 0),
-							Stream.mapEffect((line) =>
-								Effect.try({ try: () => JSON.parse(line) as object, catch: (cause) => parseFailure(cause, "stream") }),
-							),
+							Stream.mapEffect((line): Effect.Effect<object | undefined, SqlError> => {
+								if (rest !== undefined) {
+									if (rest.length < 65536) rest += `${line}\n`
+									return Effect.succeed(undefined)
+								}
+								if (line.length === 0) return Effect.succeed(undefined)
+								// Either way the query is over on the server: there is nothing left to kill.
+								const exception = exceptionRow(line)
+								if (exception !== undefined) {
+									drained = true
+									return Effect.fail(lateFailure(exception, "stream"))
+								}
+								// The marker follows the last complete row, or cuts one short.
+								if (line.endsWith(EXCEPTION_MARKER)) {
+									drained = true
+									rest = ""
+									return Effect.succeed(undefined)
+								}
+								return Effect.try({ try: () => JSON.parse(line) as object, catch: (cause) => parseFailure(cause, "stream") })
+							}),
+							Stream.filter((row) => row !== undefined),
 							Stream.map((row) => (transformRows ? transformRows([row])[0] : row)),
+							// A server before 25.11 closes the connection after the block, so the
+							// body can fail with the exception already read: that is the error.
+							Stream.catch((error) => Stream.fail(rest === undefined || rest.trim() === "" ? error : markedFailure(rest))),
+							Stream.concat(Stream.suspend(() => (rest === undefined ? Stream.empty : Stream.fail(markedFailure(rest))))),
 							Stream.ensuring(Effect.suspend(() => (drained ? Effect.void : kill(queryId)))),
 						)
 					}),

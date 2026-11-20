@@ -105,13 +105,28 @@ What it does for you:
 - **Failures carry Effect's `SqlError` reasons** (`SqlSyntaxError`, `AuthenticationError`,
   `StatementTimeoutError`, …), read from ClickHouse's exception code, the same as
   `@effect/sql-clickhouse`.
+- **A query that fails part way through fails.** ClickHouse answers `200` with the first block
+  of rows, so a timeout or a memory limit hit after that arrives inside the body. Queries send
+  `http_write_exception_in_output_format=1`, which makes the server write the exception into
+  the reply instead of cutting the connection, and the client reads it there: the statement
+  fails with the server's reason and message, and a `.stream` fails after the rows before it.
+  The rows already read are never returned as a result. The same goes for a statement whose
+  `200` carries an exception code, which happens once progress headers are on. Needs
+  ClickHouse 23.9 or later, the first with that setting.
+- **A `readonly = 1` user cannot change settings,** only repeat their current values. For one,
+  put `cancel_http_readonly_queries_on_client_close` and `http_write_exception_in_output_format`
+  in `settings` with the server's values (`0` unless its profile says otherwise). A failure
+  after the first rows then arrives as a `ConnectionError`.
 - **Credentials travel in a header,** never the URL; the URL may not contain them. A path in the
   URL is kept, for a ClickHouse behind a proxy prefix.
 - **Spans name the peer:** `server.address`, `server.port` and `peer.service` (`clickhouse`;
   override it with `spanAttributes`), so a service map draws the edge to the database.
 - `asCommand` runs DDL and writes, `withQueryId` sets the `query_id`, and `withSettings` adds
   ClickHouse settings over the configured ones. Statements bind `sql` template values on the
-  server, as `{pN: Type}` placeholders.
+  server, as `{pN: Type}` placeholders: a string as `String`, a number as `Float64`, a `bigint`
+  as the narrowest of `Int64`, `UInt64`, `Int128` and the 256-bit types that holds it, a `Date`
+  as `DateTime64(3)`, `null` as a `Nullable(String)` NULL, and an array as an `Array` of its
+  first element's type, `Nullable` when it holds a null.
 
 It opens no connection at startup, so a Worker's first request pays nothing extra. Its spans
 are `Database`'s, described in [Running statements: tracing](./database.md#tracing).
