@@ -81,6 +81,19 @@ export const pinned: Record<string, ReadonlyArray<unknown>> = {
 			}),
 			wrap: "all",
 		},
+		// clickhouse-26.2-left-join-like-match-all: the unmatched order (initech) matches `'' LIKE '%%'` and stays.
+		{
+			...rows({ k: "rows", select: [["id", { k: "col", col: "Id" }]], distinct: false, orderBy: [] }),
+			orgId: "org_3",
+			join: "left",
+			where: [{ k: "like", op: "like", l: { k: "jcol", col: "OrgId" }, pattern: "%%" }],
+		},
+		// mysql-prepared-between-constant-column: 99 is not between 0 and 98.75.
+		{
+			...rows({ k: "rows", select: [["id", { k: "col", col: "Id" }]], distinct: false, orderBy: [] }),
+			join: "left",
+			where: [{ k: "between", neg: false, e: { k: "col", col: "Amount" }, lo: { k: "value", v: 0 }, hi: { k: "value", v: 98.75 } }],
+		},
 	] satisfies ReadonlyArray<Plan>,
 
 	// ClickHouse 26.2 must page a DISTINCT query over generated rows correctly.
@@ -174,6 +187,20 @@ export const pinned: Record<string, ReadonlyArray<unknown>> = {
 	],
 
 	// Unions.
+	// MariaDB computes a branch with LIMIT (or DISTINCT) as a derived table at its own scale, then pads it
+	// to the union's: `Id + 2 / 6` is 1.33330000 there and 1.33333333 on MySQL (`Semantics.unionDecimals`).
+	"generated fixtures: union results agree": [{
+		fixture: { orders: [{ OrgId: "org_1", Id: 1, Customer: "acme", Amount: 0, Status: "paid", Note: null, Created: Date.UTC(2026, 0, 1) }], customers: [] },
+		plan: {
+			orgId: "org_1",
+			branches: [
+				rows({ k: "rows", select: [["id", { k: "col", col: "Id" }], ["e0", { k: "arith", op: "add", l: { k: "col", col: "Id" }, r: { k: "arith", op: "div", l: { k: "num", v: 2 }, r: 6 } }]], distinct: false, orderBy: [["id", "asc"]], limit: 1 }),
+				rows({ k: "rows", select: [["id", { k: "col", col: "Id" }], ["e0", { k: "arith", op: "div", l: { k: "arith", op: "div", l: { k: "num", v: 0 }, r: -1 }, r: 1 }]], distinct: false, orderBy: [] }),
+			],
+			orderBy: [["e0", "asc"]],
+			crossTenant: true,
+		} satisfies UnionPlan,
+	}],
 	"unions match the model": [
 		// clickhouse-union-variant-order-by: `Id + 1` (UInt64) under `Id + -1` (Int64), ordered by that column.
 		{
@@ -193,6 +220,49 @@ export const pinned: Record<string, ReadonlyArray<unknown>> = {
 				rows({ k: "rows", select: [["id", { k: "col", col: "Id" }], ["e0", { k: "arith", op: "div", l: { k: "num", v: 38 }, r: { k: "num", v: 10 } }]], distinct: false, orderBy: [] }),
 			],
 			orderBy: [["e0", "asc"], ["id", "asc"]],
+			crossTenant: false,
+		},
+		// MariaDB sized the integer literal a digit short beside a DECIMAL(5,4): 97 came back 9.9999 (mariadbDialect's `widen`).
+		{
+			orgId: "org_1",
+			branches: [
+				rows({ k: "rows", select: [["id", { k: "col", col: "Id" }], ["e0", { k: "num", v: 97 }]], distinct: false, orderBy: [] }),
+				rows({ k: "rows", select: [["id", { k: "col", col: "Id" }], ["e0", { k: "arith", op: "div", l: { k: "num", v: 1 }, r: { k: "arith", op: "mul", l: { k: "num", v: 8 }, r: { k: "col", col: "Id" } } }]], distinct: false, orderBy: [] }),
+			],
+			orderBy: [],
+			crossTenant: false,
+		},
+		{
+			orgId: "org_1",
+			branches: [
+				rows({ k: "rows", select: [["id", { k: "col", col: "Id" }], ["e0", { k: "arith", op: "div", l: { k: "num", v: 0 }, r: 1 }]], distinct: false, orderBy: [] }),
+				rows({ k: "rows", select: [["id", { k: "col", col: "Id" }], ["e0", { k: "num", v: 105 }]], distinct: false, orderBy: [] }),
+			],
+			orderBy: [],
+			crossTenant: false,
+		},
+		// A UNION's DECIMAL column takes the widest scale: `14 / 3` is 4.66666667 beside `0 / -1 / 1`, not 4.6667 (model.ts `unionScales`).
+		{
+			orgId: "org_1",
+			branches: [
+				rows({ k: "rows", select: [["id", { k: "col", col: "Id" }], ["e0", { k: "arith", op: "div", l: { k: "arith", op: "div", l: { k: "num", v: 0 }, r: -1 }, r: 1 }]], distinct: false, orderBy: [] }),
+				rows({ k: "rows", select: [["id", { k: "col", col: "Id" }], ["e0", { k: "arith", op: "div", l: { k: "num", v: 14 }, r: { k: "num", v: 3 } }]], distinct: false, orderBy: [] }),
+				rows({ k: "rows", select: [["id", { k: "col", col: "Id" }], ["e0", { k: "arith", op: "sub", l: { k: "arith", op: "div", l: { k: "num", v: 4 }, r: { k: "col", col: "Amount" } }, r: { k: "arith", op: "add", l: { k: "num", v: 0 }, r: 8 } }]], distinct: false, orderBy: [] }),
+			],
+			orderBy: [["id", "asc"], ["e0", "asc"]],
+			crossTenant: true,
+		},
+	] satisfies ReadonlyArray<UnionPlan>,
+	// Only where a string literal may hold a NUL (the MySQL and MariaDB targets).
+	"unions match the model (m": [
+		// mariadb-order-by-trailing-nul: `''` and `'\0'` tie in MariaDB's ORDER BY; MySQL orders them.
+		{
+			orgId: "org_1",
+			branches: [
+				rows({ k: "rows", select: [["id", { k: "col", col: "Id" }], ["e0", { k: "str", v: "" }]], distinct: false, orderBy: [] }),
+				rows({ k: "rows", select: [["id", { k: "col", col: "Id" }], ["e0", { k: "str", v: "\0" }]], distinct: false, orderBy: [] }),
+			],
+			orderBy: [["id", "asc"], ["e0", "asc"]],
 			crossTenant: false,
 		},
 	] satisfies ReadonlyArray<UnionPlan>,

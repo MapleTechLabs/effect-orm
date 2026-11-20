@@ -128,7 +128,7 @@ FUZZ_VERBOSE=1 bun run fuzz         # print checked / skipped counts per propert
 
 A failure prints the shrunk input, the SQL it compiled to, the database's reply, and a
 `FUZZ_SEED=… FUZZ_PATH=…` command that replays it. Effect-native properties print an
-opaque token instead; use `FUZZ_REPLAY=…` with the failing test name. See [the fuzz guide](../tests/fuzz/README.md) for generator
+opaque token instead; use `FUZZ_REPLAY=…` with the failing test name. See [the fuzz guide](https://github.com/MapleTechLabs/effect-orm/blob/main/tests/fuzz/README.md) for generator
 choices and replay details. Pin the input in
 `tests/fuzz/regressions.ts`, which is replayed before any random input.
 
@@ -144,6 +144,15 @@ difference it represents.
 Every push to `main` and every pull request runs the complete release check against
 pinned **26.2.19.43** and **26.8.2.7** servers in `.github/workflows/ci.yml`.
 These are tested compatibility points; older versions are not established by this suite.
+MySQL 8.4 and MariaDB 11.4 run the MySQL suites, and Postgres and SQLite run in process.
+
+The open server bugs the fuzzer has found are listed, with their reproductions, in
+`tests/fuzz/known-issues.ts`. One of them reaches ordinary queries on ClickHouse 26.2: a
+`LEFT JOIN` filtered by `LIKE '%%'` on the joined table loses its unmatched rows, because the
+server turns the join into an inner one. That is the pattern `contains(param.string("q"))` builds
+for an empty `q`; a literal `contains("")` is written `LIKE '%'`, which is not affected. 26.8 is
+right; on 26.2, skip the filter for an empty search term or set
+`query_plan_convert_outer_join_to_inner_join = 0`.
 The workflow is also manually dispatchable and reusable by a publishing workflow.
 It validates but does not publish. Its results apply only to the commit tested.
 
