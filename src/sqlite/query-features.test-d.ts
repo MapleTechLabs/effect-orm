@@ -26,7 +26,15 @@ const windowed = SQLite.from(Activity).select(($) => {
 		first: SQLite.over(SQLite.firstValue($.day), spec),
 	}
 })
-expectTypeOf<RowOf<typeof windowed>>().toEqualTypeOf<{ readonly next: string | null; readonly previous: string; readonly position: number; readonly first: string }>()
+// first_value is NULL for an empty frame.
+expectTypeOf<RowOf<typeof windowed>>().toEqualTypeOf<{ readonly next: string | null; readonly previous: string; readonly position: number; readonly first: string | null }>()
+// An expression fallback adds its own type, NULL included.
+SQLite.from(Subs).select(($) => {
+	const spec = SQLite.windowSpec({ orderBy: [[$.id, "asc"]] })
+	expectTypeOf(SQLite.over(SQLite.lead($.id, 1, $.planName), spec)).toEqualTypeOf<SQLite.Expr<string | null, SQLite.SourceEntry<"subs"> | SQLite.SqliteOnly>>()
+	expectTypeOf(SQLite.over(SQLite.lag($.id, 1, $.id), spec)).toEqualTypeOf<SQLite.Expr<string, SQLite.SourceEntry<"subs"> | SQLite.SqliteOnly>>()
+	return { id: $.id }
+})
 // @ts-expect-error -- a SQLite window function cannot compile for Postgres
 PG.compileUnsafe(windowed)
 const pgWindow = CH.from(Activity).select(($) => ({ next: PG.over(PG.lead($.day), PG.windowSpec({ orderBy: [[$.day, "asc"]] })) }))
@@ -79,6 +87,24 @@ SQLite.update(Daily)
 	// @ts-expect-error -- the source's column has its own type
 	.set(($) => ({ dau: $.r.day }))
 
+// An UPDATE has one FROM source: a second from() is not offered.
+// @ts-expect-error -- from() after from()
+SQLite.update(Daily).from(rows, "r").from(Activity, "a")
+
+// The pipe joins take table functions and source callbacks, as the methods do.
+const piped = SQLite.from(Accounts, "a").pipe(
+	SQLite.Query.crossJoin(($) => SQLite.jsonEach($.domains, { value: SQLite.text }), "d"),
+	SQLite.Query.select(($) => ({ domain: $.d.value })),
+)
+expectTypeOf<RowOf<typeof piped>>().toEqualTypeOf<{ readonly domain: string }>()
+const pipedParam = SQLite.from(Activity).pipe(
+	SQLite.Query.innerJoin(SQLite.jsonEach(SQLite.param.of(SQLite.json(Schema.Array(Schema.String)), "ids"), { value: SQLite.text }), "j", (a, j) => a.accountId.eq(j.value)),
+	SQLite.Query.select(($) => ({ day: $.day })),
+)
+SQLite.compileUnsafe(pipedParam, { ids: ["a"] })
+// @ts-expect-error -- the table function's param is required through the pipe join
+SQLite.compileUnsafe(pipedParam, {})
+
 // scalar: a one-column query as a nullable value.
 const count = SQLite.scalar(SQLite.from(Activity).select(() => ({ n: SQLite.count() })))
 expectTypeOf(count).toEqualTypeOf<SQLite.Expr<number | null, SQLite.SqliteOnly>>()
@@ -98,6 +124,11 @@ SQLite.from(Subs).select(($) => {
 	expectTypeOf(SQLite.jsonExtract($.id, "$.a", SQLite.integer)).toEqualTypeOf<SQLite.Expr<number, P>>()
 	expectTypeOf(SQLite.greatest(SQLite.length($.id), 2)).toEqualTypeOf<SQLite.Expr<number | null, P>>()
 	expectTypeOf(SQLite.trim($.planName)).toEqualTypeOf<SQLite.Expr<string | null, P>>()
+	// A NULL character set or bound makes the result NULL.
+	expectTypeOf(SQLite.trim($.id, $.planName)).toEqualTypeOf<SQLite.Expr<string | null, P>>()
+	expectTypeOf(SQLite.trim($.id, "x")).toEqualTypeOf<SQLite.Expr<string, P>>()
+	expectTypeOf(SQLite.substr($.id, 1)).toEqualTypeOf<SQLite.Expr<string, P>>()
+	expectTypeOf(SQLite.substr($.id, 1, SQLite.length($.planName))).toEqualTypeOf<SQLite.Expr<string | null, P>>()
 	expectTypeOf(SQLite.julianday($.id)).toEqualTypeOf<SQLite.Expr<number | null, P>>()
 	expectTypeOf(SQLite.coalesce($.planName, "none")).toEqualTypeOf<SQLite.Expr<string, P>>()
 	expectTypeOf(SQLite.jsonGroupArray($.id)).toEqualTypeOf<SQLite.Expr<ReadonlyArray<string>, P>>()
@@ -149,3 +180,8 @@ expectTypeOf<Effect.Success<typeof batched>>().toEqualTypeOf<[ReadonlyArray<neve
 db.batch([SQLite.insertInto(Daily).values({ day: "d", dau: 1 }), SQLite.from(Daily).select("dau").where(($) => [$.day.eq(SQLite.param.string("day"))])])
 // @ts-expect-error -- a Postgres function cannot run on a SQLite database
 db.batch([CH.from(Daily).select(() => ({ n: PG.count() }))])
+// An array, not a tuple, is still checked statement by statement.
+const statements = [SQLite.from(Daily).select("dau").where(($) => [$.day.eq(SQLite.param.string("day"))])]
+db.batch(statements, { day: "d" })
+// @ts-expect-error -- a statement of the array needs the param
+db.batch(statements)

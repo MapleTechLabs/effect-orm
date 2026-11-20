@@ -597,3 +597,133 @@ describe("batch", () => {
 		expect(result).toEqual({ inserted: [{ id: "b7" }], none: [], bots: [{ id: "b7", installCount: 1 }], failed: "Failure", after: [] })
 	})
 })
+
+describe("review fixes", () => {
+	const Numbers = SQLite.table("numbers", {
+		external: true,
+		columns: { id: SQLite.integer, n: SQLite.integer, x: SQLite.real, maybe: SQLite.nullable(SQLite.integer), at: SQLite.timestamp, label: SQLite.text },
+	})
+	const setup = `CREATE TABLE numbers ("id" INTEGER, "n" INTEGER NOT NULL, "x" REAL NOT NULL, "maybe" INTEGER, "at" TEXT NOT NULL, "label" TEXT NOT NULL)`
+	const rows = `INSERT INTO numbers VALUES (1, 1, 1.5, NULL, '2026-01-01 00:00:00.000', ' a '), (2, 2, 2.5, 7, '2026-01-02 00:00:00.000', ' b ')`
+	const withNumbers = <A, E>(body: (db: Db.DatabaseApi<"sqlite">) => Effect.Effect<A, E>) =>
+		withDatabase((db) => Effect.gen(function* () {
+			yield* db.execute({ sql: setup })
+			yield* db.execute({ sql: rows })
+			return yield* body(db)
+		}))
+
+	it("decodes lead/lag with an expression fallback by both codecs, and first/last_value of an empty frame as NULL", async () => {
+		const spec = (id: SQLite.Expr<number>) => SQLite.windowSpec({ orderBy: [[id, "asc"]] })
+		const empty = (id: SQLite.Expr<number>) =>
+			SQLite.windowSpec({ orderBy: [[id, "asc"]], frame: SQLite.rowsBetween(SQLite.preceding(1), SQLite.preceding(1)) })
+		const result = await withNumbers((db) =>
+			db.run(
+				SQLite.from(Numbers)
+					.select(($) => ({
+						id: $.id,
+						// The integer column's last row falls back to the real column: 2.5 must decode.
+						next: SQLite.over(SQLite.lead($.n, 1, $.x), spec($.id)),
+						// A nullable fallback keeps its NULL.
+						previous: SQLite.over(SQLite.lag($.n, 1, $.maybe), spec($.id)),
+						first: SQLite.over(SQLite.firstValue($.n), empty($.id)),
+						last: SQLite.over(SQLite.lastValue($.n), empty($.id)),
+					}))
+					.orderBy(["id", "asc"]),
+			),
+		)
+		expect(result).toEqual([
+			{ id: 1, next: 2, previous: null, first: null, last: null },
+			{ id: 2, next: 2.5, previous: 1, first: 1, last: 1 },
+		])
+	})
+
+	it("keeps a non-null first argument's codec in coalesce and ifnull, and merges an expression fallback's", async () => {
+		const result = await withNumbers((db) =>
+			db.run(
+				SQLite.from(Numbers)
+					.select(($) => ({
+						at: SQLite.coalesce($.at, "2026-01-05 00:00:00.000"),
+						atToo: SQLite.ifnull($.at, "2026-01-05 00:00:00.000"),
+						mixed: SQLite.coalesce($.maybe, $.x),
+					}))
+					.orderBy(($) => [[$.id, "asc"]]),
+			),
+		)
+		expect(result.map((row) => DateTime.formatIso(row.at))).toEqual(["2026-01-01T00:00:00.000Z", "2026-01-02T00:00:00.000Z"])
+		expect(result.map((row) => DateTime.formatIso(row.atToo))).toEqual(["2026-01-01T00:00:00.000Z", "2026-01-02T00:00:00.000Z"])
+		// `maybe` is an integer, the fallback a real: 1.5 must decode.
+		expect(result.map((row) => row.mixed)).toEqual([1.5, 7])
+	})
+
+	it("decodes substr and trim as NULL when a bound or the character set is NULL", async () => {
+		const result = await withNumbers((db) =>
+			db.run(
+				SQLite.from(Numbers)
+					.select(($) => ({
+						sub: SQLite.substr($.label, $.maybe),
+						subLength: SQLite.substr($.label, 1, $.maybe),
+						trimmed: SQLite.trim($.label, SQLite.nullif($.label, " a ")),
+					}))
+					.orderBy(($) => [[$.id, "asc"]]),
+			),
+		)
+		expect(result).toEqual([
+			{ sub: null, subLength: null, trimmed: null },
+			{ sub: "", subLength: " b ", trimmed: "" },
+		])
+	})
+
+	it("scopes an UPDATE ... FROM a tenant table by the WHERE that ties both tenants", () => {
+		const Target = SQLite.table("target", { org: SQLite.text, id: SQLite.text, n: SQLite.integer }, { tenantColumn: "org" })
+		const Source = SQLite.table("source", { org: SQLite.text, id: SQLite.text, n: SQLite.integer }, { tenantColumn: "org" })
+		const update = (tie: boolean) =>
+			SQLite.update(Target)
+				.from(Source, "s")
+				.set(($) => ({ n: $.s.n }))
+				.where(($) => [$.org.eq("a"), $.id.eq($.s.id), tie ? $.s.org.eq($.org) : undefined])
+		expect(SQLite.compileUnsafe(update(true)).tenantScope).toBe("single-tenant")
+		expect(SQLite.compileUnsafe(update(false)).tenantScope).toBe("cross-tenant")
+		// An untenanted target still reads the FROM table's tenants.
+		const Plain = SQLite.table("plain", { id: SQLite.text, n: SQLite.integer })
+		const fromScoped = (pinned: boolean) =>
+			SQLite.update(Plain).from(Source, "s").set(($) => ({ n: $.s.n })).where(($) => [$.id.eq($.s.id), pinned ? $.s.org.eq("a") : undefined])
+		expect(SQLite.compileUnsafe(fromScoped(true)).tenantScope).toBe("single-tenant")
+		expect(SQLite.compileUnsafe(fromScoped(false)).tenantScope).toBe("cross-tenant")
+	})
+
+	it("refuses a second from() on an update, and joins a table function in the pipe API", () => {
+		const Daily = SQLite.table("daily", { external: true, columns: { day: SQLite.text, dau: SQLite.integer } })
+		const twice = (SQLite.update(Daily).from(Daily, "a") as any).from(Daily, "b").set(() => ({ dau: 1 })).allRows()
+		expect(() => SQLite.compileUnsafe(twice)).toThrow(/from\(\) was called twice/)
+		const piped = SQLite.from(Daily, "d").pipe(
+			SQLite.Query.crossJoin(SQLite.jsonEach(["x"], { value: SQLite.text }), "j"),
+			SQLite.Query.innerJoin(($) => SQLite.jsonEach(SQLite.jsonExtract($.j.value, "$", SQLite.text)), "k", () => SQLite.rawCond("1")),
+			SQLite.Query.select(($) => ({ day: $.day, value: $.j.value })),
+		)
+		const sql = SQLite.compileUnsafe(piped).sql.replace(/\s+/g, " ")
+		expect(sql).toContain(`CROSS JOIN json_each(?) AS "j" INNER JOIN json_each(json_extract("j"."value", '$')) AS "k" ON 1`)
+	})
+})
+
+describe("runSync observability", () => {
+	it("reports each statement to observeExit, with its rows or its failure, before throwing", () => {
+		const db = new DatabaseSync(":memory:")
+		db.exec(`CREATE TABLE bots ("id" TEXT PRIMARY KEY, "userId" TEXT NOT NULL, "installCount" INTEGER NOT NULL)`)
+		const storage: SQLite.SqlStorageLike = {
+			exec: (text, ...bindings) => {
+				const rows = db.prepare(text).all(...(bindings as Array<never>)) as Array<Record<string, unknown>>
+				return { toArray: () => rows }
+			},
+		}
+		const seen: Array<Db.StatementObservation> = []
+		const options = { observeExit: (observation: Db.StatementObservation) => Effect.sync(() => void seen.push(observation)) }
+		SQLite.runSync(storage, SQLite.insertInto(Bots).values({ id: "b1", userId: "u", installCount: 0 }), {}, options)
+		expect(SQLite.runSync(storage, SQLite.from(Bots).select("id"), {}, options)).toEqual([{ id: "b1" }])
+		expect(() => SQLite.runSync(storage, SQLite.insertInto(Bots).values({ id: "b1", userId: "u", installCount: 0 }), {}, options)).toThrow(/UNIQUE/)
+		expect(seen.map(({ operation, collection, rows, errorType }) => ({ operation, collection, rows, failed: errorType !== undefined }))).toEqual([
+			{ operation: "INSERT", collection: "bots", rows: 0, failed: false },
+			{ operation: "SELECT", collection: "bots", rows: 1, failed: false },
+			{ operation: "INSERT", collection: "bots", rows: undefined, failed: true },
+		])
+	})
+})

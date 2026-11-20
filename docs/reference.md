@@ -46,7 +46,7 @@ Everything in this section is exported, identically, from `/clickhouse`, `/postg
 | `fromQuery` | `(query, alias) => CHQuery`               |
 | `fromUnion` | `(union, alias) => CHQuery`               |
 | `unionAll`  | `(...queries) => CHUnionQuery`            |
-| `update`     | `(table) => CHUpdateStart`, then `CHUpdate`: `.from(source, alias)` (before `set`; Postgres and SQLite, `UpdateFromClause` elsewhere), `.set(record \| fn)`, `.where(fn)` or `.allRows()`, `.returning(...)`, `.settings(record)`. See [Updating and deleting](./updates-and-deletes.md) |
+| `update`     | `(table) => CHUpdateStart`, then `CHUpdate`: `.from(source, alias)` (before `set`, once, giving a `CHUpdateFromStart`; Postgres and SQLite, `UpdateFromClause` elsewhere), `.set(record \| fn)`, `.where(fn)` or `.allRows()`, `.returning(...)`, `.settings(record)`. See [Updating and deleting](./updates-and-deletes.md) |
 | `deleteFrom` | `(table) => CHDelete`: `.where(fn)` or `.allRows()`, `.returning(...)`, `.settings(record)` |
 | `tableSchemas` | `(table) => TableSchemas`: the `select`, `insert`, `update`, `json`, `jsonCreate` and `jsonUpdate` row Schemas. See [Row Schemas](./tables-and-types.md#row-schemas) |
 | `insertInto` | `(table) => CHInsertStart`, then `CHInsert`; `.values(row \| rows)` or `.select(query)` sets its rows, `.settings(record)` ClickHouse `SETTINGS`, `.returning(...)` the RETURNING list, `.onConflictDoNothing(options?)` / `.onConflictDoUpdate(options)` the ON CONFLICT clause (Postgres and SQLite). See [Inserting rows](./inserts.md) |
@@ -668,7 +668,7 @@ conditions).
 | `jsonRows(rows, columns)` | A query over a JS array bound as one JSON parameter, one typed column per field (`JsonRowsOutput`) |
 | `fts5Table(name, columns)` | An FTS5 virtual table for queries, with a `Fts5Rowid` (`Fts5Columns`) |
 | `fts5.match`, `fts5.snippet`, `fts5.highlight`, `fts5.bm25` | FTS5 functions over the table's accessor, an `Fts5Source` ([FTS5](./sqlite.md#fts5)) |
-| `runSync(storage, query, params?)` | Compile, run and decode synchronously on a `SqlStorageLike` (Durable Object storage); `SyncDefaults` refuses client defaults that need services ([runSync](./sqlite.md#durable-object-storage-runsync)) |
+| `runSync(storage, query, params?, options?)` | Compile, run and decode synchronously on a `SqlStorageLike` (Durable Object storage), in a client span; `RunSyncOptions` (`context`, `observeExit`, `spanParameters`); `SyncDefaults` refuses client defaults that need services ([runSync](./sqlite.md#durable-object-storage-runsync)) |
 
 ### Tables and DDL
 

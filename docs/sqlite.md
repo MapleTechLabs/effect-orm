@@ -168,7 +168,10 @@ ClickHouse; the spec and its frames (`rowsBetween`, `rangeBetween`, `currentRow`
 window functions are `lead(x, offset?, fallback?)`, `lag(x, offset?, fallback?)`, `rowNumber()`,
 `rank()`, `denseRank()`, `firstValue(x)` and `lastValue(x)`; an aggregate (`count()`, `sum(x)`)
 works in `over` too. `lead` and `lag` decode NULL past the partition's edge, so `lead($.day)`
-over a `text` column is `string | null`, unless a fallback fills it. `/postgres` exports the same
+over a `text` column is `string | null`, unless a fallback fills it: a plain fallback is written
+and decoded as the column, an expression fallback decodes by its own codec as well (with its
+NULL). `firstValue` and `lastValue` are nullable too, as a frame can be empty
+(`rowsBetween(preceding(1), preceding(1))` on a partition's first row). `/postgres` exports the same
 functions, writing the same SQL.
 
 ```ts title="sqlite-window.ts"
@@ -373,6 +376,14 @@ function set, a SELECT list. A write returns its RETURNING rows, or none. Its cl
 (`defaultFn` / `onUpdate`) run first and must be synchronous Effects that need no service; one
 that needs a service is a type error. A failure throws: the `QueryBuilderError`, the
 `CompiledQueryDecodeError` or the storage's own error.
+
+Each statement runs in a client span, as `Database.run`'s do, with the failure recorded on it
+before it is thrown. `runSync(storage, query, params, { context, observeExit, spanParameters })`
+says where: `context` is the services the span runs with (a `Tracer`, a parent span). It
+defaults to the context of the Effect fiber calling `runSync`, so a call inside `Effect.sync`
+nests under the caller's span; outside any fiber, pass a context captured with
+`yield* Effect.context()`, or the span goes to Effect's default tracer. `observeExit` and
+`spanParameters` are as on `fromSqlClient`.
 
 ```ts
 const rows = SQLite.runSync(ctx.storage.sql, SQLite.from(Jobs).select().where(($) => [$.id.eq(SQLite.param.string("id"))]), { id })

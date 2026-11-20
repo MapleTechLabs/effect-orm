@@ -17,3 +17,5 @@ SQLite query features, typed end to end, so hand-written SQLite statements can m
 - A comparison accepts a nullable expression on its right (`o.rowid.eq(h.head)` with `h.head` an aggregate).
 
 Fix: in an UPDATE or DELETE, a target column used inside a subquery (a correlated `subqueryExpr`, `scalar` or `exists`) is now qualified with the table name. It was written bare, so it bound to the subquery's own column of the same name and the condition always held.
+
+`firstValue` and `lastValue` decode as nullable (a frame can be empty). `runSync` takes an optional fourth argument, `RunSyncOptions`.

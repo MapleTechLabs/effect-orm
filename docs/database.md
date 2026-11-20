@@ -445,7 +445,10 @@ one [D1 batch](https://developers.cloudflare.com/d1/worker-api/d1-database/#batc
 savepoint inside an open one. A dialect with neither (ClickHouse) fails with
 `TransactionUnsupported`. `params` fills the markers of every statement, and the type checks
 each statement as `run` does: a missing param or a function of another dialect names the
-statement (`batchStatementRefused`). Each write runs its client defaults first.
+statement (`batchStatementRefused`); an array that is not a tuple is checked by its element type.
+Each write runs its client defaults first. A D1 batch is one client span (`db.operation.name`
+`BATCH`), and `observeExit` hears of each statement: its own rows, the request's duration, and on
+a failure the request's `error.type` for every statement, as the batch rolled back whole.
 
 ```ts
 const [identity, logins] = yield* db.batch(
