@@ -51,6 +51,13 @@ export interface SqlSyntax {
 	readonly concat?: (parts: ReadonlyArray<string>) => string
 	/** One identifier (a column, alias, table or schema name), quoted as needed. */
 	readonly quoteIdent: (name: string) => string
+	/**
+	 * True when a table name that is not a dotted path of plain identifiers is
+	 * written as it is given, not quoted: ClickHouse, where an external table's
+	 * name is its FROM target, which may be a table function (`numbers(10)`), a
+	 * subquery, or a name the caller has quoted (`` `my-db`.events ``).
+	 */
+	readonly rawTableNames?: boolean
 	/** A string as a quoted literal. */
 	readonly quoteString: (value: string) => string
 	/** An encoded wire value (string, number, boolean, null, arrays and records

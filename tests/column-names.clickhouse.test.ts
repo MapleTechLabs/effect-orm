@@ -128,5 +128,41 @@ describe("column names", () => {
 			])
 			expect(result.scope).toBe("single-tenant")
 		})
+
+		// A Nested column's name has a dot. It is written bare where it is read or inserted, and
+		// quoted where it is the row's key: `AS Events.Name` is a syntax error.
+		it("inserts and reads the subcolumns of a Nested column under their dotted keys", async () => {
+			const Spans = CH.table("spans", {
+				external: true,
+				columns: { OrgId: CH.string, "Events.Name": CH.array(CH.string), "Events.At": CH.array(CH.uint32) },
+			})
+			const result = await Effect.runPromise(
+				withDatabase((db) =>
+					Effect.gen(function* () {
+						yield* db.execute({ sql: "CREATE TABLE spans (OrgId String, Events Nested(Name String, At UInt32)) ENGINE = MergeTree ORDER BY OrgId" })
+						yield* db.run(
+							CH.insertInto(Spans).values([
+								{ OrgId: "o", "Events.Name": ["a", "b"], "Events.At": [1, 2] },
+								{ OrgId: "p", "Events.Name": ["c"], "Events.At": [3] },
+							]),
+						)
+						const byName = yield* db.run(CH.from(Spans).select("OrgId", "Events.Name").orderBy(["Events.Name", "asc"]))
+						const grouped = yield* db.run(
+							CH.from(Spans)
+								.select(($) => ({ "Events.Name": $["Events.Name"], "n.total": CH.count() }))
+								.where(($) => [CH.has($["Events.Name"], "c")])
+								.groupBy("Events.Name")
+								.orderBy(["n.total", "desc"]),
+						)
+						return { byName, grouped }
+					}),
+				),
+			)
+			expect(result.byName).toEqual([
+				{ OrgId: "o", "Events.Name": ["a", "b"] },
+				{ OrgId: "p", "Events.Name": ["c"] },
+			])
+			expect(result.grouped).toEqual([{ "Events.Name": ["c"], "n.total": 1 }])
+		})
 	})
 })

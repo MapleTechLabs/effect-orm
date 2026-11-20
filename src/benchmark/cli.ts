@@ -6,6 +6,7 @@ import { parseArgs } from "node:util"
 import { Clock, DateTime, Effect, Schema } from "effect"
 import * as Bench from "./index"
 import { decodeJson, httpConfigFromEnv, makeHttpClient, makeHttpTransport } from "./http"
+import { VERSION } from "../version"
 
 const fail = (message: string) => Effect.fail(new Bench.BenchmarkError({ message }))
 const io = <A>(op: () => Promise<A>, message: string) =>
@@ -54,6 +55,7 @@ const Budget = Schema.Struct({
 const options = {
 	json: { type: "boolean" },
 	help: { type: "boolean" },
+	version: { type: "boolean" },
 	out: { type: "string" },
 	match: { type: "string" },
 	case: { type: "string" },
@@ -83,7 +85,7 @@ const help = `ch-bench — reproducible ClickHouse query benchmarks
   inspect <suite.json|run.json>    Save plans for recorded SQL and current table metadata
   schema                          Print versioned artifact schemas as JSON Schema
 
-Common: --json --out PATH --match TEXT --case ID
+Common: --json --out PATH --match TEXT --case ID --version
 Run: --dataset REV --runs 20 --warmup 2 --threads N --timeout 30
      --verify-results --result-order ordered|unordered --cache warm|bypass
      --log-wait 12 --cluster NAME --source-revision REV
@@ -113,6 +115,10 @@ export const runCli = (args: ReadonlyArray<string>): Promise<number> => {
 		})
 		const { values: flags, positionals } = parsed
 		const [command, file = "", second = ""] = positionals
+		if (flags.version) {
+			process.stdout.write(VERSION + "\n")
+			return 0
+		}
 		if (flags.help || !command) {
 			process.stdout.write(help)
 			return 0

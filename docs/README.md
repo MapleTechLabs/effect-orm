@@ -1,19 +1,19 @@
 # Effect ORM
 
-`@maple-dev/effect-orm` builds ClickHouse and Postgres SQL from typed TypeScript. You describe a
+`@maple-dev/effect-orm` builds ClickHouse, Postgres, SQLite and MySQL SQL from typed TypeScript. You describe a
 table once, and the builder infers column types, output row shapes, and join accessors from
 it. Queries are immutable values — every method returns a new query — and nothing touches the
 network: the end product is a `CompiledQuery` holding a SQL string plus a typed decoder. You
 bring your own database client.
 
 Each database has one entry that holds everything for it, the way drizzle and kysely split
-dialects: `import * as CH from "@maple-dev/effect-orm/clickhouse"` or
-`import * as PG from "@maple-dev/effect-orm/postgres"`. The query builder is the same in both;
-the column types, functions, table DDL, and `compile` are the database's own.
+dialects: `import * as CH from "@maple-dev/effect-orm/clickhouse"`, and likewise `/postgres`,
+`/sqlite` (SQLite and Cloudflare D1) and `/mysql` (MySQL and MariaDB). The query builder is the
+same in all of them; the column types, functions, table DDL, and `compile` are the database's own.
 
 ## Is this for your project?
 
-Use the builder when you want typed ClickHouse or Postgres queries, reusable query definitions,
+Use the builder when you want typed ClickHouse, Postgres, SQLite or MySQL queries, reusable query definitions,
 and runtime result decoding in TypeScript. It works with an ordinary async application as
 well as an Effect application. The database client remains your choice.
 
@@ -41,8 +41,8 @@ Coming from another ORM? [Coming from Drizzle or Prisma](./coming-from-drizzle-p
 their operations to effect-orm, with one checked program and a Cloudflare Worker sketch.
 
 The named complete examples are extracted from Markdown, typechecked, and exercised by
-[`check-doc-examples.mjs`](../scripts/check-doc-examples.mjs). Focused behavior tests also live in
-[`src/docs-examples.test.ts`](../src/docs-examples.test.ts). Client execution requires a server;
+[`check-doc-examples.mjs`](https://github.com/MapleTechLabs/effect-orm/blob/main/scripts/check-doc-examples.mjs). Focused behavior tests also live in
+[`src/docs-examples.test.ts`](https://github.com/MapleTechLabs/effect-orm/blob/main/src/docs-examples.test.ts). Client execution requires a server;
 the offline checks verify SQL construction and decoding, not database execution plans.
 
 ## Guides

@@ -89,5 +89,25 @@ for (const [server, dialect] of [[mysqlServer, MySQL.mysqlDialect], [mariadbServ
 			await expect(db.query("INSERT INTO `tours` (`id`, `org_id`, `code`) VALUES (2, 'o', 'c')", [])).rejects.toThrow(/Duplicate entry/)
 			await expect(db.query("INSERT INTO `tours` (`id`, `org_id`, `code`) VALUES (3, NULL, 'd')", [])).rejects.toThrow(/cannot be null/)
 		})
+
+		// MariaDB 11.4 sizes an integer literal a digit short where a union branch is a
+		// derived table, and cut it down to fit the DECIMAL beside it: 97 came back 9.9999.
+		it("keeps an integer literal whole beside a narrower DECIMAL in a union", async () => {
+			const db = await scratchDatabase(server, "ddl")
+			opened.push(db)
+			const Slots = MySQL.table("slots", { columns: { id: MySQL.int }, primaryKey: ["id"] })
+			for (const sql of renderMysqlSchema(await Effect.runPromise(mysqlEntitiesOf([Slots])))) await db.query(sql, [])
+			await db.query("INSERT INTO `slots` (`id`) VALUES (1), (2)", [])
+			const whole = MySQL.from(Slots).select(($) => ({ id: $.id, share: MySQL.lit(97) }))
+			const fraction = MySQL.from(Slots).select(($) => ({ id: $.id, share: MySQL.lit(1).div($.id.mul(8)) }))
+			const compiled = MySQL.compileUnionUnsafe(MySQL.unionAll(whole, fraction).orderBy(["share", "desc"], ["id", "asc"]), {}, { dialect })
+			const rows = await Effect.runPromise(compiled.decodeRows(await db.query(compiled.sql, compiled.parameters)))
+			expect(rows, compiled.sql).toEqual([
+				{ id: 1, share: 97 },
+				{ id: 2, share: 97 },
+				{ id: 1, share: 0.125 },
+				{ id: 2, share: 0.0625 },
+			])
+		})
 	})
 }

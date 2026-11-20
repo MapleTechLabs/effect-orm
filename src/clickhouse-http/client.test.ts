@@ -59,6 +59,8 @@ describe("ClickhouseHttpClient", () => {
 			expect(request.url.searchParams.get("max_execution_time")).toBe("30")
 			// An interrupted query stops on the server, not only in the client.
 			expect(request.url.searchParams.get("cancel_http_readonly_queries_on_client_close")).toBe("1")
+			// A query that fails after its first rows says so in the reply.
+			expect(request.url.searchParams.get("http_write_exception_in_output_format")).toBe("1")
 			expect(request.url.searchParams.get("query_id")).toMatch(/^[0-9a-f-]{36}$/)
 		}).pipe(Effect.provide(live))
 	})
@@ -76,6 +78,42 @@ describe("ClickhouseHttpClient", () => {
 		}).pipe(Effect.provide(live))
 	})
 
+	it.effect("binds null as NULL, and an integer in the narrowest type that holds it", () => {
+		const { sent, live } = fake(() => json([]))
+		return Effect.gen(function* () {
+			const sql = yield* SqlClient.SqlClient
+			yield* sql`SELECT ${null}, ${"\\N"}, ${[null, "a"]}, ${[]}, ${[[null], ["a"]]}, ${2n ** 63n - 1n}, ${2n ** 64n - 1n}, ${-(2n ** 63n) - 1n}, ${2n ** 200n}`
+			const [request] = sent
+			assert(request !== undefined)
+			expect(request.body).toBe(
+				"SELECT {p1: Nullable(String)}, {p2: String}, {p3: Array(Nullable(String))}, {p4: Array(String)}, " +
+					"{p5: Array(Array(Nullable(String)))}, {p6: Int64}, {p7: UInt64}, {p8: Int128}, {p9: UInt256}\nFORMAT JSON",
+			)
+			const param = (n: number) => request.url.searchParams.get(`param_p${n}`)
+			// `\N` is NULL; the same two characters as a string are escaped, so they stay a string.
+			expect(param(1)).toBe("\\N")
+			expect(param(2)).toBe("\\\\N")
+			expect(param(3)).toBe("[NULL,'a']")
+			expect(param(4)).toBe("[]")
+			expect(param(7)).toBe("18446744073709551615")
+		}).pipe(Effect.provide(live))
+	})
+
+	// The element type used to come from the first element alone: a null in a later subarray
+	// became `''`, and a later integer past Int64 wrapped.
+	it.effect("reads an array's element type from all of its elements", () => {
+		const { sent, live } = fake(() => json([]))
+		return Effect.gen(function* () {
+			const sql = yield* SqlClient.SqlClient
+			yield* sql`SELECT ${[["a"], [null]]}, ${[[null], ["a"]]}, ${[[["a"]], [[null]]]}, ${[1n, 2n ** 64n - 1n]}, ${[[1n], [-(2n ** 100n)]]}, ${[[], []]}, ${[1, null]}`
+			expect(sent[0]?.body).toBe(
+				"SELECT {p1: Array(Array(Nullable(String)))}, {p2: Array(Array(Nullable(String)))}, {p3: Array(Array(Array(Nullable(String))))}, " +
+					"{p4: Array(UInt64)}, {p5: Array(Array(Int128))}, {p6: Array(Array(String))}, {p7: Array(Nullable(Float64))}\nFORMAT JSON",
+			)
+			expect(sent[0]?.url.searchParams.get("param_p1")).toBe("[['a'],[NULL]]")
+		}).pipe(Effect.provide(live))
+	})
+
 	it.effect("sends a command without a format, and returns no rows", () => {
 		const { sent, live } = fake(() => ({ body: "" }))
 		return Effect.gen(function* () {
@@ -86,6 +124,7 @@ describe("ClickhouseHttpClient", () => {
 			assert(request !== undefined)
 			expect(request.body).toBe("CREATE TABLE t (x UInt8) ENGINE = Memory")
 			expect(request.url.searchParams.has("cancel_http_readonly_queries_on_client_close")).toBe(false)
+			expect(request.url.searchParams.has("http_write_exception_in_output_format")).toBe(false)
 		}).pipe(Effect.provide(live))
 	})
 
@@ -131,6 +170,81 @@ describe("ClickhouseHttpClient", () => {
 			const sql = yield* SqlClient.SqlClient
 			const error = yield* Effect.flip(sql.unsafe("SELEKT 1"))
 			expect(error.reason._tag).toBe("SqlSyntaxError")
+		}).pipe(Effect.provide(live))
+	})
+
+	// A query can fail after ClickHouse has answered 200 and sent rows. Each form
+	// below is what a server wrote for `throwIf` part way through a result; the
+	// rows before the exception are never a result.
+	const boom = "Code: 395. DB::Exception: boom: while executing 'FUNCTION throwIf'. (FUNCTION_THROW_IF_VALUE_IS_NON_ZERO) (version 26.8.2.7 (official build))"
+	const timeout = "Code: 159. DB::Exception: Timeout exceeded: elapsed 1011 ms, maximum: 1000 ms. (TIMEOUT_EXCEEDED) (version 26.8.2.7 (official build))"
+	const tagged = (message: string) => `\r\n__exception__\r\nlqetfqzmrzegvuwi\r\n${message}\n${message.length} lqetfqzmrzegvuwi\r\n__exception__\r\n`
+	const failure = <A>(effect: Effect.Effect<A, unknown>) =>
+		Effect.map(Effect.flip(effect), (error) => {
+			assert(isSqlError(error))
+			return { reason: error.reason._tag, message: error.message }
+		})
+
+	it.effect.each([
+		["an exception key beside data", `{"meta":[],"data":[{"n":1}],"rows":1,"exception":${JSON.stringify(boom)}}`],
+		["a tagged block after the rows", `{"meta":[],"data":[{"n":1}${tagged(boom)}`],
+		["an untagged block after the rows", `{"meta":[],"data":[{"n":1}__exception__\r\n${boom}\n`],
+	] as const)("fails a query whose 200 reply ends in %s", ([, body]) => {
+		const { live } = fake(() => ({ body }))
+		return Effect.gen(function* () {
+			const sql = yield* SqlClient.SqlClient
+			expect(yield* failure(sql.unsafe("SELECT 1"))).toEqual({ reason: "UnknownError", message: boom })
+			expect(yield* failure(sql.unsafe("SELECT 1").values)).toEqual({ reason: "UnknownError", message: boom })
+		}).pipe(Effect.provide(live))
+	})
+
+	it.effect.each([
+		["an exception line", `{"n":1}\n{"n":2}\n{"exception": ${JSON.stringify(timeout)}}\n`],
+		["a tagged block", `{"n":1}\n{"n":2}\n${tagged(timeout)}`],
+		["an untagged block", `{"n":1}\n{"n":2}\n__exception__\r\n${timeout}\n`],
+		["a block that cuts a row short", `{"n":1}\n{"n":2}\n{"n":__exception__\r\n${timeout}\n`],
+	] as const)("fails a stream that ends in %s, after the rows before it, with the server's reason", ([, body]) => {
+		const { sent, live } = fake(() => ({ body }))
+		return Effect.gen(function* () {
+			const sql = yield* SqlClient.SqlClient
+			const seen: Array<unknown> = []
+			const stream = sql.unsafe("SELECT 1").stream.pipe(Stream.runForEach((row) => Effect.sync(() => void seen.push(row))))
+			expect(yield* failure(stream)).toEqual({ reason: "StatementTimeoutError", message: timeout })
+			expect(seen).toEqual([{ n: 1 }, { n: 2 }])
+			// The query ended on the server with its exception: no KILL follows it.
+			expect(sent.filter((request) => request.body.startsWith("KILL"))).toEqual([])
+		}).pipe(Effect.provide(live))
+	})
+
+	it.effect("reads a column named exception as a column", () => {
+		const { live } = fake((sent) =>
+			sent.body.endsWith("JSONEachRow") ? { body: '{"exception":"Code: 1. x"}\n' } : json([{ exception: "Code: 1. x" }]),
+		)
+		return Effect.gen(function* () {
+			const sql = yield* SqlClient.SqlClient
+			expect(yield* sql.unsafe("SELECT 'Code: 1. x' AS exception")).toEqual([{ exception: "Code: 1. x" }])
+			expect(yield* Stream.runCollect(sql.unsafe("SELECT 'Code: 1. x' AS exception").stream)).toEqual([{ exception: "Code: 1. x" }])
+		}).pipe(Effect.provide(live))
+	})
+
+	it.effect("fails a statement whose 200 carries an exception code: progress headers send the status first", () => {
+		const { live } = fake(() => ({ body: boom, headers: { "x-clickhouse-exception-code": "395" } }))
+		return Effect.gen(function* () {
+			const client = yield* ClickhouseHttpClient
+			expect(yield* failure(client.asCommand(client.unsafe("INSERT INTO t SELECT 1")))).toEqual({ reason: "UnknownError", message: boom })
+		}).pipe(Effect.provide(live))
+	})
+
+	it.effect.each([
+		["in the format", `{"meta":[],"data":[],"rows":0,"exception":${JSON.stringify(timeout)}}`],
+		["as a JSONEachRow line", `{"n":1}\n{"exception": ${JSON.stringify(timeout)}}\n`],
+		["in a tagged block", `{"n":1}\n${tagged(timeout)}`],
+		["as text after the rows of a compressed reply", `{"n":1}\n{"n":2}\n${timeout}\n`],
+	] as const)("reports the exception alone when a failed reply carries it %s", ([, body]) => {
+		const { live } = fake(() => ({ status: 500, body, headers: { "x-clickhouse-exception-code": "159" } }))
+		return Effect.gen(function* () {
+			const sql = yield* SqlClient.SqlClient
+			expect(yield* failure(sql.unsafe("SELECT 1"))).toEqual({ reason: "StatementTimeoutError", message: timeout })
 		}).pipe(Effect.provide(live))
 	})
 

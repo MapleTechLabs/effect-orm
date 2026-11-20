@@ -315,5 +315,5 @@ the ones ClickHouse uses. See [SQLite window functions](./sqlite.md#window-funct
 - An outer join fills missing columns with `NULL` in Postgres and with type defaults in
   ClickHouse (unless `join_use_nulls` is set). Joined columns are typed nullable either way.
 
-See [`design/dialects.md`](../design/dialects.md) for how dialects are built and what a new one
+See [`design/dialects.md`](https://github.com/MapleTechLabs/effect-orm/blob/main/design/dialects.md) for how dialects are built and what a new one
 needs to provide.

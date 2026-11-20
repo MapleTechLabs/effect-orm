@@ -298,8 +298,9 @@ Use `decodeRows` to validate wire values against the row schema.
 A `Dialect` is the database a query is compiled for: how identifiers and literals are written,
 how resolved params reach the server, and which clauses exist. It is installed for the length of
 the compile, so every column reference, string fragment, compared value and inline param goes
-through it. `clickhouseDialect`, the default of the `/clickhouse` entry's `compile`, writes names bare and each param value into the SQL
-as a ClickHouse literal, and leaves `parameters` empty. `postgresDialect`, the default of the `/postgres`
+through it. `clickhouseDialect`, the default of the `/clickhouse` entry's `compile`, writes a plain name bare
+and quotes any other in backticks (see [Names](#names)), writes each param value into the SQL as a
+ClickHouse literal, and leaves `parameters` empty. `postgresDialect`, the default of the `/postgres`
 entry's `compile`, is the other built-in one; see [Postgres](./postgres.md).
 
 A dialect whose `params` style is `bind` leaves a placeholder instead and returns the encoded
@@ -328,6 +329,7 @@ than `1`/`0`.
 | Member | Purpose |
 | --- | --- |
 | `quoteIdent` | One identifier: a column, alias, table or schema name |
+| `rawTableNames` | Whether a table name that is not a path of plain identifiers is written as given (ClickHouse: a table function, a subquery) |
 | `quoteString`, `literal` | A string, or any encoded wire value, as a literal |
 | `dateTimeLiteral` | A point in time compared against an expression with no declared type |
 | `params` | `inline`, or `bind` with a placeholder function |
@@ -357,9 +359,48 @@ module state.
 
 _(Backed by `docs/params-and-compilation.md > The dialect can come from Effect context`.)_
 
-Params are resolved by rewriting placeholders in the finished SQL, so a dialect's literals must
-never spell the param marker `__PARAM_`. ClickHouse writes it as `\x5F_PARAM_`; a literal that
-does contain the marker fails the compile with `InvalidLiteral` rather than being rewritten.
+Params are resolved by rewriting placeholders in the finished SQL, so a dialect's literals and
+names must never spell the param marker `__PARAM_`. ClickHouse writes it as `\x5F_PARAM_`; a
+literal or a name that does contain the marker fails the compile with `InvalidLiteral` rather
+than being rewritten.
+
+### Names
+
+A select key, a column name, a CTE name and a source alias are identifiers, and each dialect
+quotes them. Postgres, SQLite and MySQL quote every one. ClickHouse writes a plain name (letters,
+digits, `_`, and dots for a Nested column such as `Events.Name`) bare, and any other in
+backticks, so a key is always one name, whatever it holds:
+
+```ts
+CH.from(Events)
+	.select(($) => ({ "p-95": CH.max($.Duration), "by service": $.Service }))
+	.groupBy("by service")
+// SELECT max(events.Duration) AS `p-95`, events.Service AS `by service` FROM events GROUP BY `by service`
+```
+
+That includes a key built from input (a dashboard grouping by a user's choice of label): it
+reaches the SQL as a quoted name and comes back as the row's key, never as SQL.
+
+A few words mean something else to ClickHouse where a statement names something of its own:
+`ORDER BY null` orders by the literal, and `FROM t AS all` does not parse. As a select key, a
+source or join alias or a CTE name, these are quoted: `all`, `cube`, `distinct`, `false`, `inf`,
+`infinity`, `nan`, `not`, `null`, `recursive`, `rollup`, `select`, `top`, `true`. A column of
+such a name is read and written bare (`events.top`), as it always was, so the SQL of a table's
+index and `MATERIALIZED` expressions does not change, and `generate` does not treat a
+materialized view as changed over the backticks. ClickHouse 25.8 and 26.2 refuse `all` as an
+`ORDER BY` key whatever the quoting, unless `enable_order_by_all = 0`; 26.8 accepts it.
+
+A select key with a dot is quoted as well, since a key is one name and not a path. Selecting a
+Nested column by name reads `spans.Events.Name` and returns it under the key `Events.Name`:
+
+```ts
+CH.from(Spans).select("Events.Name").orderBy(["Events.Name", "asc"])
+// SELECT spans.Events.Name AS `Events.Name` FROM spans ORDER BY `Events.Name` ASC
+```
+
+A ClickHouse table name is the exception, on purpose: an external table's name is its FROM
+target, written as given, so it can be a table function (`numbers(10)`) or a subquery. A table
+whose own name needs quoting is declared quoted: ``CH.table("`my-db`.events", { external: true, … })``.
 
 ## Handwritten SQL
 

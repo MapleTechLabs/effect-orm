@@ -77,6 +77,63 @@ describe.skipIf(!endpoint)("ClickhouseHttpClient on ClickHouse", () => {
 			}),
 		)
 
+		it.effect("binds NULL, nullable arrays and integers beyond Int64", () =>
+			Effect.gen(function* () {
+				const sql = yield* SqlClient.SqlClient
+				const rows = yield* sql`SELECT ${null} AS missing, ${"\\N"} AS text, ${[null, "a"]} AS list, ${[]} AS empty, toString(${2n ** 64n - 1n}) AS big, toString(${-(2n ** 100n)}) AS wide`
+				expect(rows).toEqual([
+					{ missing: null, text: "\\N", list: [null, "a"], empty: [], big: "18446744073709551615", wide: "-1267650600228229401496703205376" },
+				])
+			}),
+		)
+
+		it.effect("keeps a null in a later subarray, and an integer past Int64 beside a small one", () =>
+			Effect.gen(function* () {
+				const sql = yield* SqlClient.SqlClient
+				const rows = yield* sql`SELECT ${[["a"], [null]]} AS nested, arrayMap(x -> toString(x), ${[1n, 2n ** 64n - 1n]}) AS wide`
+				expect(rows).toEqual([{ nested: [["a"], [null]], wide: ["1", "18446744073709551615"] }])
+			}),
+		)
+
+		// A query can fail after ClickHouse has answered 200 and sent rows. The rows
+		// are not a result: both paths fail, with the server's reason. This used to
+		// succeed with the rows so far on servers before 25.11.
+		it.effect("fails a query that throws part way through its result", () =>
+			Effect.gen(function* () {
+				const client = yield* ClickhouseHttpClient
+				const late = client
+					.unsafe("SELECT number, throwIf(number = 50000, 'late failure') AS t FROM numbers(100000)")
+					.pipe(client.withSettings({ max_block_size: 1000 }))
+				const error = yield* Effect.flip(late)
+				expect(error.reason._tag).toBe("UnknownError")
+				expect(error.message).toMatch(/^Code: 395\. DB::Exception: late failure/)
+
+				const slow = client
+					.unsafe("SELECT number, sleepEachRow(0.001) AS s FROM numbers(100000)")
+					.pipe(client.withSettings({ max_block_size: 100, max_execution_time: 1 }))
+				expect((yield* Effect.flip(slow)).reason._tag).toBe("StatementTimeoutError")
+			}),
+		)
+
+		it.effect("fails a stream that throws part way through", () =>
+			Effect.gen(function* () {
+				const client = yield* ClickhouseHttpClient
+				let seen = 0
+				const error = yield* client
+					.unsafe("SELECT number, throwIf(number = 50000, 'late failure') AS t FROM numbers(100000)")
+					.stream.pipe(
+						Stream.runForEach(() => Effect.sync(() => void seen++)),
+						client.withSettings({ max_block_size: 1000 }),
+						Effect.flip,
+					)
+				expect(error.message).toMatch(/^Code: 395\. DB::Exception: late failure/)
+				// None at all when the server buffered the reply and could still answer 500.
+				expect(seen).toBeLessThanOrEqual(50000)
+				// A column that happens to be named `exception` is still a column.
+				expect(yield* Stream.runCollect(client.unsafe("SELECT 'Code: 1. x' AS exception").stream)).toEqual([{ exception: "Code: 1. x" }])
+			}),
+		)
+
 		it.effect("streams rows", () =>
 			Effect.gen(function* () {
 				const sql = yield* SqlClient.SqlClient

@@ -5,6 +5,7 @@
 		"module": "ESNext",
 		"lib": ["ES2022"],
 		"moduleResolution": "bundler",
+		"resolveJsonModule": true,
 		"verbatimModuleSyntax": true,
 		"noEmit": true,
 		"skipLibCheck": true,

@@ -27,6 +27,8 @@ interface Env {
 	readonly sem: Semantics
 	readonly plan: Plan
 	readonly joined: boolean
+	/** The scale a UNION gives each select alias, where it is past the expression's own (see `unionScales`). */
+	readonly scales?: ReadonlyMap<string, number>
 }
 
 const isTime = (e: Expr) => e.k === "col" && e.col === "Created"
@@ -197,6 +199,31 @@ const evalDecimal = (env: Env, row: Row, e: Expr | number): Decimal | null => {
 			// BigInt % truncates and takes the dividend's sign, as MOD does.
 			return { units: at(l, frac) % at(r, frac), frac, scale }
 	}
+}
+
+/** The scale `evalDecimal` gives `e`, which depends on the expression alone, not on a row. */
+const scaleOf = (e: Expr | number): number => {
+	if (typeof e === "number" || e.k !== "arith") return 0
+	if (!parsed.has(e)) return scaleOf(asParsed(e))
+	const l = scaleOf(e.l)
+	const r = scaleOf(e.r)
+	return e.op === "mul" ? Math.min(l + r, 30) : e.op === "div" ? Math.min(l + 4, 30) : Math.max(l, r)
+}
+
+/**
+ * A UNION's column is a DECIMAL of the largest scale among its branches, and
+ * each branch's value is stored at that scale from its internal digits, not
+ * from the four it would show alone: `14 / 3` is 4.6667 by itself and
+ * 4.66666667 beside `0 / -1 / 1`. See `Semantics.unionDecimals` for the branch
+ * that keeps its own scale.
+ */
+const unionScales = (plan: UnionPlan): ReadonlyMap<string, number> => {
+	const scales = new Map<string, number>()
+	for (const branch of plan.branches) {
+		if (branch.shape.k !== "rows") continue
+		for (const [alias, e] of branch.shape.select) scales.set(alias, Math.max(scales.get(alias) ?? 0, scaleOf(e)))
+	}
+	return scales
 }
 
 /** The value as the server shows it: rounded half away from zero to its scale. */
@@ -427,8 +454,16 @@ export const foldConstant = (e: Expr | number): number | undefined => {
 	}
 }
 
-export const evaluate = (plan: Plan, sem: Semantics, fixture: Fixture = coreFixture): ModelResult => {
-	const env: Env = { sem, plan, joined: plan.join !== undefined }
+/** A selected expression's value: a DECIMAL at the UNION's scale where that is wider than its own. */
+const selected = (env: Env, row: Row, alias: string, e: Expr): V => {
+	const scale = env.scales?.get(alias)
+	if (scale === undefined || e.k !== "arith" || env.sem.integerDivision !== "decimal") return evalExpr(env, row, e)
+	const d = evalDecimal(env, row, e)
+	return d === null ? null : decimalNumber({ ...d, scale: Math.max(d.scale, scale) })
+}
+
+export const evaluate = (plan: Plan, sem: Semantics, fixture: Fixture = coreFixture, scales?: ReadonlyMap<string, number>): ModelResult => {
+	const env: Env = { sem, plan, joined: plan.join !== undefined, scales }
 	// A database may evaluate any expression on any row — or fold a constant one at plan time — before
 	// filtering decides it was not needed. So a division by zero anywhere is a division by zero.
 	const all = ariths(plan)
@@ -451,7 +486,7 @@ export const evaluate = (plan: Plan, sem: Semantics, fixture: Fixture = coreFixt
 
 	let rows: Array<OutRow>
 	if (shape.k === "rows") {
-		rows = filtered.map((row) => Object.fromEntries(shape.select.map(([alias, e]) => [alias, outValue(e, evalExpr(env, row, e))])))
+		rows = filtered.map((row) => Object.fromEntries(shape.select.map(([alias, e]) => [alias, outValue(e, selected(env, row, alias, e))])))
 		if (shape.distinct) {
 			const seen = new Set<string>()
 			rows = rows.filter((row) => {
@@ -491,7 +526,11 @@ export const evaluate = (plan: Plan, sem: Semantics, fixture: Fixture = coreFixt
  * a list only when the union orders by every alias.
  */
 export const evaluateUnion = (plan: UnionPlan, sem: Semantics, fixture: Fixture = coreFixture): ModelResult => {
-	const parts = plan.branches.map((branch) => evaluate(branch, sem, fixture))
+	const scales = sem.unionDecimals === undefined ? undefined : unionScales(plan)
+	// A branch the server computes as a derived table before the union keeps the scale it has alone.
+	const materialized = (branch: Plan) =>
+		sem.unionDecimals === "materialized" && branch.shape.k === "rows" && (branch.shape.distinct || branch.shape.limit !== undefined || branch.shape.offset !== undefined)
+	const parts = plan.branches.map((branch) => evaluate(branch, sem, fixture, materialized(branch) ? undefined : scales))
 	const rows = parts.flatMap((part) => [...part.rows])
 	const first = plan.branches[0]!
 	const aliases = first.shape.k === "rows" ? first.shape.select.map(([alias]) => alias) : []

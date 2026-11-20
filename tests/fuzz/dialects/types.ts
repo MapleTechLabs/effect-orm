@@ -68,6 +68,14 @@ export interface Semantics {
 	readonly emptyAggregate: "null" | "unmodelled"
 	/** Whether `LIKE` ignores ASCII case (SQLite does). */
 	readonly likeIgnoresCase: boolean
+	/**
+	 * How a UNION widens a DECIMAL column to the largest scale among its branches (`integerDivision:
+	 * "decimal"` only). `evaluated`: every branch's value is stored from its internal digits, so
+	 * `14 / 3` is 4.66666667 beside a scale-8 branch (MySQL, whose branches are parenthesized).
+	 * `materialized`: the same, except a branch with DISTINCT, LIMIT or OFFSET is a derived table
+	 * the server computes first, at its own scale, and then pads: 4.66670000 (MariaDB).
+	 */
+	readonly unionDecimals?: "evaluated" | "materialized"
 }
 
 export interface FuzzTarget {

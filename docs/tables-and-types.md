@@ -201,6 +201,12 @@ an alias to qualify its columns), it may have no columns (for a FROM that only a
 constants), and it takes only `columns` and `tenantColumn`. Column options still drive insert
 typing: `CH.column(CH.uint16, { default: 200 })` is optional on insert here too.
 
+Because the name is written as given, a ClickHouse table whose own name is not a plain
+identifier is declared quoted: ``CH.table("`my-db`.events", { external: true, … })``. Its column
+names need no such care: a column named `user id` is written `` `user id` `` wherever it is read,
+written or returned (see [Names](./params-and-compilation.md#names)). On the other dialects the
+name is a path of identifiers and is quoted for you.
+
 ## Column types
 
 A column type is an Effect `Schema` plus the database type name it stands for. That schema is

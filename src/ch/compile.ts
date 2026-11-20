@@ -25,7 +25,7 @@ import {
 	type ParamsSatisfied,
 	type SourcesSatisfied,
 } from "./expr"
-import { raw, identPath, known, quoteIdent, quoteIdentPath, compile as compileSqlFragment, type SqlFragment } from "../sql/sql-fragment"
+import { raw, known, quoteAlias, quoteIdent, quoteIdentPath, quoteTable, compile as compileSqlFragment, type SqlFragment } from "../sql/sql-fragment"
 import { splitTerminalClauses } from "../sql/terminal-clauses"
 import { activeLiteralBinder, withLiteralBinder } from "../sql/literal-binder"
 import { compileQuery, type SqlQuery } from "../sql/sql-query"
@@ -84,7 +84,7 @@ const lockClause = (lock: import("./query").LockClause | undefined): string | un
 			}), "")
 		}
 	}
-	const of = lock.of !== undefined && lock.of.length > 0 ? ` OF ${lock.of.map(quoteIdent).join(", ")}` : ""
+	const of = lock.of !== undefined && lock.of.length > 0 ? ` OF ${lock.of.map(quoteAlias).join(", ")}` : ""
 	const wait = lock.skipLocked === true ? " SKIP LOCKED" : lock.noWait === true ? " NOWAIT" : ""
 	return lock.strength === "SHARE" && locking.shareSyntax === "LOCK IN SHARE MODE" ? `LOCK IN SHARE MODE${wait}` : `FOR ${lock.strength}${of}${wait}`
 }
@@ -114,7 +114,7 @@ const orderByClause = (specs: ReadonlyArray<[string, "asc" | "desc"]>): Array<st
 				message: `CHQuery: orderBy() direction must be "asc" or "desc", got ${JSON.stringify(direction)}`,
 			}), "")
 		}
-		return `${quoteIdent(column)} ${direction.toUpperCase()}`
+		return `${quoteAlias(column)} ${direction.toUpperCase()}`
 	})
 
 /** The callback form of `orderBy`: each expression as it renders, then its direction. */
@@ -150,7 +150,7 @@ const rowCount = (clause: "limit" | "offset", value: number | undefined) => {
  */
 const groupByKey = (key: string, selected: ReadonlyArray<string>): string => {
 	const position = selected.indexOf(key)
-	return currentDialect().clauses.groupByAlias || position === -1 ? quoteIdent(key) : String(position + 1)
+	return currentDialect().clauses.groupByAlias || position === -1 ? quoteAlias(key) : String(position + 1)
 }
 
 /** `.format()`'s value, refused for a dialect that has no `FORMAT` clause:
@@ -941,12 +941,12 @@ function compileInner<
 				enclosingCtes: visibleCtes,
 			})
 			fromSource = sourceOf(inner)
-			fromFragment = raw(`(${inner.sql}) AS ${quoteIdent(state.fromQueryAlias ?? "")}`)
+			fromFragment = raw(`(${inner.sql}) AS ${quoteAlias(state.fromQueryAlias ?? "")}`)
 		} else if (state.fromUnion) {
 			const inner = compileUnionInner(state.fromUnion, params, { deferParams, nested: true, enclosingCtes: visibleCtes })
 			fromSource = sourceOf(inner)
 			const body = currentDialect().clauses.format ? splitTerminalClauses(inner.sql).body : inner.sql
-			fromFragment = raw(`(\n${body}\n) AS ${quoteIdent(state.fromQueryAlias ?? "")}`)
+			fromFragment = raw(`(\n${body}\n) AS ${quoteAlias(state.fromQueryAlias ?? "")}`)
 		} else if (state.noFrom === true) {
 			fromSource = { scope: "untenanted" }
 			fromFragment = currentDialect().clauses.fromlessSelect === undefined ? undefined : raw(currentDialect().clauses.fromlessSelect!)
@@ -960,9 +960,9 @@ function compileInner<
 			if (options?.correlatedTenant !== undefined && fromSource.column !== undefined) {
 				fromSource = { ...fromSource, bound: correlatedBound(options.correlatedTenant) }
 			}
-			fromFragment = mainAlias !== state.tableName
-				? raw(`${quoteIdentPath(state.tableName)} AS ${quoteIdentPath(mainAlias)}`)
-				: identPath(state.tableName)
+			// Written the way the columns' qualifier is, so a table named for a word the
+			// qualifier quotes (`select`) is quoted here too.
+			fromFragment = raw(mainAlias !== state.tableName ? `${quoteTable(state.tableName)} AS ${quoteIdentPath(mainAlias)}` : quoteTable(state.tableName))
 		}
 
 		const sources: TenantSource[] = [fromSource]
@@ -1009,7 +1009,7 @@ function compileInner<
 					tableSql = `(${compiled.sql})`
 					source = sourceOf(compiled)
 				} else if (j.tableName) {
-					tableSql = quoteIdentPath(j.tableName)
+					tableSql = quoteTable(j.tableName)
 					source = sourceForTable(
 						j.tableName,
 						j.tenantColumn === undefined ? undefined : `${j.alias}.${j.tenantColumn}`,
@@ -1033,7 +1033,7 @@ function compileInner<
 				return {
 					type: j.type,
 					table: tableSql,
-					alias: quoteIdent(j.alias),
+					alias: quoteAlias(j.alias),
 					on: on ? rowFilter(`the ON clause of join ${JSON.stringify(j.alias)}`, on) : undefined,
 				}
 			})
@@ -1073,7 +1073,7 @@ function compileInner<
 							if (!(options?.selectKeys ?? keys).includes(key)) {
 								return fail(new QueryBuilderDefect({ message: `CHQuery: distinctOn(${JSON.stringify(key)}) is not a selected alias` }), raw(""))
 							}
-							return raw(quoteIdent(key))
+							return raw(quoteAlias(key))
 						})
 					: undefined,
 				lock: (() => {
@@ -1085,7 +1085,7 @@ function compileInner<
 					}
 					return lockClause(state.lock)
 				})(),
-				select: selected.map(({ alias, sql }) => raw(`${sql} AS ${quoteIdent(alias)}`)),
+				select: selected.map(({ alias, sql }) => raw(`${sql} AS ${quoteAlias(alias)}`)),
 				from: fromFragment,
 				joins,
 				where,
@@ -1109,7 +1109,7 @@ function compileInner<
 
 		// Prepend CTE definitions
 		if (resolvedCtes.length > 0) {
-			const cteDefs = resolvedCtes.map((c) => `${quoteIdent(c.name)} AS (\n${c.sql}\n)`).join(",\n")
+			const cteDefs = resolvedCtes.map((c) => `${quoteAlias(c.name)} AS (\n${c.sql}\n)`).join(",\n")
 			sql = `WITH ${cteDefs}\n${sql}`
 		}
 
@@ -1473,7 +1473,7 @@ const NUMERIC_PARAM = new RegExp(`^${PARAM_MARKER_PREFIX}(int|float|bool)_.*__$`
 const positionSafe = (sql: string): string => {
 	const cast = currentDialect().clauses.selectedNumberCast
 	if (cast === undefined) return sql
-	if (isSmallInteger(sql)) return `CAST(${sql} AS ${cast.integer})`
+	if (isSmallInteger(sql)) return `CAST(${sql} AS ${cast.integer})${cast.widen === true ? " + 0" : ""}`
 	const kind = NUMERIC_PARAM.exec(sql)?.[1]
 	return kind === undefined ? sql : `CAST(${sql} AS ${kind === "float" ? cast.float : cast.integer})`
 }
@@ -1680,7 +1680,7 @@ function compileUnionInner<Output extends Record<string, any>, Params extends Re
 			const clause = orderByClause(state.outerOrderBySpecs).map((rendered, i) => {
 				const [column, direction] = state.outerOrderBySpecs[i]!
 				return orderKeys !== undefined && mixedNumbers.has(column)
-					? orderKeys(quoteIdent(column)).map((key) => `${key} ${direction.toUpperCase()}`).join(", ")
+					? orderKeys(quoteAlias(column)).map((key) => `${key} ${direction.toUpperCase()}`).join(", ")
 					: rendered
 			})
 			sql += `\nORDER BY ${clause.join(", ")}`
@@ -2334,7 +2334,7 @@ function compileInsert(insert: CHInsert<any, any, any, any>, params: Record<stri
 
 	const returning = returningOf(table, insert._state.returningFn, where)
 	const rendered = renderParams(
-		`INSERT INTO ${quoteIdentPath(table.name)} (${columns.map((column) => quoteIdent(columnSqlName(table.columns, column))).join(", ")})${writeSettingsClause(table, insert._state.settings, where)}\n${source}${conflictSql}${returning?.sql ?? ""}`,
+		`INSERT INTO ${quoteTable(table.name)} (${columns.map((column) => quoteIdent(columnSqlName(table.columns, column))).join(", ")})${writeSettingsClause(table, insert._state.settings, where)}\n${source}${conflictSql}${returning?.sql ?? ""}`,
 		values,
 		dialect,
 	)
@@ -2473,11 +2473,11 @@ function compileUpdateOrDelete(
 				if (from.query !== undefined) {
 					const inner = compileInner(from.query, values, { skipFormat: true, nested: true })
 					reads.push({ scope: inner.tenantScope, bound: tenantBoundOf(inner) })
-					fromSql = `\nFROM (${inner.sql}) AS ${quoteIdent(from.alias)}`
+					fromSql = `\nFROM (${inner.sql}) AS ${quoteAlias(from.alias)}`
 				} else if (from.fragment !== undefined) {
-					fromSql = `\nFROM ${compileSqlFragment(from.fragment)} AS ${quoteIdent(from.alias)}`
+					fromSql = `\nFROM ${compileSqlFragment(from.fragment)} AS ${quoteAlias(from.alias)}`
 				} else {
-					fromSql = `\nFROM ${quoteIdentPath(from.tableName ?? "")} AS ${quoteIdent(from.alias)}`
+					fromSql = `\nFROM ${quoteTable(from.tableName ?? "")} AS ${quoteAlias(from.alias)}`
 				}
 			}
 			let assignments: ReadonlyArray<string> = []
@@ -2543,7 +2543,7 @@ function compileUpdateOrDelete(
 
 	const returning = returningOf(table, state.returningFn, where)
 	const settings = writeSettingsClause(table, state.settings, where)
-	const target = quoteIdentPath(table.name)
+	const target = quoteTable(table.name)
 	const head =
 		kind === "delete"
 			? `DELETE FROM ${target}`

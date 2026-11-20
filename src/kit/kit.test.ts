@@ -39,6 +39,20 @@ describe("effect-orm CLI", () => {
 	})
 	afterEach(() => rmSync(dir, { recursive: true, force: true }))
 
+	it("prints its version, and names a command it does not have before it looks for a config", async () => {
+		rmSync(join(dir, "effect-orm.config.ts"))
+		expect(await cli("--version")).toBe(0)
+		expect(lines).toEqual([JSON.parse(readFileSync(resolve(src, "../package.json"), "utf8")).version])
+
+		const errors = vi.spyOn(console, "error").mockImplementation(() => {})
+		try {
+			expect(await cli("frobnicate")).toBe(1)
+			expect(errors.mock.calls).toEqual([[`effect-orm: unknown command "frobnicate". Run effect-orm --help.`]])
+		} finally {
+			errors.mockRestore()
+		}
+	})
+
 	it("generates a first migration, then nothing for an unchanged schema", async () => {
 		writeFileSync(join(dir, "schema.ts"), schemaModule())
 		expect(await cli("generate", "--name", "init")).toBe(0)

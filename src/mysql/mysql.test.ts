@@ -43,6 +43,15 @@ describe("the MySQL dialect", () => {
 		expect(sql).toContain("? AS `s`")
 	})
 
+	// MariaDB sizes an integer literal a digit short in a union branch that is a derived table,
+	// and cuts it down to fit a DECIMAL in the same column: `97` beside DECIMAL(5,4) was 9.9999.
+	it("writes a selected integer as a sum on MariaDB, which has the digits a literal lacks", () => {
+		const query = MySQL.from(Items).select(() => ({ one: MySQL.lit(97), n: MySQL.param.int("n") }))
+		const sql = MySQL.compileUnsafe(query, { n: 1 }, { dialect: MySQL.mariadbDialect }).sql
+		expect(sql).toContain("CAST(97 AS SIGNED) + 0 AS `one`")
+		expect(sql).toContain("CAST(? AS SIGNED) AS `n`")
+	})
+
 	it("compares a JSON column with CAST(? AS JSON) on MySQL, and as text on MariaDB", () => {
 		const Docs = MySQL.table("docs", { id: MySQL.int, body: MySQL.json(Schema.Struct({ a: Schema.Number })) })
 		const query = MySQL.from(Docs).select("id").where(($) => [$.body.eq({ a: 1 })])

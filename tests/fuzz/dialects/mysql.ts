@@ -22,6 +22,7 @@ const semantics: Semantics = {
 	emptyAggregate: "null",
 	// Under the binary collation the targets use (docs/mysql.md).
 	likeIgnoresCase: false,
+	unionDecimals: "evaluated",
 }
 
 // Literals
@@ -69,6 +70,10 @@ const jsonAt12Digits = (value: unknown): unknown => {
  */
 const jsonDriverNumbers = jsonPayload(strings).pipe(
 	Arbitrary.filter((payload) => payload.values.every((n) => n === null || Math.abs(n) < 2 ** 53)),
+	// Eleven significant digits, so the double the server reads a few ULPs off still rounds to the
+	// same twelve (`jsonAt12Digits`): at full precision one in ten thousand sits on a rounding edge,
+	// and `5.5435412401050004e-68` came back `5.543541240105e-68`, the other side of one.
+	Arbitrary.map((payload) => ({ ...payload, values: payload.values.map((n) => (n === null ? n : Number(n.toPrecision(11)))) })),
 )
 
 const literals = (dialect: string): ReadonlyArray<LiteralType> => {
@@ -146,7 +151,7 @@ const writes = (server: MysqlServer, exec: (sql: string) => Promise<unknown>): W
 	},
 })
 
-const fuzzDialect = (server: MysqlServer, dialect: MySQL.Dialect<"mysql">, context: typeof mysqlContext): FuzzDialect => {
+const fuzzDialect = (server: MysqlServer, dialect: MySQL.Dialect<"mysql">, context: typeof mysqlContext, semantics: Semantics): FuzzDialect => {
 	const db = mysqlDatabase(server)
 	const text = mysqlDatabase(server, "text")
 	return {
@@ -173,5 +178,6 @@ const fuzzDialect = (server: MysqlServer, dialect: MySQL.Dialect<"mysql">, conte
 	}
 }
 
-export const mysql = fuzzDialect(mysqlServer, MySQL.mysqlDialect, mysqlContext)
-export const mariadb = fuzzDialect(mariadbServer, MySQL.mariadbDialect, mariadbContext)
+export const mysql = fuzzDialect(mysqlServer, MySQL.mysqlDialect, mysqlContext, semantics)
+// MariaDB's union branches are derived tables (`mariadbDialect`), and it computes one it cannot merge first.
+export const mariadb = fuzzDialect(mariadbServer, MySQL.mariadbDialect, mariadbContext, { ...semantics, unionDecimals: "materialized" })

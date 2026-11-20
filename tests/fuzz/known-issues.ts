@@ -64,6 +64,31 @@ const negativePowerOfTwoModulo = (value: unknown): boolean => {
 	return Object.values(value).some(negativePowerOfTwoModulo)
 }
 
+/** Every node of a plan (conditions, expressions, operands), depth first. */
+const nodes = (value: unknown): ReadonlyArray<Record<string, unknown>> => {
+	if (Array.isArray(value)) return value.flatMap(nodes)
+	if (value === null || typeof value !== "object") return []
+	return [value as Record<string, unknown>, ...Object.values(value).flatMap(nodes)]
+}
+
+const readsJoinedColumn = (value: unknown): boolean => nodes(value).some((node) => node.k === "jcol")
+
+/** `LIKE '%%'` or `ILIKE '%%'` over a column of the joined table. */
+const matchAllOverJoin = (value: unknown): boolean =>
+	nodes(value).some((node) => node.k === "like" && node.op !== "notLike" && node.pattern === "%%" && readsJoinedColumn(node.l))
+
+/** A string literal that ends in a NUL byte. */
+const trailingNul = (value: unknown): boolean =>
+	nodes(value).some((node) => node.k === "str" && typeof node.v === "string" && node.v.endsWith("\0"))
+
+const fraction = (operand: unknown): boolean => {
+	const v = (operand as { k?: string; v?: unknown }).v
+	return typeof v === "number" && !Number.isInteger(v)
+}
+/** `x BETWEEN lo AND hi` with one bound a whole number and the other a fraction. */
+const mixedBetween = (value: unknown): boolean =>
+	nodes(value).some((node) => node.k === "between" && fraction(node.lo) !== fraction(node.hi))
+
 const planIssues: ReadonlyArray<KnownIssue<PlanInput>> = [{
 	id: "clickhouse-26.2-negative-power-of-two-modulo",
 	// Server bug, not the builder's: on 26.2.19.43 a column % a constant -2^k is wrong for a negative
@@ -81,6 +106,31 @@ const planIssues: ReadonlyArray<KnownIssue<PlanInput>> = [{
 	reason: "MariaDB applies OFFSET before DISTINCT over a join",
 	matches: ({ executed, target, plan }) =>
 		executed && target.startsWith("mariadb") && plan.join !== undefined && plan.shape.k === "rows" && plan.shape.distinct && (plan.shape.offset ?? 0) > 0,
+}, {
+	id: "clickhouse-26.2-left-join-like-match-all",
+	// Server bug, not the builder's: 26.2.19.43 turns a LEFT JOIN into an INNER JOIN when the filter
+	// is `c.Name LIKE '%%'` (what `contains` builds from an empty param), although an unmatched row's `''` matches it:
+	// `SELECT … FROM o LEFT JOIN c ON … WHERE c.Name LIKE '%%'` loses the unmatched rows, on real
+	// tables too. `LIKE '%'` and `'%%%'` are right, as is `query_plan_convert_outer_join_to_inner_join = 0`;
+	// 26.8 is right throughout. Skips every ClickHouse target, like the entry above: delete it with 26.2.
+	reason: "ClickHouse 26.2 drops a LEFT JOIN's unmatched rows under LIKE '%%' on the joined table",
+	matches: ({ executed, target, plan }) => executed && target.startsWith("clickhouse") && plan.join === "left" && matchAllOverJoin(plan.where),
+}, {
+	id: "mariadb-order-by-trailing-nul",
+	// Server limit, not the builder's: MariaDB 11.4 sorts a VARCHAR (a literal, a `CAST(… AS CHAR)`)
+	// by a fixed-length key padded with NUL bytes, so under `utf8mb4_nopad_bin` `''`, `'\0'` and
+	// `'\0\0'` tie in ORDER BY although `'' < '\0'` is true and a TEXT column sorts them apart.
+	// MySQL 8.4 orders them. The model cannot say which of two tied rows comes first.
+	reason: "MariaDB orders VARCHAR values that differ only in trailing NUL bytes as equal",
+	matches: ({ executed, target, plan }) => executed && target.startsWith("mariadb") && plan.shape.orderBy.length > 0 && trailingNul(plan),
+}, {
+	id: "mysql-prepared-between-constant-column",
+	// Server quirk, and only over this suite's fixture: a prepared `Amount BETWEEN ? AND ?` bound
+	// with `[0, 98.75]` matches 99 when `Amount` is a constant column of a CTE (`CAST(99 AS SIGNED)`),
+	// because MySQL 8.4 folds the comparison to integers once one bound is whole. The text protocol,
+	// `[0.5, 98.75]`, and a real INT or BIGINT column on MySQL and MariaDB are all right.
+	reason: "MySQL 8.4 rounds a fractional BETWEEN bound beside a whole one when the column is a constant",
+	matches: ({ executed, target, plan }) => executed && target === "mysql" && mixedBetween(plan),
 }]
 
 export const knownPlanIssue = (input: PlanInput): string | undefined => firstMatch(planIssues, input)
@@ -93,6 +143,11 @@ export interface UnionInput {
 }
 
 // Each branch is also checked against the plan issues above.
-const unionIssues: ReadonlyArray<KnownIssue<UnionInput>> = []
+const unionIssues: ReadonlyArray<KnownIssue<UnionInput>> = [{
+	id: "mariadb-order-by-trailing-nul",
+	// The same limit as the plan entry, under the union's own ORDER BY.
+	reason: "MariaDB orders VARCHAR values that differ only in trailing NUL bytes as equal",
+	matches: ({ target, plan }) => target.startsWith("mariadb") && plan.orderBy.length > 0 && trailingNul(plan.branches),
+}]
 
 export const knownUnionIssue = (input: UnionInput): string | undefined => firstMatch(unionIssues, input)

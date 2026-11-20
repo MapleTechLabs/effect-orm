@@ -21,6 +21,14 @@ describe("text match", () => {
 		expect(compiled.sql).toContain(String.raw`Name LIKE '%50\\%\\_off\\\\%'`)
 	})
 
+	// `%%` means the same, but ClickHouse 26.2 turns a LEFT JOIN filtered by it on the joined table into an inner one.
+	it("contains of an empty string is one wildcard, on every dialect", () => {
+		expect(CH.compileUnsafe(CH.from(Events).select("Id").where(($) => [$.Name.contains("")])).sql).toContain("Name LIKE '%'")
+		expect(CH.compileUnsafe(CH.from(Events).select("Id").where(($) => [$.Name.contains("", { insensitive: true })])).sql).toContain("Name ILIKE '%'")
+		const pg = PG.compileUnsafe(PG.from(Users).select("id").where(($) => [$.name.contains("")]))
+		expect(pg.parameters).toEqual(["%"])
+	})
+
 	it("startsWith and endsWith put the wildcard on one side, also on a nullable column", () => {
 		const compiled = CH.compileUnsafe(
 			CH.from(Events).select("Id").where(($) => [$.Name.startsWith("a_"), $.Note.endsWith("%z")]),

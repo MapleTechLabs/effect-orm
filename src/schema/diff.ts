@@ -227,6 +227,16 @@ const diffTable = (
 	if (before.comment !== after.comment) ops.push({ op: "modify_comment", table: after.name, comment: after.comment })
 }
 
+/**
+ * A view's SELECT with the backticks off the names that are plain words. The builder quotes a
+ * few of them since 1.0 (`null`, `all`, `top`, … which ClickHouse can read as something else),
+ * so a snapshot written before says `AS top` where the schema now says ``AS `top` ``: the same
+ * query, and no reason to drop a view and create it again.
+ */
+const viewBody = (select: string): string => select.replace(/`([A-Za-z_][A-Za-z0-9_]*)`/g, "$1")
+const sameView = (a: MaterializedViewEntity, b: MaterializedViewEntity): boolean =>
+	same({ ...a, select: viewBody(a.select) }, { ...b, select: viewBody(b.select) })
+
 /** A view's body is frozen at creation, so any change is a drop and a re-create. */
 const diffViews = (
 	before: Map<string, MaterializedViewEntity>,
@@ -235,7 +245,7 @@ const diffViews = (
 ): void => {
 	for (const [key, view] of after) {
 		const old = before.get(key)
-		if (old !== undefined && same(old, view)) continue
+		if (old !== undefined && sameView(old, view)) continue
 		if (old !== undefined) ops.push({ op: "drop_view", name: view.name })
 		ops.push({ op: "create_view", view })
 	}

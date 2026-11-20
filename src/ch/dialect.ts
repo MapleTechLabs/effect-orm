@@ -8,7 +8,7 @@
 
 import { Context, type Schema } from "effect"
 import { fiberLocal } from "../sql/fiber-local"
-import { quoteClickHouseString } from "../sql/sql-fragment"
+import { quoteClickHouseIdent, quoteClickHouseString } from "../sql/sql-fragment"
 import { activeSqlSyntax, withSqlSyntax, type SqlSyntax } from "../sql/sql-syntax"
 import { QueryBuilderError } from "./errors"
 import { sqlLiteral } from "./literal"
@@ -78,8 +78,13 @@ export interface DialectClauses {
 	 * an ORDER BY position. MySQL 8.4 puts a merged derived table's select
 	 * expressions in place of their aliases, so `10 AS e1 … ORDER BY e1` is
 	 * `ORDER BY 10`: an unknown column, or, for `1`, silently the first one.
+	 *
+	 * `widen` writes an integer literal as `CAST(n AS …) + 0`. MariaDB 11.4 sizes
+	 * an integer literal one digit short when a union branch is a derived table,
+	 * and cuts it down to fit a DECIMAL the same column has in another branch:
+	 * `97` beside a `DECIMAL(5,4)` comes back `9.9999`. The sum has the room.
 	 */
-	readonly selectedNumberCast?: { readonly integer: string; readonly float: string }
+	readonly selectedNumberCast?: { readonly integer: string; readonly float: string; readonly widen?: boolean }
 	/** `RETURNING` after an INSERT. Absent means no: an insert with
 	 *  `.returning()` fails to compile for the dialect. */
 	readonly returning?: boolean
@@ -176,10 +181,11 @@ export const noTransactions: DialectTransactions = {
 /**
  * A database the builder writes SQL for.
  *
- * `quoteString` and `literal` must escape so that no value can spell the param
- * marker (`__PARAM_`) in the rendered SQL: params are resolved by rewriting the
- * finished text, so a value that spelled one would be rewritten too. A literal
- * that does is refused at compile time rather than trusted.
+ * `quoteString`, `literal` and `quoteIdent` must escape so that no value or
+ * name can spell the param marker (`__PARAM_`) in the rendered SQL: params are
+ * resolved by rewriting the finished text, so one that spelled a marker would be
+ * rewritten too. A literal or a name that does is refused at compile time
+ * rather than trusted.
  */
 export interface Dialect<Functions extends string = string> extends Omit<SqlSyntax, "dialect"> {
 	/** Shown in errors. */
@@ -228,7 +234,8 @@ export interface Dialect<Functions extends string = string> extends Omit<SqlSynt
 /** ClickHouse, with params written into the SQL as literals. The default. */
 export const clickhouseDialect: Dialect<"clickhouse"> = {
 	name: "clickhouse",
-	quoteIdent: (name) => name,
+	quoteIdent: quoteClickHouseIdent,
+	rawTableNames: true,
 	quoteString: quoteClickHouseString,
 	literal: sqlLiteral,
 	dateTimeLiteral: (value) => quoteClickHouseString(chDateTimeLiteral(value)),
@@ -294,17 +301,18 @@ const checkedSyntax = (dialect: Dialect): SqlSyntax => ({
 	fractionComparableIntegers: dialect.fractionComparableIntegers,
 	comparisonCast: dialect.comparisonCast,
 	concat: dialect.concat,
-	quoteIdent: dialect.quoteIdent,
+	quoteIdent: (name) => checked(dialect, dialect.quoteIdent(name), "an identifier", "a name"),
+	rawTableNames: dialect.rawTableNames,
 	quoteString: (value) => checked(dialect, dialect.quoteString(value), "a string literal"),
 	literal: (value, context) => checkedLiteral(dialect, value, context),
 	dateTimeLiteral: (value) => checked(dialect, dialect.dateTimeLiteral(value), "a DateTime literal"),
 })
 
-const checked = (dialect: Dialect, sql: string, context: string): string => {
+const checked = (dialect: Dialect, sql: string, context: string, what = "a literal"): string => {
 	if (sql.includes(PARAM_MARKER_PREFIX)) {
 		return fail(new QueryBuilderError({
 			code: "InvalidLiteral",
-			message: `${context}: the ${dialect.name} dialect wrote a literal containing the reserved param marker \`${PARAM_MARKER_PREFIX}\``,
+			message: `${context}: the ${dialect.name} dialect wrote ${what} containing the reserved param marker \`${PARAM_MARKER_PREFIX}\``,
 		}), "NULL")
 	}
 	return sql

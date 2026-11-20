@@ -155,5 +155,7 @@ export const mariadbDialect: Dialect<"mysql"> = {
 		// A parenthesized branch cannot start with WITH; a derived table can.
 		parenthesizeUnionBranches: false,
 		wrapUnionBranches: true,
+		// Those derived tables are where MariaDB sizes an integer literal a digit short.
+		selectedNumberCast: { integer: "SIGNED", float: "DOUBLE", widen: true },
 	},
 }
