@@ -4,6 +4,7 @@
 // (for inference) and runtime (for SQL generation).
 
 import type { Effect } from "effect"
+import type { SqlFragment } from "../sql/sql-fragment"
 import type { ColumnDefs, InferTS } from "./types"
 
 /**
@@ -61,6 +62,30 @@ export interface Table<
 	 */
 	readonly _requirements?: { readonly insert: (r: InsertR) => void; readonly update: (r: UpdateR) => void }
 }
+
+/**
+ * A row source that is not a table: a table-valued function such as SQLite's
+ * `json_each(?)`. `from`, the joins and `update(...).from` read it like a
+ * table, under its alias, and write `fragment` where a table name would go.
+ * It is not a `Table`, so nothing can insert into, update or delete from it.
+ *
+ * `P` is what its arguments carry: their params, and the dialect entry of the
+ * function (`SqliteOnly` for `json_each`), so a query reading it carries both.
+ */
+export interface TableFunction<Name extends string, Columns extends ColumnDefs, P = never> {
+	readonly _tag: "TableFunction"
+	/** The function's name: the source's name in the query when no alias is given. */
+	readonly name: Name
+	readonly columns: Columns
+	/** The SQL standing for the source, before its alias: `json_each(?)`. */
+	readonly fragment: SqlFragment
+	/** phantom: the params and dialect entries of the function's arguments. */
+	readonly _params?: (entries: P) => void
+}
+
+/** Whether a row source is a table-valued function rather than a table. */
+export const isTableFunction = (source: unknown): source is TableFunction<string, ColumnDefs, unknown> =>
+	typeof source === "object" && source !== null && (source as { readonly _tag?: unknown })._tag === "TableFunction"
 
 export interface TableOptions<
 	Columns extends ColumnDefs,

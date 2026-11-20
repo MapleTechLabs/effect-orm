@@ -8,9 +8,10 @@
 
 import { fail } from "./failure"
 import { renderSubquery } from "./subquery-context"
-import { compileCHRaw, selectedAliasesOf } from "./compile"
+import { compileCHRaw, selectedAliasesOf, selectExprsOf } from "./compile"
 import { QueryBuilderDefect } from "./errors"
 import { type Condition, type Expr, makeCond, makeExpr, makeUntypedExpr } from "./expr"
+import { Schema } from "effect"
 import type { CHQuery, NeedsSelect, SingleColumnOf } from "./query"
 import type { QueryParams } from "./union"
 import type { CHType } from "./types"
@@ -147,4 +148,28 @@ export function untypedSubqueryExpr<S extends Subquery>(
  *  conditions above do not cover, such as `x IN (SELECT k FROM (<inner>))`. */
 export function subqueryCond<S extends Subquery>(subquery: S, wrap: (sql: string) => string): Condition<QueryParams<S>> {
 	return makeCond(lazy(() => wrap(toSql(subquery))))
+}
+
+/**
+ * A one-column query as a value: `(SELECT …)`, decoded as its column does,
+ * or NULL when the query returns no row. Compiled with the outer statement,
+ * so it may read the outer query's columns (a correlated subquery) and its
+ * params are the outer statement's. The query must select exactly one column.
+ *
+ * ```ts
+ * SQLite.update(Bots).set(($) => ({
+ *   installCount: SQLite.coalesce(SQLite.scalar(SQLite.from(Members, "mi").select(() => ({ n: SQLite.count() })).where((mi) => [mi.userId.eq($.userId)])), 0),
+ * }))
+ * ```
+ */
+export function scalar<O extends Record<string, any>, SP = never>(
+	query: CHQuery<any, O, any, any, SP> & SingleColumnOf<O, O[keyof O]>,
+): Expr<O[keyof O] | null, SP> {
+	const exprs = selectExprsOf(query)
+	const keys = exprs === undefined ? [] : Object.keys(exprs)
+	const schema = keys.length === 1 ? (exprs![keys[0]!] as { readonly schema?: Schema.Codec<any, unknown> } | undefined)?.schema : undefined
+	return makeExpr<O[keyof O] | null>(
+		lazy(() => `(${toSql(oneColumn("scalar", query))})`),
+		schema === undefined ? undefined : Schema.NullOr(schema),
+	)
 }

@@ -16,7 +16,7 @@ export {
 } from "./ch/types"
 
 // Tables, as the query builder sees them. Define one with the dialect's `table`.
-export { type ClientDefaults, type SelectRowOf, type Table } from "./ch/table"
+export { type ClientDefaults, type SelectRowOf, type Table, type TableFunction } from "./ch/table"
 export { type TableSchemas, tableSchemas } from "./ch/table-schemas"
 
 // Core expression primitives
@@ -52,6 +52,7 @@ export {
 	exists,
 	inSubquery,
 	notInSubquery,
+	scalar,
 	subqueryExpr,
 	subqueryCond,
 	untypedSubqueryExpr,
@@ -99,6 +100,7 @@ export {
 	from,
 	fromQuery,
 	fromUnion,
+	selectNoFrom,
 } from "./ch/query"
 // The param types a consumer's exported query or `defineFn` helper names in its
 // declarations. Without them public, `tsc --declaration` fails with TS4023 /
@@ -143,6 +145,7 @@ export {
 export {
 	type CHDelete,
 	type CHUpdate,
+	type CHUpdateFromStart,
 	type CHUpdateStart,
 	type UpdateSet,
 	type UpdateSetOf,

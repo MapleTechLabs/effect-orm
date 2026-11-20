@@ -36,6 +36,7 @@ import { Effect } from "effect"
 export * from "./core"
 export * from "./sqlite/types"
 export * from "./sqlite/functions"
+export * from "./sqlite/table-functions"
 export type { TableOptions }
 export {
 	column,
@@ -80,6 +81,7 @@ export function table(name: string, definition: any, options?: TableOptions<any,
 	return sqliteTable(name, definition as TableDefinition<any>)
 }
 export { sqliteDialect, d1Dialect } from "./sqlite/dialect"
+export { runSync, type RunSyncOptions, type SqlStorageLike, type SyncDefaults } from "./sqlite/run-sync"
 
 /** The dialect a `/sqlite` compile writes for: `options.dialect`, else `CurrentDialect`, else SQLite. */
 const sqliteOptions = <O extends { readonly dialect?: Dialect | undefined } | undefined>(options: O) => ({

@@ -25,6 +25,15 @@ Filtering only `e.OrgId` does not constrain an independently joined tenant table
 
 Available: `innerJoin`, `leftJoin`, `crossJoin` (which takes no ON callback).
 
+The ON callback's first argument is the FROM source's columns, and the sources joined before
+this one under their aliases: after `.innerJoin(Services, "s", …)`, a later join's ON can read
+`main.s.Team`.
+
+A join's source can also be a table-valued function, such as SQLite's `jsonEach`, or a callback
+that builds one from the earlier sources' columns:
+`crossJoin(($) => SQLite.jsonEach($.domains, { value: SQLite.text }), "d")`. See
+[Table-valued sources](./sqlite.md#table-valued-sources-json_each-and-json_tree).
+
 _(Backed by `docs/joins-and-subqueries.md > Joining a table`.)_
 
 ### `leftJoin` nullability
@@ -34,10 +43,11 @@ in the output row. Derived codecs accept NULL when `join_use_nulls=1` and the co
 defaults ClickHouse emits with `join_use_nulls=0`. This applies to `leftJoinQuery` too.
 An explicitly declared `rowSchema` must also accept the nullable joined columns.
 
-### Narrowing a joined column with `where`
+### Narrowing a column with `where`
 
-A `where` condition can prove that a joined column is not NULL. Then a `select` after that
-`where` reads the column without `| null`, in the row type and in the derived row schema:
+A `where` condition can prove that a column is not NULL, of a joined source or of the FROM
+source. Then a `select` after that `where` reads the column without `| null`, in the row type
+and in the derived row schema:
 
 ```ts
 const query = CH.from(Events, "e")
@@ -58,14 +68,26 @@ These conditions prove nothing, so the column stays `T | null`:
 
 - `or`, `.or`, `not`, `when` and `whenTrue`.
 - An item typed `Condition | undefined`, or a list of unknown length.
-- A condition on a column of the FROM source.
+
+The FROM source's columns narrow by the same rules:
+
+```ts
+const Subs = SQLite.table("subs", { external: true, columns: { id: SQLite.text, planName: SQLite.nullable(SQLite.text) } })
+
+SQLite.from(Subs)
+	.where(($) => [$.planName.isNotNull()])
+	.select(($) => ({ planName: $.planName }))
+	.distinct()
+// Row: { readonly planName: string }
+```
 
 Call `where` before `select`. A `select` made before the `where` keeps `| null`, because its
 row type is fixed when you call it. The row schema follows the same rule, so the type and the
 schema agree. On ClickHouse without `join_use_nulls=1`, a missing join row has the column
 default, which is not NULL: `isNotNull()` keeps that row.
 
-_(Backed by `docs/joins-and-subqueries.md > A where before select narrows a joined column`.)_
+_(Backed by `docs/joins-and-subqueries.md > A where before select narrows a joined column` and
+`> A where before select narrows a FROM column`.)_
 
 ## Joining a subquery
 
@@ -168,6 +190,23 @@ All three also accept a pre-compiled SQL string, for the rare case where that is
 > ClickHouse membership semantics depend on `transform_null_in`; with its default of `0`,
 > NULL does not match another NULL in a set. Use non-nullable keys or define your NULL policy
 > explicitly. See [ClickHouse NULL processing](https://clickhouse.com/docs/reference/statements/in#null-processing).
+
+## A subquery as a value: `scalar`
+
+`scalar(query)` is `(SELECT …)` as an expression of the query's one column, decoded as that
+column, `| null` because a subquery with no row is NULL. Use it in a `select`, a comparison, or
+an update's SET; built inside a callback, it can read the enclosing query's columns. See
+[A SET from a correlated subquery](./updates-and-deletes.md#a-set-from-a-correlated-subquery).
+
+```ts
+CH.from(Services, "s").select(($) => ({
+	team: $.Team,
+	events: CH.scalar(CH.from(Events, "e").select(() => ({ n: CH.count() })).where((e) => [e.Name.eq($.Name), e.OrgId.eq("org_123")])),
+}))
+```
+
+A query that selects more than one column is a type error, and a `QueryBuilderDefect` past the
+types.
 
 ## Splicing a subquery where there is no syntax for one
 

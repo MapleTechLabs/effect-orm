@@ -276,3 +276,50 @@ export const traceStream = <A, E, R>(
 			)
 		}),
 	)
+
+/**
+ * `traceStatement` for statements sent together as one request (a D1 batch):
+ * one client span for the request, `db.operation.name` `BATCH` with
+ * `db.operation.batch.size`, and one observation per statement when it ends.
+ * The request is all a driver times, so each observation's duration is the
+ * request's; its rows are the statement's own result, and on a failure every
+ * statement reports the request's `error.type` (the batch rolled back whole).
+ */
+export const traceBatch = <E, R>(
+	dialect: Dialect,
+	statements: ReadonlyArray<TracedStatement>,
+	effect: Effect.Effect<ReadonlyArray<ReadonlyArray<unknown>>, E, R>,
+	options: TraceOptions = {},
+): Effect.Effect<ReadonlyArray<ReadonlyArray<unknown>>, E, R> =>
+	Effect.withFiber((fiber) => {
+		const configured = fiber.getRef(QuerySummary)
+		const described = statements.map((statement) => describe(dialect, statement, configured))
+		const system = SYSTEM_NAMES[dialect.name] ?? dialect.name
+		const attributes: Record<string, unknown> = {
+			"db.system.name": system,
+			"db.operation.name": "BATCH",
+			"db.operation.batch.size": statements.length,
+			"db.query.text": statements.map((statement) => statement.sql).join(";\n"),
+		}
+		if (configured !== undefined) attributes["db.query.summary"] = configured
+		const traced = effect.pipe(
+			Effect.tap((results) =>
+				Effect.annotateCurrentSpan("db.response.returned_rows", results.reduce((total, rows) => total + rows.length, 0)),
+			),
+			Effect.tapError(annotateFailure),
+		)
+		const observed =
+			options.observeExit === undefined
+				? traced
+				: Effect.flatMap(Clock.currentTimeNanos, (start) =>
+						Effect.onExit(traced, (exit) =>
+							Effect.forEach(
+								statements,
+								(statement, index) =>
+									observe(options, statement, described[index]!, start, exit, Exit.isSuccess(exit) ? (exit.value[index]?.length ?? 0) : undefined),
+								{ discard: true },
+							),
+						),
+					)
+		return Effect.withSpan(observed, configured ?? `BATCH ${system}`, { kind: "client", attributes })
+	})

@@ -19,7 +19,8 @@ export type WindowFrameBound<P = never> =
 	| { readonly type: "Following"; readonly value: number | Expr<number, P> }
 
 export interface WindowRowsFrame<P = never> {
-	readonly type: "RowsBetween"
+	/** `ROWS BETWEEN`, or `RANGE BETWEEN` from `rangeBetween` (Postgres and SQLite). */
+	readonly type: "RowsBetween" | "RangeBetween"
 	readonly start: WindowFrameBound
 	readonly end: WindowFrameBound
 	/** phantom: the `param.*` placeholders in the bounds. */
@@ -62,6 +63,17 @@ export function rowsBetween<Q1 = never, Q2 = never>(
 	end: WindowFrameBound<Q2>,
 ): WindowRowsFrame<Q1 | Q2> {
 	return { type: "RowsBetween", start, end }
+}
+
+/**
+ * `RANGE BETWEEN start AND end`: peers by the ORDER BY value rather than by
+ * row count. Postgres and SQLite; ClickHouse writes it too.
+ */
+export function rangeBetween<Q1 = never, Q2 = never>(
+	start: WindowFrameBound<Q1>,
+	end: WindowFrameBound<Q2>,
+): WindowRowsFrame<Q1 | Q2> {
+	return { type: "RangeBetween", start, end }
 }
 
 export function windowSpec<const S extends WindowSpec>(spec: S): CompiledWindowSpec<SpecParams<S>> {
@@ -119,7 +131,7 @@ export function lagInFrame<T, Q1 = never, Q2 = never, Q3 = never>(
 }
 
 function compileRowsFrame(frame: WindowRowsFrame): string {
-	return `ROWS BETWEEN ${compileFrameBound(frame.start)} AND ${compileFrameBound(frame.end)}`
+	return `${frame.type === "RangeBetween" ? "RANGE" : "ROWS"} BETWEEN ${compileFrameBound(frame.start)} AND ${compileFrameBound(frame.end)}`
 }
 
 function compileFrameBound(bound: WindowFrameBound): string {

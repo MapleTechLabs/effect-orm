@@ -187,6 +187,27 @@ ClickHouse and Postgres agree. `returning` and `onConflict*` work with `select` 
 A long `INSERT ... SELECT` on ClickHouse (a backfill over a big table) can outlast an HTTP
 timeout; run those in slices.
 
+`selectNoFrom(() => ({ … }))` is a SELECT of values with no FROM, and its `where` takes
+conditions that read no source, such as `exists(…)`. As an insert's source, it inserts one row
+only when a condition holds, which is how to make a write conditional on D1, where there is no
+transaction to read in first:
+
+```ts
+SQLite.insertInto(Credentials).select(
+	SQLite.selectNoFrom(() => ({ credentialId: SQLite.param.string("id"), subjectId: SQLite.param.string("subject"), revision: SQLite.lit("initial") }))
+		.where(() => [
+			SQLite.exists(SQLite.from(Identities).select(() => ({ one: SQLite.lit(1) })).where(($) => [$.identityKey.eq(SQLite.param.string("key"))])),
+			SQLite.not(SQLite.exists(SQLite.from(Logins).select(() => ({ one: SQLite.lit(1) })).where(($) => [$.identityKey.eq(SQLite.param.string("key"))]))),
+		]),
+)
+// INSERT INTO "credentials" (…) SELECT ? AS "credentialId", ? AS "subjectId", 'initial' AS "revision"
+// WHERE EXISTS (…) AND NOT (EXISTS (…))
+```
+
+MySQL writes `FROM DUAL` for it. On SQLite, `jsonRows(rows, columns)` is a query over a JS array
+bound as one parameter, the usual source of a bulk `INSERT ... SELECT` there; see
+[Rows from a JS array](./sqlite.md#rows-from-a-js-array-jsonrows).
+
 ## Returning
 
 On Postgres, `returning` adds a RETURNING list and `Database.run` returns the inserted rows,

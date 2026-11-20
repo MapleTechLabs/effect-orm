@@ -17,6 +17,7 @@ import { QueryBuilderDefect, QueryBuilderError } from "./errors"
 import { fail } from "./failure"
 import { markTenantColumn, markTenantPredicate, tenantColumnOf, tenantPredicatesOf } from "./tenant"
 import { markNotNullFacts, notNullFactsOf, type NotNullFact } from "./facts"
+import { inSubquery } from "./subquery-context"
 
 // Core interfaces
 
@@ -374,6 +375,9 @@ export type Operand<TSType, Q = never> =
 	| Comparable<ComparableValue<NonNullable<TSType>>>
 	| Expr<TSType, Q>
 	| Expr<Widen<TSType>, Q>
+	// Another expression may be NULL (an aggregate, a LEFT JOIN's column): the comparison is then not true, as in SQL.
+	| Expr<TSType | null, Q>
+	| Expr<Widen<TSType> | null, Q>
 
 /**
  * What `/` and `%` decode to. A numeric literal divisor of magnitude >= 1
@@ -457,13 +461,17 @@ export interface Condition<P = never, F extends {} = {}> {
 
 /**
  * The columns proven not NULL: `{ alias: { column: true } }`. `{}` when the
- * source is `never` or not known.
+ * source is `never`. A source the type does not know (`string`) gives an index
+ * signature, which `KnownFacts` drops where the facts are read. No conditional
+ * on `Source`: the FROM source's name is a `CHQuery` type parameter, and a
+ * conditional on it would make every query type compare structurally.
  */
-export type NotNullFacts<Source extends string, Column extends string> = string extends Source
-	? {}
-	: {
-			readonly [S in Source]: { readonly [C in Column]: true }
-		}
+export type NotNullFacts<Source extends string, Column extends string> = {
+	readonly [S in Source]: { readonly [C in Column]: true }
+}
+
+/** The facts `F` holds for named sources: an index signature (from a source named `string`) proves nothing. */
+export type KnownFacts<F> = { readonly [K in keyof F as string extends K ? never : K]: F[K] }
 
 /** The facts a condition proves, `{}` for none. */
 export type FactsIn<X> = 0 extends 1 & X
@@ -933,14 +941,23 @@ export function makeColumnRef<Name extends string, ColType extends CHType<string
 	 * their `isNotNull()` and `eq(…)` record a `NotNullFact` (see `./facts`).
 	 */
 	factSource?: string,
+	/**
+	 * The table a bare column is qualified with inside a subquery. Set for the
+	 * target of an UPDATE or DELETE, whose columns are written bare in the
+	 * statement but would name the subquery's own columns inside one.
+	 */
+	subqueryQualifier?: string,
 ): ColumnRef<Name, ColType> {
 	// `alias.Column` when qualified: the qualifier is quoted segment by segment,
 	// the column as one identifier (a ClickHouse `Nested` column has a dot).
 	const qualified = columnName !== undefined && name.endsWith(`.${columnName}`)
 	const sqlName = columnType?.sqlName
+	const bare = ident(sqlName ?? name)
 	const fragment = qualified
 		? ident(sqlName ?? columnName, name.slice(0, -columnName.length - 1))
-		: ident(sqlName ?? name)
+		: subqueryQualifier === undefined
+			? bare
+			: known(() => compile(inSubquery() ? ident(sqlName ?? name, subqueryQualifier) : bare))
 	const base = makeExpr<InferTS<ColType>>(
 		fragment,
 		columnType?.schema as Schema.Codec<InferTS<ColType>, any> | undefined,

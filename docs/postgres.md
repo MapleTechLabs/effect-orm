@@ -298,6 +298,15 @@ compiled or run for Postgres, and the Postgres functions above are one on ClickH
 compile still fails with a `QueryBuilderDefect` naming the function. A custom `Dialect` opts in
 with `functions: "clickhouse"` or `"postgres"`; without it, nothing is checked.
 
+### Window functions
+
+`over(expr, windowSpec(…))`, `lead`, `lag`, `rowNumber`, `rank`, `denseRank`, `firstValue` and
+`lastValue` write the standard SQL window syntax, the same as on SQLite:
+`lead("Count") OVER (PARTITION BY "Service" ORDER BY "Timestamp" ASC)`. `lead` and `lag` decode
+NULL past the partition's edge unless a fallback fills it; the ranking functions are `int8`,
+decoded as a number. The spec and frames (`rowsBetween`, `rangeBetween` and the bounds) are
+the ones ClickHouse uses. See [SQLite window functions](./sqlite.md#window-functions).
+
 ## Known differences
 
 - Integer division truncates in Postgres (`7 / 2` is `3`) and promotes to a float in ClickHouse.

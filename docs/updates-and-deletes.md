@@ -42,6 +42,60 @@ the Effect runs before the callback, and a value the callback gives wins. The up
 what the Effect needs. `compile` refuses an update that does not set the column, unless it went
 through `fillDefaults` first.
 
+### A SET from a correlated subquery
+
+`scalar(query)` turns a one-column query into a value of its column's type, `| null` because a
+subquery that finds no row is NULL. Build the query inside the `set` callback and it can read the
+target's columns from `$`:
+
+```ts
+const Bots = SQLite.table("bots", { external: true, columns: { id: SQLite.text, userId: SQLite.text, installCount: SQLite.integer } })
+const Members = SQLite.table("membership_index", { external: true, columns: { userId: SQLite.text, deletedAt: SQLite.nullable(SQLite.text) } })
+
+SQLite.update(Bots)
+	.set(($) => ({
+		installCount: SQLite.coalesce(
+			SQLite.scalar(SQLite.from(Members, "mi").select(() => ({ n: SQLite.count() })).where((mi) => [mi.userId.eq($.userId), mi.deletedAt.isNull()])),
+			0,
+		),
+	}))
+	.where(($) => [$.id.eq(SQLite.param.string("id"))])
+// UPDATE "bots" SET "installCount" = coalesce((SELECT count(*) AS "n" FROM "membership_index" AS "mi"
+//   WHERE "mi"."userId" = "bots"."userId" AND "mi"."deletedAt" IS NULL), 0) WHERE "id" = ?
+```
+
+The target's columns are written bare in an UPDATE or DELETE, except inside a subquery, where
+they are qualified with the table name: a bare `"userId"` there would name the subquery's own
+column, and the condition would always hold. The same holds for a subquery in `where`, and in a
+DELETE. `subqueryExpr(query, type)` is the older form of `scalar`, with a declared type and no
+NULL in it.
+
+_(Backed by `docs/updates-and-deletes.md > A SET from a correlated scalar subquery`.)_
+
+## UPDATE ... FROM
+
+`from(source, alias)`, before `set`, adds a `FROM` to the UPDATE (Postgres, SQLite 3.33+). The
+source is a table, a table-valued function such as `SQLite.jsonEach`, or a query. `set` and
+`where` read its columns as `$.<alias>.<column>`; the target's columns are then always written
+qualified, `"table"."col"`. ClickHouse and MySQL have no UPDATE ... FROM: the type refuses it
+(`UpdateFromClause`) and so does the compile.
+
+```ts
+const Daily = SQLite.table("daily", { external: true, columns: { day: SQLite.text, dau: SQLite.integer } })
+
+SQLite.update(Daily)
+	.from(SQLite.jsonEach([{ day: "2026-01-01", dau: 9 }]), "j")
+	.set(($) => ({ dau: SQLite.jsonExtract($.j.value, "$.dau", SQLite.integer) }))
+	.where(($) => [$.day.eq(SQLite.jsonExtract($.j.value, "$.day", SQLite.text))])
+// UPDATE "daily" SET "dau" = json_extract("j"."value", '$.dau') FROM json_each(?) AS "j"
+// WHERE "daily"."day" = json_extract("j"."value", '$.day')
+```
+
+A FROM table with a tenant column is a source of the update's tenant scope: the WHERE has to tie
+it to the target's tenant, or pin it, as a join would.
+
+_(Backed by `docs/updates-and-deletes.md > UPDATE ... FROM reads the source in SET and WHERE`.)_
+
 ## WHERE, and writing every row
 
 `where` works as in a query: a list of conditions, AND-joined, with an `undefined` one skipped,

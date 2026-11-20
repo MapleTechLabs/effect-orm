@@ -220,3 +220,25 @@ describe("postgres group by", () => {
 		expect(await run(compiled)).toEqual([{ Service: "api", total: 3 }])
 	})
 })
+
+describe("postgres window functions", () => {
+	it("runs lead, lag, row_number and a running sum over a window, as SQLite writes them", async () => {
+		const byTime = (service: PG.Expr<string>, at: PG.Expr<unknown>) => PG.windowSpec({ partitionBy: [service], orderBy: [[at, "asc"]] })
+		const query = CH.from(events)
+			.select(($) => ({
+				count: $.Count,
+				next: PG.over(PG.lead($.Count), byTime($.Service, $.Timestamp)),
+				previous: PG.over(PG.lag($.Count, 1, 0), byTime($.Service, $.Timestamp)),
+				position: PG.over(PG.rowNumber(), byTime($.Service, $.Timestamp)),
+				running: PG.over(PG.sum($.Count), PG.windowSpec({ orderBy: [[$.Timestamp, "asc"]], frame: PG.rowsBetween(PG.unboundedPreceding, PG.currentRow) })),
+			}))
+			.where(($) => [$.OrgId.eq("org_1"), $.Service.eq("api")])
+			.orderBy(["position", "asc"])
+		const compiled = PG.compileUnsafe(query, {})
+		expect(compiled.sql).toContain(`lead("events"."Count") OVER (PARTITION BY "events"."Service" ORDER BY "events"."Timestamp" ASC)`)
+		expect(await run(compiled)).toEqual([
+			{ count: 10, next: 20, previous: 0, position: 1, running: 10 },
+			{ count: 20, next: null, previous: 10, position: 2, running: 30 },
+		])
+	})
+})

@@ -108,10 +108,290 @@ a `timestamp` column refuses it as a `defaultExpr`; use `defaultExpr: SQLite.tim
 `json` always uses the supplied schema to validate decoded JSON.
 Use `text` when a stored date/time must remain a string.
 
-SQLite aggregates include `count`, `countDistinct`, `countIf`, `sum`, `avg`, `min` and `max`.
-The last four return NULL over an empty input. Scalar helpers include `lower`, `upper`,
-`length` and `coalesce`. SQLite's own text and case rules apply. Foreign built-in function
-sets, such as ClickHouse's `count()`, fail compilation instead of producing invalid SQL.
+## Functions
+
+Every function below writes SQLite's own SQL and carries `SqliteOnly`: a query that uses one
+does not typecheck for `PG.compile` or a Postgres `Database`, and refuses to compile for another
+dialect at run time. Foreign built-in function sets, such as ClickHouse's `count()`, fail
+compilation instead of producing invalid SQL. Where an argument is "a value", it is an expression
+or a plain string, number, boolean or `null`.
+
+| Group | Functions |
+| --- | --- |
+| Aggregates | `count()`, `countDistinct(x)`, `countIf(cond)`, `sum(x)`, `avg(x)`, `min(x)`, `max(x)` (the last four NULL over no rows), `jsonGroupArray(x, type?)`, `jsonGroupObject(key, value, type?)` |
+| Conditionals | `iif(cond, then, otherwise)`, `caseWhen([[cond, value], …], otherwise?)` (no `otherwise`: NULL), `coalesce(x, fallback)`, `ifnull(x, fallback)`, `nullif(x, value)` |
+| Numbers | `abs(x)`, `round(x, digits?)`, `greatest(a, b, …)` and `least(a, b, …)` (SQLite's multi-argument `max` / `min`: NULL as soon as one argument is) |
+| Text | `lower`, `upper`, `length`, `trim(x, chars?)`, `ltrim`, `rtrim`, `substr(x, start, length?)`, `replace(x, search, replacement)`, `instr(x, needle)`, `concat(a, b, …)` (`(a \|\| b)`) |
+| Types | `cast(x, type)`: `CAST(x AS <type's SQL>)`, decoded as `type` |
+| JSON | `jsonExtract(x, path, type)` (decoded as `type`; pass `nullable(type)` for a path that can be missing), `json_(x)` (SQLite's `json()`; `json` is the column type), `jsonSet(x, path, value)` |
+| Dates | `julianday(v, ...modifiers)`, `date`, `datetime`, `strftime(format, v, ...modifiers)`, `unixepoch` (all NULL for text SQLite cannot read) |
+
+A scalar function decodes NULL where an argument can be NULL, so `trim($.email)` over a
+nullable column is `string | null` and over a `text` column `string`. `iif`, `caseWhen`,
+`greatest` and `least` decode as any of their branches can: `iif(c, $.planName, "none")` is
+`string | null`.
+
+```ts title="sqlite-functions.ts"
+import { Schema } from "effect"
+import * as SQLite from "@maple-dev/effect-orm/sqlite"
+
+const Contacts = SQLite.table("contacts", {
+	external: true,
+	columns: { id: SQLite.text, email: SQLite.nullable(SQLite.text), deletedAt: SQLite.nullable(SQLite.text) },
+})
+const Messages = SQLite.table("messages", {
+	external: true,
+	columns: { id: SQLite.text, embeds: SQLite.json(Schema.Array(Schema.Struct({ url: Schema.String }))) },
+})
+
+// count(DISTINCT CASE WHEN … THEN lower(trim("email")) ELSE "id" END)
+export const people = SQLite.from(Contacts).select(($) => ({
+	people: SQLite.countDistinct(
+		SQLite.caseWhen(
+			[[$.deletedAt.isNull().and(SQLite.trim(SQLite.coalesce($.email, "")).neq("")), SQLite.lower(SQLite.trim($.email))]],
+			$.id,
+		),
+	),
+}))
+
+// A JSON column searched as text: CAST("embeds" AS text) GLOB '*x.dev*'
+export const linking = SQLite.from(Messages)
+	.select("id")
+	.where(($) => [SQLite.cast($.embeds, SQLite.text).contains("x.dev")])
+```
+
+## Window functions
+
+`over(expr, windowSpec({ partitionBy, orderBy, frame }))` writes `expr OVER (…)`, as on
+ClickHouse; the spec and its frames (`rowsBetween`, `rangeBetween`, `currentRow`,
+`unboundedPreceding`, `unboundedFollowing`, `preceding(n)`, `following(n)`) are shared. The
+window functions are `lead(x, offset?, fallback?)`, `lag(x, offset?, fallback?)`, `rowNumber()`,
+`rank()`, `denseRank()`, `firstValue(x)` and `lastValue(x)`; an aggregate (`count()`, `sum(x)`)
+works in `over` too. `lead` and `lag` decode NULL past the partition's edge, so `lead($.day)`
+over a `text` column is `string | null`, unless a fallback fills it: a plain fallback is written
+and decoded as the column, an expression fallback decodes by its own codec as well (with its
+NULL). `firstValue` and `lastValue` are nullable too, as a frame can be empty
+(`rowsBetween(preceding(1), preceding(1))` on a partition's first row). `/postgres` exports the same
+functions, writing the same SQL.
+
+```ts title="sqlite-window.ts"
+import * as SQLite from "@maple-dev/effect-orm/sqlite"
+
+const Activity = SQLite.table("activity", {
+	external: true,
+	columns: { contactId: SQLite.text, day: SQLite.text },
+})
+
+// LEAD("day") OVER (PARTITION BY "contactId" ORDER BY "day" ASC) AS "next"
+const days = SQLite.from(Activity).select(($) => ({
+	day: $.day,
+	next: SQLite.over(SQLite.lead($.day), SQLite.windowSpec({ partitionBy: [$.contactId], orderBy: [[$.day, "asc"]] })),
+}))
+
+// Days to the next active day, capped at 30, counted per gap.
+export const gaps = SQLite.fromQuery(days, "g")
+	.select(($) => ({
+		gap: SQLite.least(SQLite.coalesce(SQLite.cast(SQLite.julianday($.next).sub(SQLite.julianday($.day)), SQLite.integer), 30), 30),
+		n: SQLite.count(),
+	}))
+	.groupBy("gap")
+// SELECT min(coalesce(CAST(julianday("g"."next") - julianday("g"."day") AS integer), 30), 30) AS "gap", count(*) AS "n" …
+```
+
+_(Backed by `docs/sqlite.md > Window functions and a capped gap`.)_
+
+## Table-valued sources: `json_each` and `json_tree`
+
+`jsonEach(json, { value?, key?, path? })` is SQLite's `json_each(json)` as a row source. Pass
+it to `from`, `innerJoin`, `leftJoin`, `crossJoin` or `update(...).from`, like a table. Its
+columns are `key`, `value`, `type`, `atom`, `id`, `parent`, `fullkey` and `path`; `value` and
+`key` decode as the column types you give (`{ value: SQLite.text }`, or `SQLite.json(schema)` for
+objects), and are `unknown` and `string | number | null` otherwise. `jsonTree` is the same for
+`json_tree`, which recurses into nested values.
+
+The JSON is one of:
+
+- a JS value, an array or an object, bound as **one** JSON text parameter;
+- a param of a JSON column type: `SQLite.param.of(SQLite.json(schema), "ids")`;
+- an expression of JSON text: a `json(schema)` column of an earlier or outer source, or a
+  `jsonExtract`.
+
+A JS string is a JSON string value, not JSON text; pass JSON text as an expression.
+
+One parameter for a list of any length matters on D1 and Durable Object storage, which bind at
+most 100 values per statement:
+
+```ts title="sqlite-json-each.ts"
+import * as SQLite from "@maple-dev/effect-orm/sqlite"
+import { Schema } from "effect"
+
+const Activity = SQLite.table("activity", {
+	external: true,
+	columns: { contactId: SQLite.text, accountId: SQLite.text, day: SQLite.text },
+})
+const Accounts = SQLite.table("accounts", {
+	external: true,
+	columns: { id: SQLite.text, domains: SQLite.json(Schema.Array(Schema.String)), createdAt: SQLite.text },
+})
+
+// WHERE "accountId" IN (SELECT "json_each"."value" FROM json_each(?) AS "json_each")
+export const byAccounts = (ids: ReadonlyArray<string>) =>
+	SQLite.from(Activity)
+		.select("contactId")
+		.where(($) => [SQLite.inSubquery($.accountId, SQLite.from(SQLite.jsonEach(ids, { value: SQLite.text })).select(($) => ({ value: $.value })))])
+
+// FROM "accounts" AS "a" CROSS JOIN json_each("a"."domains") AS "d"
+export const byDomain = SQLite.from(Accounts, "a")
+	.crossJoin(($) => SQLite.jsonEach($.domains, { value: SQLite.text }), "d")
+	.where(($) => [$.d.value.in_("acme.com", "globex.com")])
+	.select(($) => ({ id: $.id }))
+	.distinct()
+
+// FROM json_each(?) AS "j" INNER JOIN "activity" AS "a" ON "a"."accountId" = "j"."key" AND "a"."day" > "j"."value"
+export const since = SQLite.from(
+	SQLite.jsonEach(SQLite.param.of(SQLite.json(Schema.Record(Schema.String, Schema.String)), "after"), { key: SQLite.text, value: SQLite.text }),
+	"j",
+)
+	.innerJoin(Activity, "a", (j, a) => a.accountId.eq(j.key).and(a.day.gt(j.value)))
+	.select(($) => ({ accountId: $.a.accountId, contacts: SQLite.countDistinct($.a.contactId) }))
+	.groupBy("accountId")
+```
+
+A join's source can be a callback that builds the table-valued function from the earlier
+sources' columns, as `byDomain` does (SQLite reads them as a lateral join). An ON callback's
+first argument sees the earlier joins too, under their aliases: `(g, a) => a.accountId.eq(g.m.value)`.
+A correlated subquery reads an outer column the same way:
+`exists(from(jsonEach($.blockedBy, { value: SQLite.text })).select(…).where((j) => [j.value.eq(userId)]))`.
+
+_(Backed by `docs/sqlite.md > json_each passes a list as one parameter`.)_
+
+### Rows from a JS array: `jsonRows`
+
+`jsonRows(rows, columns)` is a query over one bound JSON parameter, with a column per field:
+`json_extract("value", '$.<field>')`, decoded by the column type you give. Each row is encoded
+through those types first, so a boolean is written as 0/1 and a `timestamp` as SQLite text, as
+an insert writes them. Use it where a query goes: `insertInto(t).select(...)`, `fromQuery`,
+`innerJoinQuery`, or `update(t).from(...)`.
+
+```ts title="sqlite-json-rows.ts"
+import * as SQLite from "@maple-dev/effect-orm/sqlite"
+
+const OrgDaily = SQLite.table("org_daily", {
+	external: true,
+	columns: { day: SQLite.text, dau: SQLite.integer, mrrMinor: SQLite.integer, payingAccounts: SQLite.integer },
+})
+
+export const upsert = (days: ReadonlyArray<{ day: string; dau: number; mrrMinor: number; payingAccounts: number }>) =>
+	SQLite.insertInto(OrgDaily)
+		.select(SQLite.jsonRows(days, { day: SQLite.text, dau: SQLite.integer, mrrMinor: SQLite.integer, payingAccounts: SQLite.integer }))
+		.onConflictDoUpdate({
+			target: ["day"],
+			set: ($, excluded) => ({
+				dau: excluded.dau,
+				mrrMinor: SQLite.iif($.mrrMinor.eq(0).and($.payingAccounts.eq(0)), excluded.mrrMinor, $.mrrMinor),
+			}),
+		})
+// INSERT INTO "org_daily" (…) SELECT * FROM (SELECT json_extract("json_each"."value", '$.day') AS "day", …
+//   FROM json_each(?) AS "json_each") AS "__insert_source" WHERE 1
+// ON CONFLICT ("day") DO UPDATE SET "dau" = "excluded"."dau", "mrrMinor" = iif((…), "excluded"."mrrMinor", "org_daily"."mrrMinor")
+```
+
+The `WHERE 1` and the wrapping SELECT are how the dialect resolves SQLite's parsing ambiguity of
+an `ON CONFLICT` after an `INSERT ... SELECT`. In `onConflictDoUpdate`'s `set` and `where`
+callbacks, `$` is the existing row (written `"table"."col"`) and `excluded` the proposed one.
+
+## UPDATE ... FROM
+
+`update(table).from(source, alias)` writes `UPDATE … SET … FROM source AS alias WHERE …`
+(SQLite 3.33+, Postgres). The source is a table, a table-valued function or a query (`jsonRows`
+included). `set` and `where` read its columns as `$.<alias>.<column>`, and the target's columns
+are written qualified. ClickHouse and MySQL refuse it in the type and when compiling.
+
+```ts
+SQLite.update(OrgDaily)
+	.from(SQLite.jsonRows(days, { day: SQLite.text, dau: SQLite.integer }), "r")
+	.set(($) => ({ dau: $.r.dau }))
+	.where(($) => [$.day.eq($.r.day)])
+// UPDATE "org_daily" SET "dau" = "r"."dau" FROM (SELECT json_extract(…) AS "day", … FROM json_each(?) AS "json_each") AS "r"
+// WHERE "org_daily"."day" = "r"."day"
+```
+
+See [Updating and deleting](./updates-and-deletes.md#update--from) for a SET from a correlated
+subquery.
+
+## FTS5
+
+`fts5Table(name, columns)` declares an FTS5 virtual table for queries: its columns and an
+integer `rowid`, with no DDL (create it with `CREATE VIRTUAL TABLE … USING fts5(…)`). The
+`fts5` functions take the table's accessor, `$` when it is the FROM source or `$.alias` when it is
+joined, and write the hidden column SQLite searches under the name the query gives the table:
+
+| Function | SQL | Result |
+| --- | --- | --- |
+| `fts5.match(source, query)` | `"fts"."fts" MATCH ?` | a `Condition`; a string query is bound |
+| `fts5.snippet(source, column, start, end, ellipsis, tokens)` | `snippet(…)` | `string` |
+| `fts5.highlight(source, column, start, end)` | `highlight(…)` | `string \| null` |
+| `fts5.bm25(source, ...weights)` | `bm25(…)` | `number`, lower is better |
+
+`column` is a column name of the FTS5 table or its 0-based position.
+
+```ts title="sqlite-fts5.ts"
+import * as SQLite from "@maple-dev/effect-orm/sqlite"
+
+const SearchFts = SQLite.fts5Table("message_search_fts", { content: SQLite.text })
+const Search = SQLite.table("message_search", {
+	external: true,
+	columns: { id: SQLite.integer, messageId: SQLite.text, createdAt: SQLite.text },
+})
+
+export const search = SQLite.from(SearchFts)
+	.innerJoin(Search, "s", (fts, s) => s.id.eq(fts.rowid))
+	.select(($) => ({ messageId: $.s.messageId, snippet: SQLite.fts5.snippet($, "content", "\u0002", "\u0003", "…", 24) }))
+	.where(($) => [SQLite.fts5.match($, SQLite.param.string("q"))])
+	.orderBy(($) => [[$.s.createdAt, "desc"], [$.s.messageId, "desc"]])
+	.limit(20)
+// SELECT "s"."messageId", snippet("message_search_fts"."message_search_fts", 0, …, 24) AS "snippet"
+// FROM "message_search_fts" INNER JOIN "message_search" AS "s" ON "s"."id" = "message_search_fts"."rowid"
+// WHERE "message_search_fts"."message_search_fts" MATCH ? …
+```
+
+_(Backed by `docs/sqlite.md > FTS5 search joined to its content table`.)_
+
+## rowid
+
+A table with an implicit `rowid` declares it as a column, `rowid: SQLite.integer`, in an
+external table or the bare-columns form. It then reads and compares like any column, in a
+subquery too: `from(Outbox).select(($) => ({ key: $.key, head: min($.rowid) })).groupBy("key")`,
+joined back with `innerJoinQuery(heads, "h", (o, h) => o.rowid.eq(h.head))`. An insert then needs
+a `rowid` value unless the column is listed in `defaults`. A comparison with a nullable
+expression, such as `h.head` (an aggregate over a group), type-checks as it does in SQL.
+
+## Durable Object storage: `runSync`
+
+Cloudflare Durable Object storage (`ctx.storage.sql`) is synchronous and no Effect `SqlClient`.
+`runSync(storage, query, params?)` compiles for SQLite, binds, runs and decodes, without an
+Effect: what `Database.run` does. It takes what `run` takes (a query, union, insert, update,
+delete or a query compiled for SQLite) with the same checks in the type: params, the SQLite
+function set, a SELECT list. A write returns its RETURNING rows, or none. Its client defaults
+(`defaultFn` / `onUpdate`) run first and must be synchronous Effects that need no service; one
+that needs a service is a type error. A failure throws: the `QueryBuilderError`, the
+`CompiledQueryDecodeError` or the storage's own error.
+
+Each statement runs in a client span, as `Database.run`'s do, with the failure recorded on it
+before it is thrown. `runSync(storage, query, params, { context, observeExit, spanParameters })`
+says where: `context` is the services the span runs with (a `Tracer`, a parent span). It
+defaults to the context of the Effect fiber calling `runSync`, so a call inside `Effect.sync`
+nests under the caller's span; outside any fiber, pass a context captured with
+`yield* Effect.context()`, or the span goes to Effect's default tracer. `observeExit` and
+`spanParameters` are as on `fromSqlClient`.
+
+```ts
+const rows = SQLite.runSync(ctx.storage.sql, SQLite.from(Jobs).select().where(($) => [$.id.eq(SQLite.param.string("id"))]), { id })
+```
+
+`SqlStorageLike` is the shape it needs, `exec(sql, ...bindings).toArray()`; a `node:sqlite`
+database wraps into it for tests (`exec` must run the statement when called, as workerd's does).
+`requireTenantScope` does not apply: there is no `Database` to configure.
 
 ## Execute on SQLite
 
@@ -164,8 +444,11 @@ with a lower limit needs a custom dialect profile.
 
 `Database.transaction` on D1 returns `TransactionUnsupported` before executing its body.
 D1's [atomic batch API](https://developers.cloudflare.com/d1/worker-api/d1-database/#batch)
-executes a fixed list of statements. It cannot run an arbitrary Effect transaction body with
-reads that determine later writes. There is no ORM batch API in this first implementation.
+executes a fixed list of statements; it cannot run an arbitrary Effect transaction body with
+reads that determine later writes. `Database.batch([...])` sends such a list as one D1 batch, and
+returns each statement's decoded rows; see [Batches](./database.md#batches). A write that should
+happen only when a condition holds is one statement: `insertInto(t).select(selectNoFrom(…).where(…))`
+(see [Insert ... select](./inserts.md#insert--select)).
 
 ## Safety and syntax limits
 

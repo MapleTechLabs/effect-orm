@@ -131,6 +131,7 @@ export const mysqlDialect: Dialect<"mysql"> = {
 		onConflict: false,
 		defaultInValues: true,
 		distinctOn: false,
+		fromlessSelect: "DUAL",
 		locking: { strengths: ["UPDATE", "SHARE"], of: true },
 	},
 	paramCodecs: {

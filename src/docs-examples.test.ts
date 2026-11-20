@@ -516,6 +516,20 @@ describe("docs/joins-and-subqueries.md", () => {
 		expect(Exit.isFailure(Effect.runSyncExit(compiled.decodeRows([{ name: "api", team: null }])))).toBe(true)
 	})
 
+	it("A where before select narrows a FROM column", () => {
+		const Subs = SQLite.table("subs", { external: true, columns: { id: SQLite.text, planName: SQLite.nullable(SQLite.text) } })
+		const query = SQLite.from(Subs)
+			.where(($) => [$.planName.isNotNull()])
+			.select(($) => ({ planName: $.planName }))
+			.distinct()
+		const compiled = SQLite.compileUnsafe(query)
+		expectTypeOf(compiled.decodeRows).returns.toEqualTypeOf<
+			Effect.Effect<ReadonlyArray<{ readonly planName: string }>, CH.CompiledQueryDecodeError>
+		>()
+		expect(oneLine(compiled.sql)).toBe(`SELECT DISTINCT "subs"."planName" AS "planName" FROM "subs" WHERE "subs"."planName" IS NOT NULL`)
+		expect(Exit.isFailure(Effect.runSyncExit(compiled.decodeRows([{ planName: null }])))).toBe(true)
+	})
+
 	it("Subquery in FROM uses flat accessors", () => {
 		const inner = CH.from(Events)
 			.select(($) => ({ name: $.Name, ms: $.DurationMs }))
@@ -1159,4 +1173,92 @@ describe("docs/seeding.md", () => {
 			expect(orgs).toHaveLength(2)
 		}),
 	)
+})
+
+describe("docs/sqlite.md", () => {
+	const Activity = SQLite.table("activity", { external: true, columns: { contactId: SQLite.text, accountId: SQLite.text, day: SQLite.text } })
+
+	it("Window functions and a capped gap", () => {
+		const days = SQLite.from(Activity).select(($) => ({
+			day: $.day,
+			next: SQLite.over(SQLite.lead($.day), SQLite.windowSpec({ partitionBy: [$.contactId], orderBy: [[$.day, "asc"]] })),
+		}))
+		const gaps = SQLite.fromQuery(days, "g")
+			.select(($) => ({
+				gap: SQLite.least(SQLite.coalesce(SQLite.cast(SQLite.julianday($.next).sub(SQLite.julianday($.day)), SQLite.integer), 30), 30),
+				n: SQLite.count(),
+			}))
+			.groupBy("gap")
+		const compiled = SQLite.compileUnsafe(gaps)
+		expectTypeOf(compiled.decodeRows).returns.toEqualTypeOf<
+			Effect.Effect<ReadonlyArray<{ readonly gap: number; readonly n: number }>, CH.CompiledQueryDecodeError>
+		>()
+		expect(oneLine(compiled.sql)).toBe(
+			`SELECT min(coalesce(CAST(julianday("g"."next") - julianday("g"."day") AS integer), 30), 30) AS "gap", count(*) AS "n" ` +
+				`FROM (SELECT "activity"."day" AS "day", lead("activity"."day") OVER (PARTITION BY "activity"."contactId" ORDER BY "activity"."day" ASC) AS "next" FROM "activity") AS "g" ` +
+				`GROUP BY 1`,
+		)
+	})
+
+	it("json_each passes a list as one parameter", () => {
+		const ids = Array.from({ length: 150 }, (_, i) => `acct_${i}`)
+		const query = SQLite.from(Activity)
+			.select("contactId")
+			.where(($) => [SQLite.inSubquery($.accountId, SQLite.from(SQLite.jsonEach(ids, { value: SQLite.text })).select(($) => ({ value: $.value })))])
+		const compiled = SQLite.compileUnsafe(query, {}, { dialect: SQLite.d1Dialect })
+		expect(oneLine(compiled.sql)).toBe(
+			`SELECT "activity"."contactId" AS "contactId" FROM "activity" WHERE "activity"."accountId" IN (SELECT "json_each"."value" AS "value" FROM json_each(?) AS "json_each")`,
+		)
+		expect(compiled.parameters).toEqual([JSON.stringify(ids)])
+	})
+
+	it("FTS5 search joined to its content table", () => {
+		const SearchFts = SQLite.fts5Table("message_search_fts", { content: SQLite.text })
+		const Search = SQLite.table("message_search", { external: true, columns: { id: SQLite.integer, messageId: SQLite.text, createdAt: SQLite.text } })
+		const search = SQLite.from(SearchFts)
+			.innerJoin(Search, "s", (fts, s) => s.id.eq(fts.rowid))
+			.select(($) => ({ messageId: $.s.messageId, snippet: SQLite.fts5.snippet($, "content", "[", "]", "…", 24) }))
+			.where(($) => [SQLite.fts5.match($, SQLite.param.string("q"))])
+			.limit(20)
+		const compiled = SQLite.compileUnsafe(search, { q: "hello" })
+		expect(oneLine(compiled.sql)).toBe(
+			`SELECT "s"."messageId" AS "messageId", snippet("message_search_fts"."message_search_fts", 0, '[', ']', '…', 24) AS "snippet" ` +
+				`FROM "message_search_fts" INNER JOIN "message_search" AS "s" ON "s"."id" = "message_search_fts"."rowid" ` +
+				`WHERE "message_search_fts"."message_search_fts" MATCH ? LIMIT 20`,
+		)
+		expect(compiled.parameters).toEqual(["hello"])
+	})
+})
+
+describe("docs/updates-and-deletes.md", () => {
+	const Bots = SQLite.table("bots", { external: true, columns: { id: SQLite.text, userId: SQLite.text, installCount: SQLite.integer } })
+	const Members = SQLite.table("membership_index", { external: true, columns: { userId: SQLite.text, deletedAt: SQLite.nullable(SQLite.text) } })
+
+	it("A SET from a correlated scalar subquery", () => {
+		const update = SQLite.update(Bots)
+			.set(($) => ({
+				installCount: SQLite.coalesce(
+					SQLite.scalar(SQLite.from(Members, "mi").select(() => ({ n: SQLite.count() })).where((mi) => [mi.userId.eq($.userId), mi.deletedAt.isNull()])),
+					0,
+				),
+			}))
+			.where(($) => [$.id.eq(SQLite.param.string("id"))])
+		expect(oneLine(SQLite.compileUnsafe(update, { id: "b1" }).sql)).toBe(
+			`UPDATE "bots" SET "installCount" = coalesce((SELECT count(*) AS "n" FROM "membership_index" AS "mi" ` +
+				`WHERE "mi"."userId" = "bots"."userId" AND "mi"."deletedAt" IS NULL), 0) WHERE "id" = ?`,
+		)
+	})
+
+	it("UPDATE ... FROM reads the source in SET and WHERE", () => {
+		const Daily = SQLite.table("daily", { external: true, columns: { day: SQLite.text, dau: SQLite.integer } })
+		const update = SQLite.update(Daily)
+			.from(SQLite.jsonEach([{ day: "2026-01-01", dau: 9 }]), "j")
+			.set(($) => ({ dau: SQLite.jsonExtract($.j.value, "$.dau", SQLite.integer) }))
+			.where(($) => [$.day.eq(SQLite.jsonExtract($.j.value, "$.day", SQLite.text))])
+		const compiled = SQLite.compileUnsafe(update)
+		expect(oneLine(compiled.sql)).toBe(
+			`UPDATE "daily" SET "dau" = json_extract("j"."value", '$.dau') FROM json_each(?) AS "j" WHERE "daily"."day" = json_extract("j"."value", '$.day')`,
+		)
+		expect(compiled.parameters).toEqual([`[{"day":"2026-01-01","dau":9}]`])
+	})
 })

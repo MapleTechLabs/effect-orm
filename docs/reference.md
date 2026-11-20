@@ -41,11 +41,12 @@ Everything in this section is exported, identically, from `/clickhouse`, `/postg
 
 | Export      | Signature                                 |
 | ----------- | ----------------------------------------- |
-| `from`      | `(table, alias?) => CHQuery`              |
+| `from`      | `(table, alias?) => CHQuery`; the table may be a `TableFunction`, such as `SQLite.jsonEach(…)` |
+| `selectNoFrom` | `(fn) => CHQuery`: a SELECT of values with no FROM; MySQL writes `FROM DUAL`. See [Insert ... select](./inserts.md#insert--select) |
 | `fromQuery` | `(query, alias) => CHQuery`               |
 | `fromUnion` | `(union, alias) => CHQuery`               |
 | `unionAll`  | `(...queries) => CHUnionQuery`            |
-| `update`     | `(table) => CHUpdateStart`, then `CHUpdate`: `.set(record \| fn)`, `.where(fn)` or `.allRows()`, `.returning(...)`, `.settings(record)`. See [Updating and deleting](./updates-and-deletes.md) |
+| `update`     | `(table) => CHUpdateStart`, then `CHUpdate`: `.from(source, alias)` (before `set`, once, giving a `CHUpdateFromStart`; Postgres and SQLite, `UpdateFromClause` elsewhere), `.set(record \| fn)`, `.where(fn)` or `.allRows()`, `.returning(...)`, `.settings(record)`. See [Updating and deleting](./updates-and-deletes.md) |
 | `deleteFrom` | `(table) => CHDelete`: `.where(fn)` or `.allRows()`, `.returning(...)`, `.settings(record)` |
 | `tableSchemas` | `(table) => TableSchemas`: the `select`, `insert`, `update`, `json`, `jsonCreate` and `jsonUpdate` row Schemas. See [Row Schemas](./tables-and-types.md#row-schemas) |
 | `insertInto` | `(table) => CHInsertStart`, then `CHInsert`; `.values(row \| rows)` or `.select(query)` sets its rows, `.settings(record)` ClickHouse `SETTINGS`, `.returning(...)` the RETURNING list, `.onConflictDoNothing(options?)` / `.onConflictDoUpdate(options)` the ON CONFLICT clause (Postgres and SQLite). See [Inserting rows](./inserts.md) |
@@ -61,7 +62,7 @@ Tables come from the dialect's `table`: [`CH.table`](#tables-and-ddl) or
 | Method                                                  | Notes                                                                 |
 | ------------------------------------------------------- | --------------------------------------------------------------------- |
 | `select(...names)` / `select(fn)`                       | Required before compiling                                             |
-| `where(fn)`                                             | Returns `Array<Condition \| undefined>`; AND-joined. Narrows a joined column it proves not NULL for a later `select` ([joins](./joins-and-subqueries.md#narrowing-a-joined-column-with-where)) |
+| `where(fn)`                                             | Returns `Array<Condition \| undefined>`; AND-joined. Narrows a column (of the FROM source or a join) it proves not NULL for a later `select` ([joins](./joins-and-subqueries.md#narrowing-a-column-with-where)) |
 | `groupBy(...outputKeys)`                                | Takes select aliases, not column names                                |
 | `having(fn)`                                            | Post-aggregation filter; input accessor or `dynamicColumn` aliases    |
 | `orderBy(...[col, dir])`                                | **Tuples**, not two strings                                           |
@@ -69,7 +70,7 @@ Tables come from the dialect's `table`: [`CH.table`](#tables-and-ddl) or
 | `format(fmt)`                                           | `"JSON"` \| `"JSONEachRow"`                                           |
 | `distinct()` / `distinctOn(...aliases)`                 | `SELECT DISTINCT` / `SELECT DISTINCT ON (…)`                          |
 | `forUpdate` / `forNoKeyUpdate` / `forShare` / `forKeyShare` | Row locks; options `LockOptions` (`skipLocked`, `noWait`, `of`). Postgres writes all four, MySQL and MariaDB `forUpdate` and `forShare`; refused in the type when compiled or run for another dialect |
-| `innerJoin` / `leftJoin` / `crossJoin`                  | `(table, alias, on?)`                                                 |
+| `innerJoin` / `leftJoin` / `crossJoin`                  | `(source, alias, on?)`: a table, a `TableFunction` (`SQLite.jsonEach(…)`), or a callback building one from the earlier sources' columns. `on`'s first argument also reads the earlier joins under their aliases |
 | `innerJoinQuery` / `leftJoinQuery` / `crossJoinQuery`   | `(query, alias, on?)`                                                 |
 | `withCTE(name, query)` / `withCTE(name, sql, options?)` | Typed query derives scope; SQL form can declare `options.tenantScope` |
 | `route("ingest")`                                       | Metadata only                                                         |
@@ -123,7 +124,8 @@ locks). Pass one as
 that `compile` reads when no `options.dialect` is given. `Compile<Default>`, `CompileUnsafe<Default>`,
 `CompileUnion<Default>` and `CompileUnionUnsafe<Default>` are the types of the four compile
 functions, with `Default` the function set of the entry's dialect; their options are
-`QueryCompileOptions`, `InsertCompileOptions` and `UnionCompileOptions`. `DialectTransactions` (with `IsolationLevel` and `TransactionSettings`) says
+`QueryCompileOptions`, `InsertCompileOptions` and `UnionCompileOptions`. `TableFunction` is a row source that is not a table (`SQLite.jsonEach`), which `from`, the joins
+and `update(...).from` take. `DialectTransactions` (with `IsolationLevel` and `TransactionSettings`) says
 which transactions the database supports, and how settings are written: `beginTransaction`
 (optional) for a BEGIN that carries them, `setTransaction` for a statement run after BEGIN;
 see [Database](./database.md#settings). See [Params and compilation](./params-and-compilation.md#dialects) and
@@ -158,6 +160,7 @@ time; see [Params and compilation](./params-and-compilation.md#what-each-kind-ac
 | `exists(q)`               | `EXISTS (…)` from a query or pre-compiled SQL              |
 | `inSubquery(expr, q)`     | `expr IN (…)` from a query or pre-compiled SQL             |
 | `notInSubquery(expr, q)`  | `expr NOT IN (…)`; note the NULL semantics                 |
+| `scalar(q)`               | `(SELECT …)` of a one-column query as an `Expr` of its column, `\| null` ([a subquery as a value](./joins-and-subqueries.md#a-subquery-as-a-value-scalar)) |
 | `outerRef<T>(name)`       | Reference an outer column in a correlated subquery         |
 
 `Expr<T>` methods: `eq`, `neq`, `gt`, `gte`, `lt`, `lte`, `in_`, `notIn`, `between`, `notBetween`,
@@ -463,7 +466,7 @@ is `nan`/`inf` — the SQL-side guard for division; preserves SQL NULL). `nullIf
 #### Window
 
 `over(expr, spec)`, `windowSpec({ partitionBy?, orderBy?, frame? })`,
-`rowsBetween(start, end)`, `lagInFrame(expr, offset, defaultValue)` _(all three arguments
+`rowsBetween(start, end)`, `rangeBetween(start, end)`, `lagInFrame(expr, offset, defaultValue)` _(all three arguments
 required)_, and the frame bounds `currentRow`, `unboundedPreceding`, `unboundedFollowing`,
 `preceding(n)`, `following(n)`.
 
@@ -578,7 +581,13 @@ unit union), `dateBin(seconds, ts)`, `now()`, `lower(x)`, `upper(x)`, `length(x)
 (typed jsonb paths; the types `JsonKey`, `JsonKeyOf`, `JsonStep`, `JsonPath`, `JsonPathValue` and
 `JsonContained` spell them, and `jsonPathSchema` reads a path's schema off a document schema, as a `JsonPathSchema`),
 `caseWhen([[c, v], ...], otherwise)`, `asBoolean(c)` (a condition as a value) and
-`typedValue(type, value)` (a value bound as a column type writes it). See
+`typedValue(type, value)` (a value bound as a column type writes it). Window functions:
+`over(expr, spec)`, `lead(x, offset?, fallback?)`, `lag(x, offset?, fallback?)`, `rowNumber()`,
+`rank()`, `denseRank()`, `firstValue(x)`, `lastValue(x)`, with `windowSpec`, `rowsBetween`,
+`rangeBetween` and the frame bounds `currentRow`, `unboundedPreceding`, `unboundedFollowing`,
+`preceding(n)`, `following(n)` (and the types `WindowSpec`, `CompiledWindowSpec`,
+`WindowFrameBound`, `WindowRowsFrame`, `WindowOrderDirection`); see
+[window functions](./postgres.md#window-functions). See
 [Postgres functions](./postgres.md#functions) and [JSON paths](./postgres.md#json-paths) for the SQL each writes.
 
 ### Dialect
@@ -600,7 +609,7 @@ the default.
 | `ClickHouseStatementFromString`, `splitTerminalClauses`, `maskLiteralsAndComments`               | `/sql`            |
 | Schema tooling: `isSchemaObject`, `makeSnapshot`, `renderSchema`, `diffSchemas`, `diffPgSchemas`, `fromDrizzleSnapshot`, snapshot and entity schemas (`PgEnumEntity`, `PgUniqueEntity`, …), `Hint`; for SQLite, `sqliteEntitiesOf`, `renderSqliteSchema`, `renderSqliteCreateTable`, `renderSqliteCreateIndex`, `diffSqliteSchemas`, `fromDrizzleSqliteSnapshot`, `SqliteMigrationOp`, `renderSqliteOp`, `renderSqliteMigrationSql`, `labelOfSqlite`, `rebuildName`, the `SqliteSnapshot` schema and the `SqliteTableEntity`, `SqliteColumnEntity`, `SqliteIndexEntity`, `SqliteUniqueEntity` schemas; for MySQL, `mysqlEntitiesOf`, `renderMysqlSchema`, `renderMysqlCreateTable`, `renderMysqlCreateIndex`, `renderMysqlColumnDefinition`, `renderMysqlUnique`, `mysqlIdent`, `canonicalMysqlType`, `diffMysqlSchemas`, `MysqlMigrationOp`, `renderMysqlOp`, `renderMysqlMigrationSql`, `labelOfMysql`, `MysqlOpLabel`, `MysqlSchemaTable`, the `MysqlSnapshot` schema and the `MysqlTableEntity`, `MysqlColumnEntity`, `MysqlIndexEntity`, `MysqlUniqueEntity`, `MysqlSchemaEntity` schemas | `/schema`         |
 | `run`, `status`, `verify`, `verifySnapshot`, `baseline`, `MigrationDriver` and the migrate errors | `/migrate`        |
-| `Database`, `run`, `runOne`, `runOption`, `runNonEmpty`, `stream`, `paginate`, `sql`, `query`, `execute`, `transaction`, `requireTransaction`, `afterCommit`, `retryContention`, `Transaction` | `/database` |
+| `Database`, `run`, `runOne`, `runOption`, `runNonEmpty`, `stream`, `batch` (`BatchCheck`, `BatchRows`), `paginate`, `sql`, `query`, `execute`, `transaction`, `requireTransaction`, `afterCommit`, `retryContention`, `Transaction` | `/database` |
 | `DatabaseError`, `ResultCardinalityError`, `InvalidCursor`, `TransactionCommitFailed`, `TransactionRollbackFailed` and the other transaction errors | `/database` |
 | `refineConstraints`, `constraintViolation`, and the `ConstraintViolation` errors `UniqueViolation`, `ForeignKeyViolation`, `NotNullViolation`, `CheckViolation` | `/database` |
 | `makeRepository`, `Repository`, `TenantRepository`, `RepositoryOf`, `RepositoryOptions`, `RepositoryError` — CRUD derived from a table, tenant-pinned | `/database` |
@@ -646,7 +655,20 @@ conditions).
 | `json(schema)` | JSON text decoded through the supplied schema |
 | `nullable(type)`, `custom`, `brand` | Type composition |
 | `count`, `countDistinct`, `countIf`, `sum`, `avg`, `min`, `max` | SQLite aggregates; the last four can return SQL NULL |
-| `lower`, `upper`, `length`, `coalesce` | SQLite scalar functions |
+| `jsonGroupArray(x, type?)`, `jsonGroupObject(key, value, type?)` | JSON aggregates, decoded as an array / record of `x`'s type, or as `type` |
+| `lower`, `upper`, `length`, `coalesce`, `ifnull`, `nullif` | SQLite scalar functions; `coalesce` and `ifnull` take an expression or plain fallback |
+| `iif(c, then, otherwise)`, `caseWhen([[c, v], ...], otherwise?)` | Conditionals, decoded as any branch can; `ScalarArg` (an expression or plain value) and `ValueOfArg` type their arguments |
+| `trim`, `ltrim`, `rtrim`, `substr`, `replace`, `instr`, `concat` | Text functions; `concat(a, b, ...)` writes `(a \|\| b)` |
+| `abs`, `round`, `greatest`, `least` | Numbers; `greatest` / `least` are SQLite's multi-argument `max` / `min` |
+| `cast(x, type)` | `CAST(x AS <type's SQL>)`, decoded as `type` |
+| `jsonExtract(x, path, type)`, `json_(x)`, `jsonSet(x, path, value)` | JSON functions; `json_` is SQLite's `json()` |
+| `julianday`, `date`, `datetime`, `strftime`, `unixepoch` | Date functions over a `TimeValue`, with modifiers; nullable |
+| `over`, `lead`, `lag`, `rowNumber`, `rank`, `denseRank`, `firstValue`, `lastValue`, `windowSpec`, `rowsBetween`, `rangeBetween`, `currentRow`, `unboundedPreceding`, `unboundedFollowing`, `preceding`, `following` | Window functions ([window functions](./sqlite.md#window-functions)); types `WindowSpec`, `CompiledWindowSpec`, `WindowFrameBound`, `WindowRowsFrame`, `WindowOrderDirection` |
+| `jsonEach(json, { value?, key?, path? })`, `jsonTree(…)` | `json_each` / `json_tree` as a `TableFunction` row source, columns `JsonEachColumns`, types `JsonEachTypes`; the JSON is a `JsonSource` ([table-valued sources](./sqlite.md#table-valued-sources-json_each-and-json_tree)) |
+| `jsonRows(rows, columns)` | A query over a JS array bound as one JSON parameter, one typed column per field (`JsonRowsOutput`) |
+| `fts5Table(name, columns)` | An FTS5 virtual table for queries, with a `Fts5Rowid` (`Fts5Columns`) |
+| `fts5.match`, `fts5.snippet`, `fts5.highlight`, `fts5.bm25` | FTS5 functions over the table's accessor, an `Fts5Source` ([FTS5](./sqlite.md#fts5)) |
+| `runSync(storage, query, params?, options?)` | Compile, run and decode synchronously on a `SqlStorageLike` (Durable Object storage), in a client span; `RunSyncOptions` (`context`, `observeExit`, `spanParameters`); `SyncDefaults` refuses client defaults that need services ([runSync](./sqlite.md#durable-object-storage-runsync)) |
 
 ### Tables and DDL
 
