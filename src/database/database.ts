@@ -55,7 +55,7 @@ export type Runnable =
 	| CHQuery<any, any, any, any>
 	| CHUnionQuery<any>
 	| AnyInsert
-	| CHUpdate<any, any, any, "ready", never, any>
+	| CHUpdate<any, any, any, "ready", never, any, any>
 	| CHDelete<any, any>
 	| CompiledQuery<any, any>
 
@@ -68,6 +68,31 @@ export type RunCheck<Q> = Q extends CHQuery<any, infer Output, any, any> ? Needs
 /** The decoded row of a `Runnable`. */
 export type RowOf<Q> =
 	Q extends CompiledQuery<infer Output, any> ? Output : Q extends { readonly _phantom?: { output: infer Output } } ? Output : never
+
+/**
+ * `unknown` when every statement of a batch can run as `run` would take it;
+ * otherwise the first refusal (a missing param, a function of another
+ * dialect, a query with no SELECT list), naming the statement's position.
+ */
+export type BatchCheck<Qs extends ReadonlyArray<Runnable>, Given, Functions extends string> = {
+	readonly [K in keyof Qs]: RunCheck<Qs[K]> &
+		ParamsSatisfied<QueryParams<Qs[K]>, Given> &
+		DialectSatisfied<QueryParams<Qs[K]>, Functions> &
+		SourcesSatisfied<QueryParams<Qs[K]>>
+} extends infer Checks
+	? FirstRefusal<Checks>
+	: unknown
+
+type FirstRefusal<Checks> = {
+	readonly [K in keyof Checks]: unknown extends Checks[K] ? never : { readonly statement: K; readonly refused: Checks[K] }
+}[keyof Checks & `${number}`] extends infer R
+	? [R] extends [never]
+		? unknown
+		: { readonly batchStatementRefused: R }
+	: unknown
+
+/** The decoded rows of each statement of a batch, in order. */
+export type BatchRows<Qs extends ReadonlyArray<Runnable>> = { -readonly [K in keyof Qs]: ReadonlyArray<RowOf<Qs[K]>> }
 
 /** A row codec for `query`. */
 export type RowSchema<A> = Schema.Codec<A, unknown, never, never>
@@ -136,6 +161,18 @@ export interface DatabaseApi<Functions extends string = string> {
 	 * otherwise the whole result first. A write runs its client defaults first,
 	 * as `run` does.
 	 */
+	/**
+	 * Run a fixed list of statements as one atomic unit and decode each one's
+	 * rows: a tuple, in order. On D1 it is one `batch` request (D1 has no
+	 * transactions); elsewhere it runs the statements in a transaction (a
+	 * savepoint inside an open one). `params` fills every statement's `param.*`
+	 * markers. Each write first runs its table's client defaults, as `run` does.
+	 * A dialect with neither fails with `TransactionUnsupported`.
+	 */
+	readonly batch: <const Qs extends ReadonlyArray<Runnable>, const Given extends object = {}>(
+		queries: Qs & BatchCheck<Qs, Given, Functions>,
+		params?: Given,
+	) => Effect.Effect<BatchRows<Qs>, DatabaseError | QueryBuilderError | CompiledQueryDecodeError | TransactionError, RequirementsOf<Qs[number]>>
 	readonly stream: <Q extends Runnable, const Given extends object = {}>(
 		query: Q &
 			RunCheck<Q> &
@@ -453,6 +490,45 @@ export const fromSqlClient = <Functions extends string = string>(
 			),
 		) as Stream.Stream<any, any, any>
 
+	// D1's client sends a list of statements as one atomic request. It is read
+	// off the client, as D1 offers no transaction to run them in otherwise.
+	const nativeBatch = (sql as { readonly batch?: unknown }).batch
+	const batch: DatabaseApi["batch"] = (queries, params) => {
+		const list = queries as unknown as ReadonlyArray<Runnable>
+		const prepared = Effect.forEach(list, (runnable) =>
+			Effect.flatMap(fillDefaults(runnable), (filled) => Effect.flatMap(compileFor(filled, params ?? {}), checkScope)),
+		)
+		const decodeAll = (compiled: ReadonlyArray<CompiledQuery<any, any>>, wire: ReadonlyArray<ReadonlyArray<Record<string, unknown>>>) =>
+			Effect.forEach(compiled, (query, index) =>
+				query.kind !== "select" && query.returning === undefined ? Effect.succeed([]) : query.decodeRows(wire[index] ?? []),
+			)
+		const viaBatch = (compiled: ReadonlyArray<CompiledQuery<any, any>>) =>
+			Effect.gen(function* () {
+				for (const statement of compiled) yield* guard(statement)
+				const statements = compiled.map((statement) => raw.unsafe<Record<string, unknown>>(statement.sql, statement.parameters))
+				const wire = yield* driver(
+					(nativeBatch as (statements: ReadonlyArray<unknown>) => Effect.Effect<ReadonlyArray<ReadonlyArray<Record<string, unknown>>>, unknown>).call(
+						sql,
+						statements,
+					),
+				).pipe(Effect.mapError(toDatabaseError(compiled.map((statement) => statement.sql).join(";\n"))))
+				return yield* decodeAll(compiled, wire)
+			})
+		const inTransaction = (compiled: ReadonlyArray<CompiledQuery<any, any>>) =>
+			transaction(
+				Effect.forEach(compiled, (query) =>
+					query.kind !== "select" && query.returning === undefined
+						? Effect.as(execute(query), [])
+						: Effect.flatMap(rows(query), (wire) => query.decodeRows(wire)),
+				),
+			)
+		return Effect.flatMap(prepared, (compiled) =>
+			typeof nativeBatch === "function" && capabilities.support === "none" ? viaBatch(compiled) : inTransaction(compiled),
+		).pipe(
+			Effect.withSpan("effect_orm.batch", { attributes: { "db.operation.batch.size": list.length } }),
+		) as Effect.Effect<any, any, any>
+	}
+
 	const retryContention = <A, E, R>(effect: Effect.Effect<A, E, R>, retry?: RetryOptions) =>
 		Effect.flatMap(Effect.serviceOption(sql.transactionService), (open): Effect.Effect<A, E | TransactionOptionsRejected, R> =>
 			Option.isSome(open)
@@ -570,7 +646,7 @@ export const fromSqlClient = <Functions extends string = string>(
 			? once(body, options)
 			: retryContention(once(body, options), options.retry === "contention" ? undefined : options.retry)
 
-	return { dialect, run, stream, query, execute, transaction, retryContention }
+	return { dialect, run, batch, stream, query, execute, transaction, retryContention }
 }
 
 /**
@@ -656,6 +732,16 @@ export const run = <Q extends Runnable, const Given extends object = {}>(
 	DatabaseError | QueryBuilderError | CompiledQueryDecodeError,
 	Database | RequirementsOf<Q>
 > => Effect.flatMap(Effect.service(Database), (db) => db.run(query, params))
+
+/** `batch` on the `Database` in context. */
+export const batch = <const Qs extends ReadonlyArray<Runnable>, const Given extends object = {}>(
+	queries: Qs & BatchCheck<Qs, Given, string>,
+	params?: Given,
+): Effect.Effect<
+	BatchRows<Qs>,
+	DatabaseError | QueryBuilderError | CompiledQueryDecodeError | TransactionError,
+	Database | RequirementsOf<Qs[number]>
+> => Effect.flatMap(Effect.service(Database), (db) => db.batch(queries, params))
 
 /** What `run` can fail with. */
 type RunError = DatabaseError | QueryBuilderError | CompiledQueryDecodeError
