@@ -1,7 +1,8 @@
 #!/usr/bin/env node
-// Every export of the four dialect entries is named in docs/reference.md, whose
-// first line claims to be the catalog. A claim like that decays the moment
-// anything is added, so it is checked rather than promised.
+// Every export of every entry is named in docs/reference.md, whose first line
+// claims to be the catalog. A claim like that decays the moment anything is
+// added, so it is checked rather than promised. It is also what a release
+// freezes: an export nobody wrote down is one nobody decided to keep.
 //
 // Reads the BUILT types, not the source: what a consumer can import is what
 // `dist/<entry>.d.mts` says, and the barrel's re-export chains are already
@@ -11,7 +12,11 @@ import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..")
-const entries = ["clickhouse", "postgres", "sqlite", "mysql"]
+// The entries package.json exports, as their built files are named.
+const entries = [
+	"clickhouse", "postgres", "sqlite", "mysql", "expr", "sql", "schema", "tinybird", "migrate", "database", "seed", "kit",
+	"clickhouse-http", "benchmark/index", "benchmark/http", "benchmark/cli",
+]
 
 const exportsOf = (entry) => {
 	const dts = join(root, `dist/${entry}.d.mts`)

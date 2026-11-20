@@ -561,7 +561,7 @@ This is deliberate. A default ClickHouse server refuses `BEGIN TRANSACTION`
 Effect's ClickHouse client has no session, so its own `withTransaction` cannot be atomic. It
 fails at BEGIN today: through the query path with a syntax error, and through `asCommand` with
 `NOT_IMPLEMENTED`. The full measurements are in
-[`design/transactions.md`](../design/transactions.md).
+[`design/transactions.md`](https://github.com/MapleTechLabs/effect-orm/blob/main/design/transactions.md).
 
 ## Tracing
 

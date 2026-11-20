@@ -242,4 +242,4 @@ _(Backed by `src/sqlite/relations.test.ts`.)_
   select the count and order by its alias.
 - `param.*` markers in a `where`: `findMany` takes no params, so write values in.
 
-See [design/relations.md](../design/relations.md) for the design and the alternatives.
+See [design/relations.md](https://github.com/MapleTechLabs/effect-orm/blob/main/design/relations.md) for the design and the alternatives.

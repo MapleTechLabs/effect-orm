@@ -6,12 +6,18 @@ The package has one entry per database, each self-contained:
 import * as CH from "@maple-dev/effect-orm/clickhouse"
 import * as PG from "@maple-dev/effect-orm/postgres"
 import * as SQLite from "@maple-dev/effect-orm/sqlite"
+import * as MySQL from "@maple-dev/effect-orm/mysql"
 ```
 
 All carry the whole [query builder](#query-builder-every-entry). Each adds its own column
 types, functions, table definitions and a `compile` that defaults to its dialect:
-[`/clickhouse`](#clickhouse) and [`/postgres`](#postgres). Everything else is on a
-[subpath](#other-subpaths) for a narrower job.
+[`/clickhouse`](#clickhouse), [`/postgres`](#postgres), [`/sqlite`](#sqlite-and-d1) and
+[`/mysql`](#mysql-and-mariadb). Everything else is on a [subpath](#other-subpaths) for a
+narrower job.
+
+The builder's own types keep the `CH` prefix they had when it was a ClickHouse builder
+(`CHQuery`, `CHInsert`, `CHUpdate`, `CHDelete`, `CHUnionQuery`, `CHType`): they are the same
+types in every entry, so a Postgres query is a `PG.CHQuery`.
 
 ## Naming conventions
 
@@ -603,14 +609,34 @@ the default.
 | Symbol                                                                                           | Subpath           |
 | ------------------------------------------------------------------------------------------------ | ----------------- |
 | The ClickHouse functions under their raw underscored names, the expression helpers and function factories, and `toFragment` — value → `SqlFragment`, for hand-rolled function wrappers | `/expr`           |
+| `match_` (the RE2 test as a `UInt8` value, for aggregating or selecting as a flag) and `multiSearchAnyCaseInsensitive` (true when the text holds any of the needles, ignoring case), which `/clickhouse` does not re-export | `/expr` |
 | `raw`, `str`, `ident`, `int`, `join`, `as_`, `lazy`, `when`, `compile`, `escapeClickHouseString` | `/sql`            |
 | `SqlQuery`, `compileQuery`                                                                       | `/sql`            |
 | `ClickHouseStatement`, `parseStatement`, `renderStatement`, `withSettings`, `withFormat`         | `/sql`            |
 | `ClickHouseStatementFromString`, `splitTerminalClauses`, `maskLiteralsAndComments`               | `/sql`            |
+| `ClickHouseStatementFields` (the `body`, `settings` and `format` that `renderStatement` takes) and `TerminalClauses` (what `splitTerminalClauses` returns) | `/sql` |
 | Schema tooling: `isSchemaObject`, `makeSnapshot`, `renderSchema`, `diffSchemas`, `diffPgSchemas`, `fromDrizzleSnapshot`, snapshot and entity schemas (`PgEnumEntity`, `PgUniqueEntity`, …), `Hint`; for SQLite, `sqliteEntitiesOf`, `renderSqliteSchema`, `renderSqliteCreateTable`, `renderSqliteCreateIndex`, `diffSqliteSchemas`, `fromDrizzleSqliteSnapshot`, `SqliteMigrationOp`, `renderSqliteOp`, `renderSqliteMigrationSql`, `labelOfSqlite`, `rebuildName`, the `SqliteSnapshot` schema and the `SqliteTableEntity`, `SqliteColumnEntity`, `SqliteIndexEntity`, `SqliteUniqueEntity` schemas; for MySQL, `mysqlEntitiesOf`, `renderMysqlSchema`, `renderMysqlCreateTable`, `renderMysqlCreateIndex`, `renderMysqlColumnDefinition`, `renderMysqlUnique`, `mysqlIdent`, `canonicalMysqlType`, `diffMysqlSchemas`, `MysqlMigrationOp`, `renderMysqlOp`, `renderMysqlMigrationSql`, `labelOfMysql`, `MysqlOpLabel`, `MysqlSchemaTable`, the `MysqlSnapshot` schema and the `MysqlTableEntity`, `MysqlColumnEntity`, `MysqlIndexEntity`, `MysqlUniqueEntity`, `MysqlSchemaEntity` schemas | `/schema`         |
+| ClickHouse entities and snapshots, as Effect schemas: `TableEntity`, `ColumnEntity`, `IndexEntity`, `MaterializedViewEntity`, `SchemaEntity` (their union), `EngineSpec`, `ColumnDefault`, the `Snapshot` schema with `ClickHouseSnapshot` and `PgSnapshot`, `SNAPSHOT_VERSION`, `ORIGIN_ID` (the parent id of a first migration), `serializeSnapshot`, and the types `AnySchemaEntity`, `SchemaObject`, `SchemaDialect` | `/schema` |
+| ClickHouse migration ops and their SQL: `MigrationOp`, `MigrationFile`, `ClickHouseMigrationFile`, `renderOp`, `labelOf` and `OpLabel`, `renderCreateTable`, `renderCreateMaterializedView`, `renderColumnDefinition`, `renderEngine`, `renderAlter`, `renderDropTable`, `renderDropView`, `RenderOptions`; backfills: `BackfillSpec`, `backfillWindows`, `renderBackfill`, `renderBackfillBounds` | `/schema` |
+| The diff's result and inputs: `DiffResult`, `UnsupportedChange`, `Hints` (the schema of a `--hints` array), `DrizzleImport`, `DrizzleSqliteImport` | `/schema` |
+| Postgres: the entity schemas `PgTableEntity`, `PgColumnEntity`, `PgIndexEntity`, `PgForeignKeyEntity`, `PgSchemaEntity`, `PgIdentity`, `PgReferentialAction`; `PgMigrationOp`, `PgMigrationFile`, `renderPgOp`, `renderPgSchema`, `renderPgCreateEnum`, `renderPgAddUnique`, `labelOfPg` and `PgOpLabel`; `pgIdent`, `pgTypeName`, `canonicalPgType` | `/schema` |
+| SQLite: `SqliteSchemaEntity`, `SqliteOpLabel`, `renderSqliteColumnDefinition`, `sqliteIdent`, `canonicalSqliteType` | `/schema` |
+| Shared helpers: `entityKey`, `sortEntities`, `dialectOfObject`, `canonicalJson`, `sha256Hex` | `/schema` |
+| `defineDatasource`, `defineMaterializedView`, `node`, `column`, `t`, `engine`, `buildProject`, `InferRow` — the `@tinybirdco/sdk` call shapes, whose results are also query tables ([Tinybird](./tinybird.md)) | `/tinybird` |
+| Definition types: `Datasource`, `AnyDatasource`, `DatasourceOptions`, `DatasourceIndex`, `SchemaDefinition`, `ColumnDefinition`, `EngineConfig`, `MaterializedViewDefinition`, `NodeDefinition`, `TinybirdType`, `AnyTinybirdType`, `TypeModifiers`, `ColumnsOfSchema`, `DefaultedColumnsOfSchema`, `RowOf` | `/tinybird` |
+| Datafiles: `TinybirdProject` and `Datafile` (what `buildProject` returns), `generateDatasource`, `generatePipe`, `formatDefaultValue`; and the readers `getColumnType`, `getColumnJsonPath`, `getModifiers`, `getTinybirdType`, `isTinybirdType`, `isDatasourceDefinition`, `isPipeDefinition` | `/tinybird` |
 | `run`, `status`, `verify`, `verifySnapshot`, `baseline`, `MigrationDriver` and the migrate errors | `/migrate`        |
+| The driver: `MigrationDriverApi` (`execute`, `query`, optional `transaction`), `fromSqlClient` and `layerSqlClient` to build one from an Effect `SqlClient`, `FromSqlClientOptions` | `/migrate` |
+| Migration sources: `fromFileSystem`, `fromRecord`, `MigrationInput`, `LoadedMigration`, `MigrationStep`, `orderMigrations`, `stepsOf`, `dialectOf`, `isStagingName`, `STATEMENT_BREAKPOINT` | `/migrate` |
+| Running a migration a step at a time, for an orchestrator: `pendingMigrations`, `planMigration`, `planSteps`, `applyStep`, `completeMigration`, `resolveStep`, with `MigrationPlan`, `PlannedStep`, `ResolveStepOptions` | `/migrate` |
+| Options and results: `RunOptions`, `BaselineOptions`, `VerifyOptions`, `VerifyResult`, `Drift`, `AppliedMigration`, `MigrationStatus`, `MigrationState`; `LEDGER_TABLES` names the three ledger tables | `/migrate` |
+| The errors, each a tagged error, and their union `MigrateError`: `MigrateSqlError`, `MigrateSourceError`, `MigrateHashMismatch`, `MigrateLeaseHeld`, `MigrateStepFailed`, `MigrateStepChanged`, `MigrateStepUncertain` | `/migrate` |
 | `Database`, `run`, `runOne`, `runOption`, `runNonEmpty`, `stream`, `batch` (`BatchCheck`, `BatchRows`), `paginate`, `sql`, `query`, `execute`, `transaction`, `requireTransaction`, `afterCommit`, `retryContention`, `Transaction` | `/database` |
 | `DatabaseError`, `ResultCardinalityError`, `InvalidCursor`, `TransactionCommitFailed`, `TransactionRollbackFailed` and the other transaction errors | `/database` |
+| Building one: `fromSqlClient`, `layerSqlClient`, `FromSqlClientOptions`, `DatabaseApi` | `/database` |
+| What statements are: `Runnable` and `RowOf` (for `run`), `Statement` and `StatementInput` (for `query` and `execute`), `RowSchema` (the row codec `query` takes), and the `sql` template's `SqlTemplate`, `SqlIdentifier`, `SqlRawText` | `/database` |
+| Transactions: `TransactionOptions`, `TransactionInfo`, `RetryOptions`, `isContention`, the union `TransactionError`, and `TransactionUnsupported`, `TransactionOptionsRejected`, `TransactionClosed`; `TenantScopeViolation`, the defect a `requireTenantScope` database raises | `/database` |
+| Keyset pages: `Page`, `PaginateOptions`, `KeysetOrder`, `KeysetColumn`, `KeysetDirection` | `/database` |
 | `refineConstraints`, `constraintViolation`, and the `ConstraintViolation` errors `UniqueViolation`, `ForeignKeyViolation`, `NotNullViolation`, `CheckViolation` | `/database` |
 | `makeRepository`, `Repository`, `TenantRepository`, `RepositoryOf`, `RepositoryOptions`, `RepositoryError` — CRUD derived from a table, tenant-pinned | `/database` |
 | `findById`, `findAllBy`, `FindById`, `FindAllBy`, `LookupOptions`, `LookupError` — batched lookups by a key, one `IN` statement per batch | `/database` |
@@ -620,12 +646,22 @@ the default.
 | `layerTest`, `TestDatabase`, `TestDatabaseApi`, `TestDatabaseOptions`, `TestReply`, `TestStatement` — a `Database` with no server, for unit tests | `/database` |
 | `rows`, `insert`, `arbitrary`, `pick`, `SeedError`, `SeedRow`, `SeedRowOf`, `ColumnOverride`, `RowsOptions`, `InsertOptions`, `ArbitraryOptions` — rows from the column Schemas; see [Seeding](./seeding.md) | `/seed` |
 | `StatementObservation` — what `observeExit` gets for each statement: names, duration, rows, `error.type` | `/database` |
-| `ClickhouseHttpClient`, `layer`, `make`, `ClickhouseHttpClientConfig` — a ClickHouse `SqlClient` over `fetch`, for Workers | `/clickhouse-http` |
+| `ClickhouseHttpClient`, `layer`, `make`, `ClickhouseHttpClientConfig`, `ClickhouseSetting` — a ClickHouse `SqlClient` over `fetch`, for Workers | `/clickhouse-http` |
 | `defineConfig`, `generate`, `check`, `pull`, `verifySchema`, `loadSchema`, `readMigrations`, `analyze`, `KitError` | `/kit`            |
+| `KitConfig` (the shape of `effect-orm.config.ts`), and the option and result types of the functions above: `GenerateOptions`, `GenerateResult`, `PullOptions`, `PullResult`, `VerifySchemaResult`, `GraphAnalysis`, `GraphProblem` | `/kit` |
 | `defineSuite`, `query`, `caseFromCompiled`, `runSuite`, `compareRuns`, `compareBudgets`          | `/benchmark`      |
 | `Suite`, `RunOutput`, `BenchmarkError` and benchmark contracts                                   | `/benchmark`      |
+| The contracts by name: `Sample`, `SampleResult`, `RunMetrics`, `Aggregates`, `BenchmarkInput`, `RunOptions`, `BenchmarkTransport`, `BenchmarkResponse`, `BenchmarkProgress`, `LogMetrics`, `ComparisonOptions`, `ComparisonMetric`, `ComparisonRow`, `Verdict` | `/benchmark` |
+| Helpers the runner is built from: `validateSuite`, `sampleId`, `benchmarkSql`, `explainSql`, `validateReplaySql`, `mean`, `percentile`, `metricNumber`, `canonicalJson` | `/benchmark` |
 | `makeHttpClient`, `makeHttpTransport`, `httpConfigFromEnv`                                       | `/benchmark/http` |
+| `HttpConfig`, `decodeJson`, `decodeJsonLines` | `/benchmark/http` |
 | `runCli`                                                                                         | `/benchmark/cli`  |
+
+Every export of every entry is named on this page; `bun run test` fails when one is not. The
+dialect entries, `/database`, `/migrate`, `/seed` and `/clickhouse-http` are the application API.
+`/schema`, `/kit`, `/sql`, `/tinybird` and `/benchmark` also export the pieces their own tools
+are built from (entity schemas, renderers, op labels), for tools built on top of them; those
+follow the same versioning.
 
 `/schema` reads tables; it does not declare them. Declare tables with `table` from `/clickhouse`,
 `/postgres`, `/sqlite` or `/mysql`. See [Schema and migrations](./migrations.md), [Database](./database.md),

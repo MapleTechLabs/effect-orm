@@ -1,19 +1,24 @@
 # @maple-dev/effect-orm
 
-> [!WARNING]
-> **Alpha.** The API is still changing and minor releases may break it. Pin an exact version,
-> read the [changelog](./CHANGELOG.md) before upgrading, and expect rough edges.
-
 Type-safe ClickHouse, Postgres, SQLite and MySQL queries, result decoding, and reproducible benchmarks for Effect and TypeScript.
 
+One query builder and row decoder, four databases, each with its own entry:
+
+| Database | Entry | Driver you bring |
+| --- | --- | --- |
+| ClickHouse | [`/clickhouse`](./docs/getting-started.md) | Any client, `@effect/sql-clickhouse`, or the bundled [`/clickhouse-http`](./docs/running-queries.md) over `fetch` |
+| Postgres | [`/postgres`](./docs/postgres.md) | `@effect/sql-pg` or another Effect `SqlClient` |
+| SQLite and Cloudflare D1 | [`/sqlite`](./docs/sqlite.md) | `@effect/sql-sqlite-node`, `@effect/sql-d1` |
+| MySQL 8 and MariaDB 10.6+ | [`/mysql`](./docs/mysql.md) | `@effect/sql-mysql2` |
+
+Every entry writes its table DDL, and `effect-orm generate` writes migrations for all four.
+effect-orm applies them for ClickHouse and Postgres; SQLite and MySQL migrations are generated
+for your own runner.
+
+The package follows semantic versioning from 1.0.0: a breaking change to a documented export
+is a major release, and the [changelog](./CHANGELOG.md) says what changed.
+
 Formerly `@maple-dev/effect-clickhouse`.
-
-SQLite and Cloudflare D1 use the same builder and row decoder through the new
-[`/sqlite` entry](./docs/sqlite.md), which also writes SQLite table DDL. `effect-orm generate` writes SQLite migrations; effect-orm does not apply them yet.
-
-MySQL 8 and MariaDB 10.6+ use it through the [`/mysql` entry](./docs/mysql.md), with
-`@effect/sql-mysql2`, fuzzed on MySQL 8.4 and MariaDB 11.4. It also writes MySQL table DDL, and
-`effect-orm generate` writes MySQL migrations; effect-orm does not apply them yet.
 
 [Read the documentation](https://effect-orm.maple.dev) ·
 [Getting started](./docs/getting-started.md) · [Recipes](./docs/recipes.md) · [Coming from Drizzle or Prisma](./docs/coming-from-drizzle-prisma.md)
@@ -132,6 +137,9 @@ See [Tables and column types](./docs/tables-and-types.md).
 If several tenants share a table, declare which column holds the tenant and turn on enforcement:
 
 ```ts
+import * as CH from "@maple-dev/effect-orm/clickhouse"
+import * as Db from "@maple-dev/effect-orm/database"
+
 const Events = CH.table("events", { columns: { OrgId: CH.string /* ... */ }, /* ... */ tenantColumn: "OrgId" })
 
 const DatabaseLive = Db.layerSqlClient({ dialect: CH.clickhouseDialect, requireTenantScope: true })
@@ -215,15 +223,24 @@ Full guides live in [`docs/`](./docs/README.md):
 | [Running a query](./docs/running-queries.md)               | Executing the SQL with a real client, wire settings, `SETTINGS` |
 | [Tenant scoping](./docs/tenant-scoping.md)                 | `tenantColumn`, what marks a query scoped, `crossTenant()`      |
 | [Relational reads](./docs/relations.md)                    | `defineRelations`, `findMany` with nested `with`                |
+| [Running statements with Database](./docs/database.md)   | `Database` over a `SqlClient`: `run`, `execute`, transactions, typed constraint errors |
 | [Postgres](./docs/postgres.md)                             | The Postgres dialect, its column types and functions            |
+| [SQLite and D1](./docs/sqlite.md)                          | The SQLite dialect, its DDL, Cloudflare D1                      |
+| [MySQL and MariaDB](./docs/mysql.md)                       | The MySQL dialect, its column types, DDL and limits             |
+| [Tinybird](./docs/tinybird.md)                             | Datasources and materialized views that are also query tables   |
 | [Schema and migrations](./docs/migrations.md)              | DDL from `table`, `effect-orm generate`, applying migrations    |
+| [Seeding](./docs/seeding.md)                               | Deterministic test and demo rows from the column Schemas        |
 | [Extending the DSL](./docs/extending.md)                   | `defineFn`, raw escape hatches, handwritten SQL                 |
 | [Coming from Drizzle or Prisma](./docs/coming-from-drizzle-prisma.md) | Their operations mapped to effect-orm, and a Worker on Hyperdrive |
+| [Recipes](./docs/recipes.md)                               | Complete queries to adapt: time buckets, optional filters, HAVING, pagination |
+| [Benchmarking](./docs/benchmarking.md)                     | `ch-bench` and the `/benchmark` entry: fixed workloads, baselines |
+| [Testing and release checks](./docs/testing.md)            | What the suites cover, and the pinned database versions         |
+| [Troubleshooting](./docs/troubleshooting.md)               | Install, compile and decode problems, and what they mean        |
 | [API reference](./docs/reference.md)                       | Full export catalog by module, plus error types                 |
 
 Named complete examples are extracted and checked by
-[`scripts/check-doc-examples.mjs`](./scripts/check-doc-examples.mjs). Focused query and decoding
-regressions live in [`src/docs-examples.test.ts`](./src/docs-examples.test.ts).
+[`scripts/check-doc-examples.mjs`](https://github.com/MapleTechLabs/effect-orm/blob/main/scripts/check-doc-examples.mjs). Focused query and decoding
+regressions live in [`src/docs-examples.test.ts`](https://github.com/MapleTechLabs/effect-orm/blob/main/src/docs-examples.test.ts).
 
 ## Entry points
 
@@ -231,6 +248,8 @@ regressions live in [`src/docs-examples.test.ts`](./src/docs-examples.test.ts).
 | ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `@maple-dev/effect-orm/clickhouse`  | Everything for ClickHouse: the query builder (`from`, `param`, `insertInto`, …), column types (`string`, `uint64`, `map`, …), functions (`count`, `quantile`, …), `table` with its DDL, and `compile`. |
 | `@maple-dev/effect-orm/postgres`    | The same for Postgres: the builder, Postgres column types (`text`, `int8`, `timestamptz`, …) and functions, `table` with keys, indexes and foreign keys, and a `compile` for Postgres. |
+| `@maple-dev/effect-orm/sqlite`      | The same for SQLite and Cloudflare D1: SQLite column types and functions, `table` with its DDL, and `sqliteDialect` / `d1Dialect`. See [SQLite and D1](./docs/sqlite.md). |
+| `@maple-dev/effect-orm/mysql`       | The same for MySQL 8 and MariaDB 10.6+: MySQL column types and functions, `table` with keys and indexes, and `mysqlDialect` / `mariadbDialect`. See [MySQL and MariaDB](./docs/mysql.md). |
 | `@maple-dev/effect-orm/expr`        | Kitchen-sink namespace: every expression helper plus all ClickHouse functions under their raw names (`min_`, `toString_`, `toStartOfInterval`, `dynamicColumn`, …). |
 | `@maple-dev/effect-orm/sql`         | The low-level `SqlFragment` AST (`raw`, `ident`, `compile`, …) for hand-rolling fragments.                                                                    |
 | `@maple-dev/effect-orm/tinybird`    | Tinybird datasources and materialized views, SDK-compatible, that are also query tables; `buildProject` writes the datafiles. See [Tinybird](./docs/tinybird.md). |
@@ -239,6 +258,10 @@ regressions live in [`src/docs-examples.test.ts`](./src/docs-examples.test.ts).
 | `@maple-dev/effect-orm/database`    | `Database` over your `SqlClient`: `run`, `execute`, `transaction` with retry.                                                                                  |
 | `@maple-dev/effect-orm/seed`        | Deterministic test and demo rows from the column Schemas, through `Schema` → `Arbitrary`, inserted in batches. See [Seeding](./docs/seeding.md).              |
 | `@maple-dev/effect-orm/clickhouse-http` | A ClickHouse `SqlClient` over `fetch`, for Cloudflare Workers and any runtime with `fetch`; give it to `Database`. |
+| `@maple-dev/effect-orm/benchmark`, `/benchmark/http`, `/benchmark/cli` | Query benchmarks: fixed workloads, saved baselines and the `ch-bench` CLI. See [Benchmarking](./docs/benchmarking.md). |
+
+There is no root import: every module is one of the entries above. Two CLIs ship with the
+package, `effect-orm` (migrations) and `ch-bench` (benchmarks).
 
 ## Extending with custom functions
 
@@ -274,13 +297,13 @@ build, types, tests, docs, and an isolated tarball consumer. `prepublishOnly` en
 this check. See [Testing and release checks](./docs/testing.md) for the coverage manifest
 and pinned ClickHouse version matrix.
 
-## License
-
-MIT
-
 ## Query benchmarks
 
 The optional `@maple-dev/effect-orm/benchmark` entry point and bundled
 `ch-bench` CLI measure real queries, compare fixed workloads, and save evidence.
 See [Benchmarking](docs/benchmarking.md) and the
 [agent playbook](docs/benchmark-agent.md). The `/clickhouse` and `/postgres` builders remain driver-free.
+
+## License
+
+MIT
