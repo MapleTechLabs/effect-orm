@@ -4,6 +4,7 @@ import { compile as compileFragment, lazy, str } from "../sql/sql-fragment"
 import { compileCHUnsafe, compileUnionUnsafe } from "./compile"
 import type { Dialect } from "./dialect"
 import * as CH from "./index"
+import * as Entry from "../clickhouse"
 import * as PG from "../postgres"
 import * as SQLite from "../sqlite"
 
@@ -224,6 +225,83 @@ describe("dialect identifiers and clauses", () => {
 
 		expect(() => compileCHUnsafe(branch.format("JSON"), {}, { dialect: quoted })).toThrow(/no FORMAT clause/)
 		expect(compileCHUnsafe(branch.format("JSON"), {}).sql).toMatch(/FORMAT JSON$/)
+	})
+})
+
+// ClickHouse wrote every name bare, so a select key with a space or a `-` was a
+// syntax error and a key taken from input was SQL. A plain name is still bare.
+describe("ClickHouse identifiers", () => {
+	const flat = (compiled: { readonly sql: string }) => compiled.sql.replace(/\s+/g, " ")
+
+	it("writes plain names bare, Nested paths included", () => {
+		const nested = CH.table("spans", { OrgId: CH.string, "Events.Name": CH.array(CH.string) })
+		expect(flat(compileCHUnsafe(CH.from(nested).select(($) => ({ names: $["Events.Name"], from: $.OrgId })), {}))).toBe(
+			"SELECT spans.Events.Name AS names, spans.OrgId AS from FROM spans",
+		)
+	})
+
+	// `AS Events.Name` is a syntax error: a key is one name, where the column it reads is a path.
+	it("quotes a select key with a dot, as the key and where GROUP BY and ORDER BY name it", () => {
+		const nested = CH.table("spans", { OrgId: CH.string, "Events.Name": CH.array(CH.string) })
+		const query = CH.from(nested)
+			.select(($) => ({ "Events.Name": $["Events.Name"], "n.total": CH.count() }))
+			.groupBy("Events.Name")
+			.orderBy(["n.total", "desc"])
+		expect(flat(compileCHUnsafe(query, {}))).toBe(
+			"SELECT spans.Events.Name AS `Events.Name`, count() AS `n.total` FROM spans GROUP BY `Events.Name` ORDER BY `n.total` DESC",
+		)
+		expect(flat(compileCHUnsafe(CH.from(nested).select("Events.Name"), {}))).toBe("SELECT spans.Events.Name AS `Events.Name` FROM spans")
+	})
+
+	it("quotes a name that is not plain wherever it is written", () => {
+		const query = CH.from(events)
+			.select(($) => ({ "p-95": CH.max($.Count), "by service": $.Service }))
+			.groupBy("by service")
+			.orderBy(["p-95", "desc"])
+		expect(flat(compileCHUnsafe(query, {}))).toBe(
+			"SELECT max(events.Count) AS `p-95`, events.Service AS `by service` FROM events GROUP BY `by service` ORDER BY `p-95` DESC",
+		)
+	})
+
+	it("keeps a name taken from input one name", () => {
+		const key = "x FROM system.users --"
+		expect(flat(compileCHUnsafe(CH.from(events).select(($) => ({ [key]: $.Service })), {}))).toBe(
+			"SELECT events.Service AS `x FROM system.users --` FROM events",
+		)
+		expect(flat(compileCHUnsafe(CH.from(events).select(($) => ({ "a`b\\c'd;e": $.Service })), {}))).toBe(
+			"SELECT events.Service AS `a\\`b\\\\c\\'d\\x3Be` FROM events",
+		)
+	})
+
+	it.each(["all", "cube", "distinct", "false", "inf", "infinity", "nan", "not", "null", "NULL", "recursive", "rollup", "select", "top", "true"])(
+		"quotes %s, which ClickHouse reads as something other than a name",
+		(word) => {
+			expect(flat(compileCHUnsafe(CH.from(events).select(($) => ({ [word]: $.Count })).orderBy([word, "asc"]), {}))).toBe(
+				`SELECT events.Count AS \`${word}\` FROM events ORDER BY \`${word}\` ASC`,
+			)
+		},
+	)
+
+	it("cannot spell a param: the marker is escaped inside the quotes", () => {
+		const query = CH.from(events)
+			.select(($) => ({ __PARAM_string_orgId__: $.Count }))
+			.where(($) => [$.OrgId.eq(CH.param.string("orgId"))])
+		expect(flat(compileCHUnsafe(query, { orgId: "o" }))).toBe(
+			"SELECT events.Count AS `\\x5F_PARAM_string_orgId__` FROM events WHERE events.OrgId = 'o'",
+		)
+		// A dialect that quotes without escaping it refuses the name instead.
+		expect(() => PG.compileUnsafe(PG.from(events).select(($) => ({ __PARAM_string_orgId__: $.Count })), {})).toThrow(
+			/wrote a name containing the reserved param marker/,
+		)
+	})
+
+	it("quotes the columns of an external table, and writes its name as given", () => {
+		const weird = Entry.table("`my-db`.events", { external: true, columns: { "user id": CH.string, order: CH.string } })
+		expect(flat(compileCHUnsafe(CH.from(weird).select("user id", "order").where(($) => [$["user id"].eq("u")]), {}))).toBe(
+			"SELECT __ch_source.`user id` AS `user id`, __ch_source.order AS order FROM `my-db`.events AS __ch_source WHERE __ch_source.`user id` = 'u'",
+		)
+		const numbers = Entry.table("numbers(10)", { external: true, columns: { number: CH.uint64 } })
+		expect(flat(compileCHUnsafe(CH.from(numbers).select("number"), {}))).toBe("SELECT __ch_source.number AS number FROM numbers(10) AS __ch_source")
 	})
 })
 

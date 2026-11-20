@@ -36,12 +36,63 @@ export const quoteClickHouseString = (value: string): string => `'${escapeClickH
  *  ClickHouse's outside a compile. */
 const quoteString = (value: string): string => (activeSqlSyntax()?.quoteString ?? quoteClickHouseString)(value)
 
-/** One identifier in the syntax of the dialect being compiled for. ClickHouse
- *  names are written bare, which is also the rendering outside a compile. */
-export const quoteIdent = (name: string): string => activeSqlSyntax()?.quoteIdent(name) ?? name
+// ClickHouse identifiers
+
+const PLAIN_CLICKHOUSE_IDENT = /^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$/
+
+// The words ClickHouse reads as something else where the builder writes a bare
+// name: a literal (`ORDER BY null`), a modifier (`GROUP BY rollup`, `FROM x AS
+// all`) or the start of a query (`WITH select AS (…)`). Found by using each of
+// `system.keywords` (25.8 and 26.8) as a select alias, in GROUP BY, ORDER BY
+// and HAVING, as a table and join alias and as a CTE name; every other keyword
+// is an ordinary name in all of those.
+const RESERVED_CLICKHOUSE_IDENTS = new Set([
+	"all", "cube", "distinct", "false", "inf", "infinity", "nan", "not", "null", "recursive", "rollup", "select", "top", "true",
+])
+
+/**
+ * One ClickHouse identifier. A plain name (letters, digits, `_`, and dots for a
+ * Nested column such as `Events.Name`) is written bare; any other is quoted in
+ * backticks, so a name with a space or a `-` is one name and a name can never
+ * be read as SQL. The escapes are the string literal's, `;` and the param
+ * marker included, for the reasons given there.
+ */
+export const quoteClickHouseIdent = (name: string): string =>
+	PLAIN_CLICKHOUSE_IDENT.test(name) && !name.includes("__PARAM_") &&
+		!name.split(".").some((segment) => RESERVED_CLICKHOUSE_IDENTS.has(segment.toLowerCase()))
+		? name
+		: backticked(name)
+
+const backticked = (name: string): string => `\`${escapeClickHouseString(name).replace(/`/g, "\\`")}\``
+
+/** One identifier in the syntax of the dialect being compiled for, or
+ *  ClickHouse's outside a compile. */
+export const quoteIdent = (name: string): string => (activeSqlSyntax()?.quoteIdent ?? quoteClickHouseIdent)(name)
+
+/**
+ * A name the statement itself introduces: a select key, and the same key where
+ * GROUP BY, ORDER BY or DISTINCT ON names it. It is never a path, so a dot in
+ * one is quoted even where a column of that name is written bare: ClickHouse
+ * reads `spans.Events.Name` as the Nested column, and `AS Events.Name` as a
+ * syntax error.
+ */
+export const quoteAlias = (name: string): string => {
+	const quoted = quoteIdent(name)
+	return quoted === name && name.includes(".") ? backticked(name) : quoted
+}
 
 /** A dotted path (`db.table`, `alias.Column`) with each segment quoted. */
 export const quoteIdentPath = (path: string): string => path.split(".").map(quoteIdent).join(".")
+
+/**
+ * A table where a statement names one: a dotted path of identifiers. A name
+ * that is not one is written as given where the dialect says so (ClickHouse,
+ * whose external tables may be a table function or a subquery).
+ */
+export const quoteTable = (name: string): string => {
+	const syntax = activeSqlSyntax()
+	return (syntax === undefined || syntax.rawTableNames === true) && !PLAIN_CLICKHOUSE_IDENT.test(name) ? name : quoteIdentPath(name)
+}
 
 // SQL Fragment AST
 
@@ -117,7 +168,7 @@ export const compile: (fragment: SqlFragment) => string = Frag.$match({
 		return qualifier === undefined ? quoteIdent(name) : `${quoteIdentPath(qualifier)}.${quoteIdent(name)}`
 	},
 	Join: ({ separator, fragments }) => fragments.map(compile).filter(Boolean).join(separator),
-	As: ({ expr, alias }) => `${compile(expr)} AS ${quoteIdent(alias)}`,
+	As: ({ expr, alias }) => `${compile(expr)} AS ${quoteAlias(alias)}`,
 	When: ({ condition, fragment }) => (condition ? compile(fragment) : ""),
 	Lazy: ({ render, known }) => (known === true ? render() : hidden(render)),
 })

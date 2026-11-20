@@ -17,6 +17,50 @@ it.layer(FetchHttpClient.layer)("builder identity regressions", (it) => {
 			}
 		}))
 
+		// Every name used to be written bare: these were syntax errors, wrong
+		// results (`ORDER BY null`), or SQL of the caller's making.
+		it.effect("reads rows back under any select key, source alias and column name", () => Effect.gen(function* () {
+			const source = CH.table("(SELECT arrayJoin([3, 1, 2, 2]) AS `user id`)", { external: true, columns: { "user id": CH.uint8 } })
+			const names = [
+				"a b", "p-95", "x FROM system.users --", "a`b", "back\\slash", "q'uote", "semi;colon", "new\nline", "__PARAM_string_org__",
+				"null", "NULL", "true", "select", "distinct", "rollup", "inf", "from", "order", "ünï-cödé 🙂", "1st", "a.b-c", '"dq"',
+			]
+			for (const name of names) {
+				for (const alias of [undefined, "my source"]) {
+					const compiled = CH.compileUnsafe(
+						CH.from(source, alias)
+							.select(($) => ({ [name]: $["user id"], hits: CH.count() }))
+							.groupBy(name)
+							.orderBy([name, "desc"]),
+						{},
+					)
+					expect((yield* execute(compiled)).rows, compiled.sql).toEqual([
+						{ [name]: 3, hits: 1 },
+						{ [name]: 2, hits: 2 },
+						{ [name]: 1, hits: 1 },
+					])
+				}
+			}
+		}))
+
+		// ClickHouse 26.2 turns a LEFT JOIN filtered by `LIKE '%%'` on the joined table into an inner
+		// one and loses the unmatched row; an empty `contains` is written with one wildcard instead.
+		it.effect("an empty contains on a LEFT JOIN's table keeps the unmatched rows", () => Effect.gen(function* () {
+			const Orders = CH.table("orders", { external: true, columns: { id: CH.uint8, customer: CH.string } })
+			const Customers = CH.table("customers", { external: true, columns: { name: CH.string } })
+			const compiled = CH.compileUnsafe(
+				CH.from(Orders)
+					.leftJoin(Customers, "c", (o, c) => o.customer.eq(c.name))
+					.select(($) => ({ id: $.id }))
+					.where(($) => [$.c.name.contains("")])
+					.orderBy(["id", "asc"])
+					.withCTE("orders", "SELECT * FROM values('id UInt8, customer String', (1, 'acme'), (2, 'initech'))")
+					.withCTE("customers", "SELECT * FROM values('name String', ('acme'))"),
+				{},
+			)
+			expect((yield* execute(compiled)).rows, compiled.sql).toEqual([{ id: 1 }, { id: 2 }])
+		}))
+
 		it.effect("preserves DateTime and map literals through FROM and JOIN sources", () => Effect.gen(function* () {
 			const events = CH.table("(SELECT toDateTime('2026-01-02 00:00:00', 'UTC') AS ts, map('a', 'b') AS attrs)", {
 				external: true,

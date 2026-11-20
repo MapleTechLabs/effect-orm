@@ -648,7 +648,12 @@ const textPattern = (value: string | Expr<string, any>, match: TextMatch, glob: 
 	const any = glob ? "*" : "%"
 	const before = match === "contains" || match === "endsWith" ? any : ""
 	const after = match === "contains" || match === "startsWith" ? any : ""
-	if (typeof value === "string") return compile(boundString(`${before}${(glob ? escapeGlob : escapeLike)(value)}${after}`))
+	if (typeof value === "string") {
+		// One wildcard for an empty `contains`: `%%` means the same, and ClickHouse 26.2 turns a
+		// LEFT JOIN filtered by `LIKE '%%'` on the joined table into an inner one, losing rows.
+		const text = (glob ? escapeGlob : escapeLike)(value)
+		return compile(boundString(text === "" && match === "contains" ? any : `${before}${text}${after}`))
+	}
 	if (isExprLike(value)) {
 		// The value is only known at run time: escape it in SQL, the same
 		// characters, the escaping one (`\`, or GLOB's `[`) first.
