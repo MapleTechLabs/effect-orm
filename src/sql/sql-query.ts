@@ -16,7 +16,8 @@ export interface SqlQuery {
 	/** `SELECT DISTINCT ON (...)`; implies `distinct`. */
 	readonly distinctOn?: ReadonlyArray<SqlFragment>
 	readonly select: ReadonlyArray<SqlFragment>
-	readonly from: SqlFragment
+	/** Absent for a SELECT of values with no FROM. */
+	readonly from?: SqlFragment
 	readonly joins?: ReadonlyArray<SqlJoin>
 	readonly where: ReadonlyArray<SqlFragment>
 	readonly groupBy: ReadonlyArray<SqlFragment>
@@ -44,7 +45,7 @@ export function compileQuery(q: SqlQuery): string {
 	parts.push(`SELECT${distinct}\n          ${selectCols.join(",\n          ")}`)
 
 	// FROM
-	parts.push(`FROM ${compile(q.from)}`)
+	if (q.from !== undefined) parts.push(`FROM ${compile(q.from)}`)
 
 	// JOINs
 	if (q.joins?.length) {

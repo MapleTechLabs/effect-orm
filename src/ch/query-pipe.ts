@@ -12,7 +12,7 @@
 // it, so `$` in a callback is typed as in the fluent form.
 
 import { dual } from "effect/Function"
-import type { AllFacts, Condition, Expr, ParamsIn } from "./expr"
+import type { AllFacts, Condition, Expr, KnownFacts, ParamsIn } from "./expr"
 import type { TenantScope } from "./compile"
 import type {
 	BindSources,
@@ -24,6 +24,7 @@ import type {
 	JoinParams,
 	LockOptions,
 	NarrowJoins,
+	NarrowSource,
 	NeedsSelect,
 	OwnSources,
 	RowCount,
@@ -45,7 +46,7 @@ export const where: {
 		fn: ($: JoinedColumnAccessor<Cols, Joins, Source>) => C,
 	): <Output extends Record<string, any>, Route extends string | undefined, Params>(
 		self: CHQuery<Cols, Output, Joins, Route, Params, Source>,
-	) => CHQuery<Cols, Output, NarrowJoins<Joins, AllFacts<C>>, Route, Params | BindSources<ParamsIn<C[number]>, OwnSources<Source, Joins>>, Source>
+	) => CHQuery<NarrowSource<Cols, Source, KnownFacts<AllFacts<C>>>, Output, NarrowJoins<Joins, KnownFacts<AllFacts<C>>>, Route, Params | BindSources<ParamsIn<C[number]>, OwnSources<Source, Joins>>, Source>
 	<
 		Cols extends ColumnDefs,
 		Output extends Record<string, any>,
@@ -57,7 +58,7 @@ export const where: {
 	>(
 		self: CHQuery<Cols, Output, Joins, Route, Params, Source>,
 		fn: ($: JoinedColumnAccessor<Cols, Joins, Source>) => C,
-	): CHQuery<Cols, Output, NarrowJoins<Joins, AllFacts<C>>, Route, Params | BindSources<ParamsIn<C[number]>, OwnSources<Source, Joins>>, Source>
+	): CHQuery<NarrowSource<Cols, Source, KnownFacts<AllFacts<C>>>, Output, NarrowJoins<Joins, KnownFacts<AllFacts<C>>>, Route, Params | BindSources<ParamsIn<C[number]>, OwnSources<Source, Joins>>, Source>
 } = dual(2, (self: CHQuery<any, any, any, any, any>, fn: any) => self.where(fn))
 
 /**
@@ -206,7 +207,7 @@ export const innerJoin: {
 	>(
 		table: Table<JName, JCols>,
 		alias: FreshAlias<Alias, Cols, Joins>,
-		on: JoinOnCallback<Cols, JCols, OnParams, Source, Alias>,
+		on: JoinOnCallback<Cols, JCols, OnParams, Source, Alias, Joins>,
 	): <Output extends Record<string, any>, Route extends string | undefined, Params>(
 		self: CHQuery<Cols, Output, Joins, Route, Params, Source>,
 	) => CHQuery<Cols, Output, Joins & { readonly [K in Alias]: JCols }, Route, JoinParams<Params, OnParams, Source, Joins, Alias>, Source>
@@ -225,7 +226,7 @@ export const innerJoin: {
 		self: CHQuery<Cols, Output, Joins, Route, Params, Source>,
 		table: Table<JName, JCols>,
 		alias: FreshAlias<Alias, Cols, Joins>,
-		on: JoinOnCallback<Cols, JCols, OnParams, Source, Alias>,
+		on: JoinOnCallback<Cols, JCols, OnParams, Source, Alias, Joins>,
 	): CHQuery<Cols, Output, Joins & { readonly [K in Alias]: JCols }, Route, JoinParams<Params, OnParams, Source, Joins, Alias>, Source>
 } = dual(4, (self: CHQuery<any, any, any, any, any>, table: Table<any, any>, alias: any, on: any) =>
 	self.innerJoin(table, alias, on),
@@ -244,7 +245,7 @@ export const leftJoin: {
 	>(
 		table: Table<JName, JCols>,
 		alias: FreshAlias<Alias, Cols, Joins>,
-		on: JoinOnCallback<Cols, JCols, OnParams, Source, Alias>,
+		on: JoinOnCallback<Cols, JCols, OnParams, Source, Alias, Joins>,
 	): <Output extends Record<string, any>, Route extends string | undefined, Params>(
 		self: CHQuery<Cols, Output, Joins, Route, Params, Source>,
 	) => CHQuery<Cols, Output, Joins & { readonly [K in Alias]: NullableColumnDefs<JCols> }, Route, JoinParams<Params, OnParams, Source, Joins, Alias>, Source>
@@ -263,7 +264,7 @@ export const leftJoin: {
 		self: CHQuery<Cols, Output, Joins, Route, Params, Source>,
 		table: Table<JName, JCols>,
 		alias: FreshAlias<Alias, Cols, Joins>,
-		on: JoinOnCallback<Cols, JCols, OnParams, Source, Alias>,
+		on: JoinOnCallback<Cols, JCols, OnParams, Source, Alias, Joins>,
 	): CHQuery<Cols, Output, Joins & { readonly [K in Alias]: NullableColumnDefs<JCols> }, Route, JoinParams<Params, OnParams, Source, Joins, Alias>, Source>
 } = dual(4, (self: CHQuery<any, any, any, any, any>, table: Table<any, any>, alias: any, on: any) =>
 	self.leftJoin(table, alias, on),
@@ -546,7 +547,7 @@ export const innerJoinQuery: {
 	>(
 		query: CHQuery<JCols, JOutput, JJoins, string | undefined, JParams> & NeedsSelect<JOutput>,
 		alias: FreshAlias<Alias, Cols, Joins>,
-		on: JoinOnCallback<Cols, OutputToColumnDefs<JOutput>, OnParams, Source, Alias>,
+		on: JoinOnCallback<Cols, OutputToColumnDefs<JOutput>, OnParams, Source, Alias, Joins>,
 	): <Output extends Record<string, any>, Route extends string | undefined, Params>(
 		self: CHQuery<Cols, Output, Joins, Route, Params, Source>,
 	) => CHQuery<Cols, Output, Joins & { readonly [K in Alias]: OutputToColumnDefs<JOutput> }, Route, JoinParams<Params, OnParams, Source, Joins, Alias> | JParams, Source>
@@ -567,7 +568,7 @@ export const innerJoinQuery: {
 		self: CHQuery<Cols, Output, Joins, Route, Params, Source>,
 		query: CHQuery<JCols, JOutput, JJoins, string | undefined, JParams> & NeedsSelect<JOutput>,
 		alias: FreshAlias<Alias, Cols, Joins>,
-		on: JoinOnCallback<Cols, OutputToColumnDefs<JOutput>, OnParams, Source, Alias>,
+		on: JoinOnCallback<Cols, OutputToColumnDefs<JOutput>, OnParams, Source, Alias, Joins>,
 	): CHQuery<Cols, Output, Joins & { readonly [K in Alias]: OutputToColumnDefs<JOutput> }, Route, JoinParams<Params, OnParams, Source, Joins, Alias> | JParams, Source>
 } = dual(4, (self: CHQuery<any, any, any, any, any>, query: any, alias: any, on: any) => self.innerJoinQuery(query, alias, on))
 
@@ -586,7 +587,7 @@ export const leftJoinQuery: {
 	>(
 		query: CHQuery<JCols, JOutput, JJoins, string | undefined, JParams> & NeedsSelect<JOutput>,
 		alias: FreshAlias<Alias, Cols, Joins>,
-		on: JoinOnCallback<Cols, OutputToColumnDefs<JOutput>, OnParams, Source, Alias>,
+		on: JoinOnCallback<Cols, OutputToColumnDefs<JOutput>, OnParams, Source, Alias, Joins>,
 	): <Output extends Record<string, any>, Route extends string | undefined, Params>(
 		self: CHQuery<Cols, Output, Joins, Route, Params, Source>,
 	) => CHQuery<
@@ -613,7 +614,7 @@ export const leftJoinQuery: {
 		self: CHQuery<Cols, Output, Joins, Route, Params, Source>,
 		query: CHQuery<JCols, JOutput, JJoins, string | undefined, JParams> & NeedsSelect<JOutput>,
 		alias: FreshAlias<Alias, Cols, Joins>,
-		on: JoinOnCallback<Cols, OutputToColumnDefs<JOutput>, OnParams, Source, Alias>,
+		on: JoinOnCallback<Cols, OutputToColumnDefs<JOutput>, OnParams, Source, Alias, Joins>,
 	): CHQuery<
 		Cols,
 		Output,

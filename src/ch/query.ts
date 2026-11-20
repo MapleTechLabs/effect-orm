@@ -25,8 +25,9 @@
 //     }))
 
 import type { ColumnDefs, CHType, InferTS, OutputToColumnDefs, NullableColumnDefs } from "./types"
-import type { Table } from "./table"
-import type { AllFacts, ClauseEntry, Expr, Condition, ColumnRef, ParamsIn, SourceEntry, Widen } from "./expr"
+import { isTableFunction, type Table, type TableFunction } from "./table"
+import type { SqlFragment } from "../sql/sql-fragment"
+import type { AllFacts, ClauseEntry, KnownFacts, Expr, Condition, ColumnRef, ParamsIn, SourceEntry, Widen } from "./expr"
 import { makeColumnRef } from "./expr"
 import type { TenantScope } from "./compile"
 import { type Pipeable, pipeArguments } from "effect/Pipeable"
@@ -61,12 +62,15 @@ export type ColumnAccessor<Cols extends ColumnDefs, Source extends string = neve
 	readonly [K in keyof Cols & string]: ColumnRef<K, Cols[K], Source, FactSource>
 }
 
-/** Combined accessor: main table columns + nested alias accessors for joins. */
+/**
+ * Combined accessor: main table columns + nested alias accessors for joins.
+ * The main columns record `NotNullFact`s under the FROM source's name.
+ */
 export type JoinedColumnAccessor<
 	Cols extends ColumnDefs,
 	Joins extends Record<string, ColumnDefs>,
 	Source extends string = never,
-> = ColumnAccessor<Cols, Source> & {
+> = ColumnAccessor<Cols, Source, Source> & {
 	readonly [A in keyof Joins & string]: ColumnAccessor<Joins[A], A, A>
 }
 
@@ -83,6 +87,20 @@ export type OwnSources<Source extends string, Joins> = Source | (keyof Joins & s
 export type JoinParams<Params, OnParams, Source extends string, Joins, Alias extends string> =
 	| BindSources<Params, Alias>
 	| BindSources<OnParams, OwnSources<Source, Joins> | Alias>
+
+/**
+ * The FROM source's columns once the facts `F` hold: each column proven under
+ * the source's name `Source` loses its `| null`. A join alias cannot be the
+ * source's name (the compile refuses it), so the two never mix. `Source` is
+ * only matched inside `F`, never tested on its own: a conditional on it would
+ * make every `CHQuery` compare structurally, which fails for `CHQuery<any, …>`.
+ */
+export type NarrowSource<Cols extends ColumnDefs, Source extends string, F> = {} extends F
+	? Cols
+	: { readonly [K in keyof Cols]: K extends keyof SourceFacts<F, Source> ? NonNullColumn<Cols[K]> : Cols[K] }
+
+/** The facts `F` proves for source `Source`: none for a source the type does not name. */
+type SourceFacts<F, Source extends string> = F extends { readonly [S in Source]: infer C } ? C : {}
 
 /** A column type without its NULL. */
 type NonNullColumn<C> = C extends CHType<infer Tag, infer A, infer I> ? CHType<Tag, NonNullable<A>, NonNullable<I>> : C
@@ -147,14 +165,38 @@ export interface LockClause extends LockOptions {
 	readonly strength: "UPDATE" | "NO KEY UPDATE" | "SHARE" | "KEY SHARE"
 }
 
-/** Callback for ON conditions — receives main and joined column accessors. */
+/**
+ * Callback for ON conditions. `main` is the FROM source's columns, with the
+ * sources joined before this one under their aliases (`main.g.value`);
+ * `joined` is the source being joined.
+ */
 export type JoinOnCallback<
 	MainCols extends ColumnDefs,
 	JoinedCols extends ColumnDefs,
 	P = never,
 	MainSource extends string = never,
 	JoinedSource extends string = never,
-> = (main: ColumnAccessor<MainCols, MainSource>, joined: ColumnAccessor<JoinedCols, JoinedSource>) => Condition<P>
+	PriorJoins extends Record<string, ColumnDefs> = {},
+> = (main: JoinedColumnAccessor<MainCols, PriorJoins, MainSource>, joined: ColumnAccessor<JoinedCols, JoinedSource>) => Condition<P>
+
+/**
+ * A table-valued function built from the columns of the sources before it:
+ * `crossJoin(($) => SQLite.jsonEach($.domains), "d")`.
+ */
+export type TableFunctionOf<
+	Cols extends ColumnDefs,
+	Joins extends Record<string, ColumnDefs>,
+	Source extends string,
+	JName extends string,
+	JCols extends ColumnDefs,
+	TParams,
+> = ($: JoinedColumnAccessor<Cols, Joins, Source>) => TableFunction<JName, JCols, TParams>
+
+/** A table-valued source's params, bound to the query's sources (they may read them). */
+export type TableParams<TParams, Source extends string, Joins, Alias extends string> = BindSources<
+	TParams,
+	OwnSources<Source, Joins> | Alias
+>
 
 // Query state (runtime storage)
 
@@ -162,11 +204,15 @@ interface TypedJoinClause {
 	readonly type: "INNER" | "LEFT" | "CROSS"
 	/** Table name for direct table joins. */
 	readonly tableName?: string
+	/** A table-valued function's SQL, written in place of a table name. */
+	readonly fragment?: SqlFragment
+	/** A table-valued function built from the earlier sources' columns, at compile time. */
+	readonly sourceFn?: ($: any) => TableFunction<string, ColumnDefs, unknown>
 	/** Inner query for subquery joins (compiled lazily at compileCH time). */
 	readonly innerQuery?: CHQuery<any, any, any>
 	readonly alias: string
 	/** ON callback, evaluated during compilation with source codecs. Omitted for CROSS JOIN. */
-	readonly on?: JoinOnCallback<any, any, any, any, any>
+	readonly on?: JoinOnCallback<any, any, any, any, any, any>
 	/** The joined table's tenant column, if it declared one. */
 	readonly tenantColumn?: string
 	/** The joined table's column definitions, for decoding joined selections. */
@@ -175,6 +221,10 @@ interface TypedJoinClause {
 
 export interface CHQueryState {
 	readonly tableName: string
+	/** Set for a table-valued function in FROM: its SQL, written in place of the table name. */
+	readonly tableFragment?: SqlFragment
+	/** Set by `selectNoFrom`: a SELECT of values with no FROM clause. */
+	readonly noFrom?: true
 	readonly tableAlias?: string
 	readonly columns: ColumnDefs
 	readonly selectFn?: ($: any) => SelectRecord
@@ -326,15 +376,15 @@ export interface CHQuery<
 	 * Filter rows: conditions AND-joined, an `undefined` one skipped. Calling it
 	 * again adds conditions, ANDed with the earlier ones.
 	 *
-	 * A condition that proves a joined column not NULL (`$.o.Id.isNotNull()`,
-	 * `$.o.Status.eq(…)`, alone or under `and`) narrows that column for the
-	 * calls after this one: a later `select` reads it without `| null`, in the
+	 * A condition that proves a column not NULL (`$.planName.isNotNull()`,
+	 * `$.o.Status.eq(…)`, alone or under `and`), of the FROM source or a join,
+	 * narrows that column for the calls after this one: a later `select` reads it without `| null`, in the
 	 * type and in the row schema. A `select` made before the `where` keeps
 	 * `| null`.
 	 */
 	where<const C extends ReadonlyArray<Condition | undefined>>(
 		fn: ($: JoinedColumnAccessor<Cols, Joins, Source>) => C,
-	): CHQuery<Cols, Output, NarrowJoins<Joins, AllFacts<C>>, Route, Params | BindSources<ParamsIn<C[number]>, OwnSources<Source, Joins>>, Source>
+	): CHQuery<NarrowSource<Cols, Source, KnownFacts<AllFacts<C>>>, Output, NarrowJoins<Joins, KnownFacts<AllFacts<C>>>, Route, Params | BindSources<ParamsIn<C[number]>, OwnSources<Source, Joins>>, Source>
 
 	groupBy(...keys: Array<keyof Output & string>): CHQuery<Cols, Output, Joins, Route, Params, Source>
 
@@ -411,29 +461,49 @@ export interface CHQuery<
 
 	// Type-safe joins with Table
 
-	innerJoin<JName extends string, JCols extends ColumnDefs, Alias extends string, OnParams = never>(
-		table: Table<JName, JCols>,
+	/**
+	 * `INNER JOIN source AS alias ON ...`. The source is a table, a table-valued
+	 * function (`SQLite.jsonEach(ids)`), or a callback building one from the
+	 * earlier sources' columns (`($) => SQLite.jsonEach($.domains)`).
+	 */
+	innerJoin<JName extends string, JCols extends ColumnDefs, Alias extends string, OnParams = never, TParams = never>(
+		table: Table<JName, JCols> | TableFunction<JName, JCols, TParams> | TableFunctionOf<Cols, Joins, Source, JName, JCols, TParams>,
 		alias: FreshAlias<Alias, Cols, Joins>,
-		on: JoinOnCallback<Cols, JCols, OnParams, Source, Alias>,
-	): CHQuery<Cols, Output, Joins & { readonly [K in Alias]: JCols }, Route, JoinParams<Params, OnParams, Source, Joins, Alias>, Source>
+		on: JoinOnCallback<Cols, JCols, OnParams, Source, Alias, Joins>,
+	): CHQuery<
+		Cols,
+		Output,
+		Joins & { readonly [K in Alias]: JCols },
+		Route,
+		JoinParams<Params, OnParams, Source, Joins, Alias> | TableParams<TParams, Source, Joins, Alias>,
+		Source
+	>
 
-	leftJoin<JName extends string, JCols extends ColumnDefs, Alias extends string, OnParams = never>(
-		table: Table<JName, JCols>,
+	leftJoin<JName extends string, JCols extends ColumnDefs, Alias extends string, OnParams = never, TParams = never>(
+		table: Table<JName, JCols> | TableFunction<JName, JCols, TParams> | TableFunctionOf<Cols, Joins, Source, JName, JCols, TParams>,
 		alias: FreshAlias<Alias, Cols, Joins>,
-		on: JoinOnCallback<Cols, JCols, OnParams, Source, Alias>,
+		on: JoinOnCallback<Cols, JCols, OnParams, Source, Alias, Joins>,
 	): CHQuery<
 		Cols,
 		Output,
 		Joins & { readonly [K in Alias]: NullableColumnDefs<JCols> },
 		Route,
-		JoinParams<Params, OnParams, Source, Joins, Alias>,
+		JoinParams<Params, OnParams, Source, Joins, Alias> | TableParams<TParams, Source, Joins, Alias>,
 		Source
 	>
 
-	crossJoin<JName extends string, JCols extends ColumnDefs, Alias extends string>(
-		table: Table<JName, JCols>,
+	/** `CROSS JOIN source AS alias`, or with SQLite's comma join for a table-valued function of an earlier source. */
+	crossJoin<JName extends string, JCols extends ColumnDefs, Alias extends string, TParams = never>(
+		table: Table<JName, JCols> | TableFunction<JName, JCols, TParams> | TableFunctionOf<Cols, Joins, Source, JName, JCols, TParams>,
 		alias: FreshAlias<Alias, Cols, Joins>,
-	): CHQuery<Cols, Output, Joins & { readonly [K in Alias]: JCols }, Route, BindSources<Params, Alias>, Source>
+	): CHQuery<
+		Cols,
+		Output,
+		Joins & { readonly [K in Alias]: JCols },
+		Route,
+		BindSources<Params, Alias> | TableParams<TParams, Source, Joins, Alias>,
+		Source
+	>
 
 	// Type-safe joins with subquery (CHQuery)
 
@@ -447,7 +517,7 @@ export interface CHQuery<
 	>(
 		query: CHQuery<JCols, JOutput, JJoins, string | undefined, JParams> & NeedsSelect<JOutput>,
 		alias: FreshAlias<Alias, Cols, Joins>,
-		on: JoinOnCallback<Cols, OutputToColumnDefs<JOutput>, OnParams, Source, Alias>,
+		on: JoinOnCallback<Cols, OutputToColumnDefs<JOutput>, OnParams, Source, Alias, Joins>,
 	): CHQuery<
 		Cols,
 		Output,
@@ -467,7 +537,7 @@ export interface CHQuery<
 	>(
 		query: CHQuery<JCols, JOutput, JJoins, string | undefined, JParams> & NeedsSelect<JOutput>,
 		alias: FreshAlias<Alias, Cols, Joins>,
-		on: JoinOnCallback<Cols, OutputToColumnDefs<JOutput>, OnParams, Source, Alias>,
+		on: JoinOnCallback<Cols, OutputToColumnDefs<JOutput>, OnParams, Source, Alias, Joins>,
 	): CHQuery<
 		Cols,
 		Output,
@@ -551,12 +621,14 @@ export function sourceAlias(state: CHQueryState): string {
 export function createColumnAccessor<Cols extends ColumnDefs>(
 	columns: Cols,
 	tenantColumn?: string,
+	/** The write target's table: its bare columns qualify themselves inside a subquery (see `makeColumnRef`). */
+	subqueryQualifier?: string,
 ): ColumnAccessor<Cols> {
 	const cache = new Map<string, ColumnRef<string, CHType<string, any>>>()
 	const get = (prop: string) => {
 		let ref = cache.get(prop)
 		if (!ref) {
-			ref = makeColumnRef(prop, undefined, tenantColumn, columns[prop])
+			ref = makeColumnRef(prop, undefined, tenantColumn, columns[prop], undefined, subqueryQualifier)
 			cache.set(prop, ref)
 		}
 		return ref
@@ -627,7 +699,7 @@ export function createJoinedColumnAccessor<Cols extends ColumnDefs, Joins extend
 
 			// Main table column — qualify with alias when joins are present
 			const qualifiedName = mainAlias ? `${mainAlias}.${prop}` : prop
-			cached = makeColumnRef(qualifiedName, prop, tenantColumn, columns[prop])
+			cached = makeColumnRef(qualifiedName, prop, tenantColumn, columns[prop], mainAlias)
 			cache.set(prop, cached)
 			return cached
 		},
@@ -636,6 +708,24 @@ export function createJoinedColumnAccessor<Cols extends ColumnDefs, Joins extend
 }
 
 // Query builder implementation
+
+/**
+ * What a join records of its source: a table's name, a table-valued
+ * function's SQL, or the callback that builds one. The callback's columns are
+ * read here, by calling it with an accessor of the earlier sources: what it
+ * renders is only read when compiling, where it is called again.
+ */
+function joinedSource(
+	state: CHQueryState,
+	source: Table<string, ColumnDefs> | TableFunction<string, ColumnDefs, unknown> | (($: any) => TableFunction<string, ColumnDefs, unknown>),
+): Pick<TypedJoinClause, "tableName" | "fragment" | "sourceFn" | "tenantColumn" | "columns"> {
+	if (typeof source === "function") {
+		const probe = createJoinedColumnAccessor(state.columns, state.typedJoins.map((j) => j.alias), sourceAlias(state))
+		return { sourceFn: source, columns: source(probe).columns }
+	}
+	if (isTableFunction(source)) return { fragment: source.fragment, columns: source.columns }
+	return { tableName: source.name, tenantColumn: source.tenantColumn, columns: source.columns }
+}
 
 type ConditionsFn = ($: any) => ReadonlyArray<Condition | undefined>
 
@@ -743,53 +833,24 @@ function makeQuery<
 
 		// Type-safe joins with Table
 
-		innerJoin(table, alias, onFn) {
+		innerJoin(table: any, alias: any, onFn: any) {
 			return makeQuery({
 				...state,
-				typedJoins: [
-					...state.typedJoins,
-					{
-						type: "INNER",
-						tableName: table.name,
-						alias,
-						on: onFn,
-						tenantColumn: table.tenantColumn,
-						columns: table.columns,
-					},
-				],
+				typedJoins: [...state.typedJoins, { type: "INNER", alias, on: onFn, ...joinedSource(state, table) }],
 			}) as any
 		},
 
-		leftJoin(table, alias, onFn) {
+		leftJoin(table: any, alias: any, onFn: any) {
 			return makeQuery({
 				...state,
-				typedJoins: [
-					...state.typedJoins,
-					{
-						type: "LEFT",
-						tableName: table.name,
-						alias,
-						on: onFn,
-						tenantColumn: table.tenantColumn,
-						columns: table.columns,
-					},
-				],
+				typedJoins: [...state.typedJoins, { type: "LEFT", alias, on: onFn, ...joinedSource(state, table) }],
 			}) as any
 		},
 
-		crossJoin(table, alias) {
+		crossJoin(table: any, alias: any) {
 			return makeQuery({
 				...state,
-				typedJoins: [
-					...state.typedJoins,
-					{
-						type: "CROSS",
-						tableName: table.name,
-						alias,
-						tenantColumn: table.tenantColumn,
-						columns: table.columns,
-					},
-				],
+				typedJoins: [...state.typedJoins, { type: "CROSS", alias, ...joinedSource(state, table) }],
 			}) as any
 		},
 
@@ -834,15 +895,15 @@ function makeQuery<
 
 // Entry points
 
-export function from<Name extends string, Cols extends ColumnDefs, const Alias extends string = Name>(
-	table: Table<Name, Cols>,
+export function from<Name extends string, Cols extends ColumnDefs, const Alias extends string = Name, TParams = never>(
+	table: Table<Name, Cols> | TableFunction<Name, Cols, TParams>,
 	alias?: Alias,
-): CHQuery<Cols, {}, {}, undefined, never, Alias> {
+): CHQuery<Cols, {}, {}, undefined, TParams, Alias> {
 	return makeQuery({
 		tableName: table.name,
 		tableAlias: alias,
 		columns: table.columns,
-		tenantColumn: table.tenantColumn,
+		...(table._tag === "TableFunction" ? { tableFragment: table.fragment } : { tenantColumn: table.tenantColumn }),
 		groupByKeys: [],
 		orderBySpecs: [],
 		typedJoins: [],
@@ -916,4 +977,23 @@ export function fromUnion<Output extends Record<string, any>, Alias extends stri
 		fromUnion: union,
 		fromQueryAlias: alias,
 	})
+}
+
+/**
+ * A SELECT with no FROM: `SELECT ?, 'initial', 1 WHERE EXISTS (…)`. The
+ * callback builds the values (params, literals, subqueries); `where` takes
+ * conditions that read no source, such as `exists(…)`. Its main use is
+ * `insertInto(t).select(selectNoFrom(…).where(…))`, an insert of one row only
+ * when a condition holds. MySQL writes `FROM DUAL`.
+ */
+export function selectNoFrom<S extends SelectRecord>(fn: () => S): CHQuery<{}, InferOutput<S>, {}, undefined, ParamsIn<S[keyof S]>, never> {
+	return makeQuery({
+		tableName: "",
+		columns: {},
+		noFrom: true,
+		groupByKeys: [],
+		orderBySpecs: [],
+		typedJoins: [],
+		ctes: [],
+	}).select(fn as () => S) as CHQuery<{}, InferOutput<S>, {}, undefined, ParamsIn<S[keyof S]>, never>
 }

@@ -63,6 +63,7 @@ export const sqliteDialect: Dialect<"sqlite"> = {
 		insertSelectNeedsWhere: true,
 		defaultInValues: false,
 		distinctOn: false,
+		updateFrom: true,
 	},
 	paramCodecs: {
 		dateTime: SqliteTimestampLiteral,

@@ -16,5 +16,16 @@ export function withSubqueryCompiler<A>(render: RenderSubquery, body: () => A): 
 	return current.with(render, body)
 }
 
+// Set while a subquery renders, so a column of an enclosing write's target
+// table (written bare in the write itself) can qualify itself there: a bare
+// `"userId"` inside `(SELECT … FROM "membership_index" AS "mi" WHERE …)`
+// would name the subquery's column, not the target's.
+const nested = fiberLocal(
+	Context.Reference<boolean>("@maple-dev/effect-orm/internal/InSubquery", { defaultValue: () => false }),
+)
+
 export const renderSubquery = (query: string | CHQuery<any, any, any>, fallback: RenderSubquery): string =>
-	(current.get() ?? fallback)(query)
+	nested.with(true, () => (current.get() ?? fallback)(query))
+
+/** Whether a subquery is rendering, inside the statement that holds it. */
+export const inSubquery = (): boolean => nested.get()

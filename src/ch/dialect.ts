@@ -104,6 +104,10 @@ export interface DialectClauses {
 	/** UPDATE is written `ALTER TABLE t UPDATE ... WHERE ...`, a ClickHouse
 	 *  mutation, rather than `UPDATE t SET ... WHERE ...`. */
 	readonly alterTableUpdate?: boolean
+	/** `UPDATE t SET … FROM source WHERE …`: Postgres, and SQLite 3.33+. */
+	readonly updateFrom?: boolean
+	/** The FROM a SELECT with no source writes, where one is needed (MySQL's `DUAL`, for a WHERE). */
+	readonly fromlessSelect?: string
 }
 
 /** The row locks a dialect writes. */

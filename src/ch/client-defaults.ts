@@ -79,7 +79,7 @@ const fillInsert = (insert: AnyInsert): Effect.Effect<AnyInsert, never, any> => 
 	)
 }
 
-const fillUpdate = (update: CHUpdate<any, any, any, any, any, any>): Effect.Effect<CHUpdate<any, any, any, any, any, any>, never, any> => {
+const fillUpdate = (update: CHUpdate<any, any, any, any, any, any, any>): Effect.Effect<CHUpdate<any, any, any, any, any, any, any>, never, any> => {
 	const defaults = update._state.table.clientDefaults?.update
 	const set = update._state.set
 	if (defaults === undefined || set === undefined || Object.keys(defaults).length === 0) return Effect.succeed(update)
@@ -95,6 +95,6 @@ const fillUpdate = (update: CHUpdate<any, any, any, any, any, any>): Effect.Effe
 						return { ...record, ...Object.fromEntries(Object.entries(added).filter(([column]) => record[column] === undefined)) }
 					}
 				: { ...set, ...added }
-		return update.set(next as never) as CHUpdate<any, any, any, any, any, any>
+		return update.set(next as never) as CHUpdate<any, any, any, any, any, any, any>
 	})
 }

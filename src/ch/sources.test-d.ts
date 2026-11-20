@@ -11,11 +11,12 @@ const Services = CH.table("services", { Id: CH.string, Name: CH.string, Team: CH
 
 // A column ref names its source; a query discharges its own sources.
 CH.from(Events).select(($) => {
-	expectTypeOf($.Name.eq("a")).toEqualTypeOf<CH.Condition<SourceEntry<"events">>>()
+	// It also proves the column not NULL, under the source's name (see `NotNullFacts`).
+	expectTypeOf($.Name.eq("a")).toEqualTypeOf<CH.Condition<SourceEntry<"events">, { readonly events: { readonly Name: true } }>>()
 	return { name: $.Name }
 })
 CH.from(Events, "e").select(($) => {
-	expectTypeOf($.Name.eq("a")).toEqualTypeOf<CH.Condition<SourceEntry<"e">>>()
+	expectTypeOf($.Name.eq("a")).toEqualTypeOf<CH.Condition<SourceEntry<"e">, { readonly e: { readonly Name: true } }>>()
 	return { name: $.Name }
 })
 const own = CH.from(Events, "e")

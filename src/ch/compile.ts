@@ -25,7 +25,7 @@ import {
 	type ParamsSatisfied,
 	type SourcesSatisfied,
 } from "./expr"
-import { raw, identPath, quoteIdent, quoteIdentPath, compile as compileSqlFragment, type SqlFragment } from "../sql/sql-fragment"
+import { raw, identPath, known, quoteIdent, quoteIdentPath, compile as compileSqlFragment, type SqlFragment } from "../sql/sql-fragment"
 import { splitTerminalClauses } from "../sql/terminal-clauses"
 import { activeLiteralBinder, withLiteralBinder } from "../sql/literal-binder"
 import { compileQuery, type SqlQuery } from "../sql/sql-query"
@@ -700,7 +700,7 @@ export interface CompileUnsafe<Default extends string> {
 /** A write statement: what `compile` takes besides a query. */
 export type CHWrite<Output, Params = never> =
 	| AnyInsert<Output, Params>
-	| CHUpdate<any, any, Output, "ready", Params, any>
+	| CHUpdate<any, any, Output, "ready", Params, any, any>
 	| CHDelete<any, Output, "ready", Params>
 
 /**
@@ -947,6 +947,14 @@ function compileInner<
 			fromSource = sourceOf(inner)
 			const body = currentDialect().clauses.format ? splitTerminalClauses(inner.sql).body : inner.sql
 			fromFragment = raw(`(\n${body}\n) AS ${quoteIdent(state.fromQueryAlias ?? "")}`)
+		} else if (state.noFrom === true) {
+			fromSource = { scope: "untenanted" }
+			fromFragment = currentDialect().clauses.fromlessSelect === undefined ? undefined : raw(currentDialect().clauses.fromlessSelect!)
+		} else if (state.tableFragment !== undefined) {
+			// A table-valued function has no tenant column: what it reads is its arguments.
+			const fragment = state.tableFragment
+			fromSource = { scope: "untenanted" }
+			fromFragment = known(() => `${compileSqlFragment(fragment)} AS ${quoteIdentPath(mainAlias)}`)
 		} else {
 			fromSource = sourceForTable(state.tableName, mainColumn)
 			if (options?.correlatedTenant !== undefined && fromSource.column !== undefined) {
@@ -983,10 +991,15 @@ function compileInner<
 			)
 			return compiled.sql
 		}, () => {
-			const joins = state.typedJoins.map((j) => {
+			const joins = state.typedJoins.map((j, index) => {
 				let tableSql: string
 				let source: TenantSource
-				if (j.innerQuery) {
+				// The sources before this join: what its ON and a table-valued function read.
+				const prior = makeAccessor({ ...state, typedJoins: state.typedJoins.slice(0, index) })
+				if (j.sourceFn !== undefined || j.fragment !== undefined) {
+					tableSql = compileSqlFragment(j.sourceFn !== undefined ? j.sourceFn(prior).fragment : j.fragment!)
+					source = { scope: "untenanted" }
+				} else if (j.innerQuery) {
 					const compiled = compileInner(j.innerQuery, params, {
 						skipFormat: true,
 						deferParams,
@@ -1006,10 +1019,7 @@ function compileInner<
 					source = sourceForTable("")
 				}
 				sources.push(source)
-				const on = j.on?.(
-					createQualifiedColumnAccessor(mainAlias, state.tenantColumn, columnsOf(state)),
-					createQualifiedColumnAccessor(j.alias, j.tenantColumn, joinColumnsOf(j)),
-				)
+				const on = j.on?.(prior, createQualifiedColumnAccessor(j.alias, j.tenantColumn, joinColumnsOf(j)))
 				if (on) {
 					// A LEFT JOIN's ON clause can constrain only its right side. It
 					// cannot remove unmatched rows from the preserved left side.
@@ -1140,7 +1150,7 @@ function compileInner<
 				undefined,
 				state.crossTenant === true,
 				// A table, not a CTE of the same name and not a subquery or union.
-				state.fromQuery || state.fromUnion || visibleCtes.some((c) => c.name === state.tableName)
+				state.fromQuery || state.fromUnion || state.tableFragment !== undefined || state.noFrom === true || visibleCtes.some((c) => c.name === state.tableName)
 					? undefined
 					: state.tableName,
 				sensitiveParameters,
@@ -1308,11 +1318,12 @@ function makeAccessor(
 ): any {
 	const joinAliases = state.typedJoins.map((j) => j.alias)
 	const hasJoins = joinAliases.length > 0
-	if (!hasJoins) return createQualifiedColumnAccessor(sourceAlias(state), state.tenantColumn, columnsOf(state))
-
 	const mainAlias = sourceAlias(state)
+	const mainColumns = narrowColumns(columnsOf(state), notNull?.get(mainAlias))
+	if (!hasJoins) return createQualifiedColumnAccessor(mainAlias, state.tenantColumn, mainColumns, mainAlias)
+
 	return createJoinedColumnAccessor(
-		columnsOf(state),
+		mainColumns,
 		joinAliases,
 		mainAlias,
 		state.tenantColumn,
@@ -1327,7 +1338,7 @@ function makeAccessor(
  * `where` narrows, so the row schema drops `null` exactly where the type does.
  */
 function selectNotNullOf(state: CHQueryState): ReadonlyMap<string, ReadonlySet<string>> | undefined {
-	if (state.selectWhereFn === undefined || state.typedJoins.length === 0) return undefined
+	if (state.selectWhereFn === undefined) return undefined
 	const proven = new Map<string, Set<string>>()
 	for (const condition of state.selectWhereFn(makeAccessor(state))) {
 		if (condition == null) continue
@@ -1338,6 +1349,12 @@ function selectNotNullOf(state: CHQueryState): ReadonlyMap<string, ReadonlySet<s
 		}
 	}
 	return proven.size === 0 ? undefined : proven
+}
+
+/** The FROM source's columns, those proven not NULL without their NULL. */
+function narrowColumns(columns: ColumnDefs, notNull: ReadonlySet<string> | undefined): ColumnDefs {
+	if (notNull === undefined) return columns
+	return Object.fromEntries(Object.entries(columns).map(([name, type]) => [name, notNull.has(name) ? nonNullColumn(type) : type]))
 }
 
 /** A column type proven not NULL: a `Nullable` column's inner type, or its schema without the `null` member. */
@@ -2408,7 +2425,7 @@ const valuesColumns = (
  * WHERE, so `allRows()` writes `WHERE 1` there.
  */
 function compileUpdateOrDelete(
-	write: CHUpdate<any, any, any> | CHDelete<any, any>,
+	write: CHUpdate<any, any, any, any, any, any, any> | CHDelete<any, any>,
 	params: Record<string, unknown>,
 ): CompiledQuery<any, undefined> {
 	const state = write._state
@@ -2417,7 +2434,21 @@ function compileUpdateOrDelete(
 	const where = `${kind === "update" ? "update" : "deleteFrom"}(${table.name})`
 	const dialect = currentDialect()
 	const { values, cell } = valueCells(table, params, where)
-	const $ = createColumnAccessor(table.columns, table.tenantColumn)
+	const from = write._tag === "CHUpdate" ? (write as CHUpdate<any, any, any, any, any, any, any>)._state.from : undefined
+	if (from !== undefined && dialect.clauses.updateFrom !== true) {
+		return fail(new QueryBuilderDefect({ message: `${where}: UPDATE ... FROM has no meaning for the ${dialect.name} dialect` }), failedQuery<any, undefined>())
+	}
+	if (from !== undefined && (from.alias === table.name || Object.hasOwn(table.columns, from.alias))) {
+		return fail(new QueryBuilderDefect({ message: `${where}: the from() alias ${JSON.stringify(from.alias)} is the table's name or one of its columns; pick another alias` }), failedQuery<any, undefined>())
+	}
+	// With a FROM source every column is qualified: the target's by its table
+	// name, the source's by its alias. Without one the target's columns are
+	// bare, and qualify themselves only inside a subquery, where a bare name
+	// would bind to the subquery's own table.
+	const fromColumns = from === undefined ? undefined : from.query !== undefined ? synthesizeColumns(selectExprsOf(from.query) ?? {}) : from.columns
+	const $ = from === undefined
+		? createColumnAccessor(table.columns, table.tenantColumn, table.name)
+		: createJoinedColumnAccessor(table.columns, [from.alias], table.name, table.tenantColumn, { [from.alias]: from.tenantColumn }, { [from.alias]: fromColumns })
 
 	// No WHERE at all is a mistake in the source; a WHERE whose conditions all
 	// came out undefined is data, and would otherwise turn a filtered write into
@@ -2431,17 +2462,30 @@ function compileUpdateOrDelete(
 	const setWrites: Array<{ readonly value: unknown; readonly sql: string }> = []
 
 	const reads: Array<TenantSource> = []
-	const [assignments, whereSql] = withSubqueryCompiler(
+	const [assignments, whereSql, fromSql] = withSubqueryCompiler(
 		recordingSubqueries(values, reads),
 		() => {
+			let fromSql = ""
+			if (from !== undefined) {
+				if (from.query !== undefined) {
+					const inner = compileInner(from.query, values, { skipFormat: true, nested: true })
+					reads.push({ scope: inner.tenantScope, bound: tenantBoundOf(inner) })
+					fromSql = `\nFROM (${inner.sql}) AS ${quoteIdent(from.alias)}`
+				} else if (from.fragment !== undefined) {
+					fromSql = `\nFROM ${compileSqlFragment(from.fragment)} AS ${quoteIdent(from.alias)}`
+				} else {
+					reads.push(from.tenantColumn === undefined ? { scope: "untenanted" } : { column: `${from.alias}.${from.tenantColumn}`, scope: "cross-tenant" })
+					fromSql = `\nFROM ${quoteIdentPath(from.tableName ?? "")} AS ${quoteIdent(from.alias)}`
+				}
+			}
 			let assignments: ReadonlyArray<string> = []
 			if (write._tag === "CHUpdate") {
 				const set = (write as CHUpdate<any, any, any>)._state.set
-				if (set === undefined) return fail(new QueryBuilderDefect({ message: `${where}: set() is required` }), [assignments, ""] as const)
+				if (set === undefined) return fail(new QueryBuilderDefect({ message: `${where}: set() is required` }), [assignments, "", ""] as const)
 				const record = typeof set === "function" ? set($) : set
 				const unfilled = missingClientDefaults(table.clientDefaults?.update, record as Record<string, unknown>)
 				if (unfilled.length > 0) {
-					return fail(new QueryBuilderDefect({ message: clientDefaultsMessage(where, "update", unfilled) }), [assignments, ""] as const)
+					return fail(new QueryBuilderDefect({ message: clientDefaultsMessage(where, "update", unfilled) }), [assignments, "", ""] as const)
 				}
 				assignments = setAssignments(table, record as Record<string, unknown>, cell, (column, value, sql) => {
 					if (column === tenant) setWrites.push({ value, sql })
@@ -2453,7 +2497,7 @@ function compileUpdateOrDelete(
 				return fail(new QueryBuilderError({
 					code: "InvalidArguments",
 					message: `${where}: where() gave no conditions (each was undefined or empty), which would write every row; call allRows() if that is meant`,
-				}), [assignments, ""] as const)
+				}), [assignments, "", ""] as const)
 			}
 			const whereSql =
 				rendered.length > 0
@@ -2461,7 +2505,7 @@ function compileUpdateOrDelete(
 					: dialect.clauses.alterTableUpdate === true
 						? "\nWHERE 1"
 						: ""
-			return [assignments, whereSql] as const
+			return [assignments, whereSql, fromSql] as const
 		},
 	)
 
@@ -2470,8 +2514,10 @@ function compileUpdateOrDelete(
 	let tenantScope: TenantScope = "untenanted"
 	let tenantBound: string | undefined
 	if (tenant !== undefined) {
+		// The FROM source's tenant column, when it is a table with one, is joined to the target's through the WHERE.
+		const fromTenant = from?.tenantColumn === undefined || from.tableName === undefined ? [] : [{ column: `${from.alias}.${from.tenantColumn}`, scope: "cross-tenant" as const }]
 		const derived = deriveTenantScope(
-			[{ column: tenant, scope: "cross-tenant" }],
+			[{ column: from === undefined ? tenant : `${table.name}.${tenant}`, scope: "cross-tenant" }, ...fromTenant],
 			[{ predicates: conditions.flatMap((c) => tenantPredicatesOf(c)) }],
 			(value) => inlineParams(compileSqlFragment(value), values),
 		)
@@ -2495,7 +2541,8 @@ function compileUpdateOrDelete(
 			: dialect.clauses.alterTableUpdate === true
 				? `ALTER TABLE ${target} UPDATE ${assignments.join(", ")}`
 				: `UPDATE ${target} SET ${assignments.join(", ")}`
-	const rendered = renderParams(`${head}${whereSql}${returning?.sql ?? ""}${settings}`, values, dialect)
+	const rendered = renderParams(`${head}${fromSql}${whereSql}${returning?.sql ?? ""}${settings}`, values, dialect)
+	// A FROM table with a tenant column is a source of the WHERE's scope above, not a separate read.
 	const scope = withReads({ scope: tenantScope, bound: tenantScope === "single-tenant" ? tenantBound : undefined }, reads)
 	return writeCompiledQuery(rendered, kind, scope.scope, scope.bound, returning, state.crossTenant, table.name)
 }
