@@ -119,6 +119,9 @@ const program = Effect.gen(function* () {
 		true,
 	)
 	yield* runCommand(path.join(temporary, "node_modules/.bin/effect-orm"), ["--help"], temporary, true)
+	// The version is read from package.json when the package is built: both CLIs print it from the tarball.
+	yield* runCommand(path.join(temporary, "node_modules/.bin/effect-orm"), ["--version"], temporary, true)
+	yield* runCommand(path.join(temporary, "node_modules/.bin/ch-bench"), ["--version"], temporary, true)
 })
 
 // This is the CLI entry point; provide platform services once at the boundary.

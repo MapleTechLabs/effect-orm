@@ -9,6 +9,7 @@ import { Hints, type Hint } from "../schema/diff"
 import { check, generate, KitError, readMigrations, type KitConfig } from "./generate"
 import { pull } from "./pull"
 import { verifySchema } from "./verify-schema"
+import { VERSION } from "../version"
 
 const help = `effect-orm: schema migrations for ClickHouse and Postgres, and generated SQLite and MySQL migrations
 
@@ -30,6 +31,7 @@ const help = `effect-orm: schema migrations for ClickHouse and Postgres, and gen
 
   --config <path>                  Default: effect-orm.config.ts
   --json                           Machine-readable output
+  --version                        Print the package version
 
 Exit codes: 0 ok, 1 error, 2 missing hints (confirm data loss or an enum label rename), 3 drift found.`
 
@@ -50,7 +52,10 @@ const options = {
 	"not-ran": { type: "boolean" },
 	json: { type: "boolean" },
 	help: { type: "boolean" },
+	version: { type: "boolean" },
 } as const
+
+const commands = ["generate", "pull", "check", "migrate", "status", "verify", "baseline", "resolve"]
 
 const decodeHints = Schema.decodeUnknownEffect(Schema.fromJsonString(Hints))
 
@@ -95,9 +100,17 @@ const program = (args: ReadonlyArray<string>, print: (line: string) => void) =>
 			catch: (cause) => new KitError({ code: "config", message: cause instanceof Error ? cause.message : String(cause) }),
 		})
 		const [command] = parsed.positionals
+		if (parsed.values.version === true) {
+			print(VERSION)
+			return 0
+		}
 		if (parsed.values.help === true || command === undefined) {
 			print(help)
 			return 0
+		}
+		// Before the config is read: a mistyped command is not a missing config file.
+		if (!commands.includes(command)) {
+			return yield* new KitError({ code: "config", message: `unknown command ${JSON.stringify(command)}. Run effect-orm --help.` })
 		}
 		const cwd = process.cwd()
 		const config = yield* loadConfig(resolve(cwd, parsed.values.config ?? "effect-orm.config.ts"))

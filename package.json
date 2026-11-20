@@ -35,6 +35,9 @@
 		"README.md"
 	],
 	"type": "module",
+	"engines": {
+		"node": ">=20.19.0"
+	},
 	"sideEffects": false,
 	"exports": {
 		"./clickhouse": {

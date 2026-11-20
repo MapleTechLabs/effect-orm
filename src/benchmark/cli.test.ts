@@ -188,4 +188,9 @@ describe("published CLI protocol", () => {
 		expect(schema.code, schema.stdout).toBe(0)
 		expect(JSON.parse(schema.stdout).result.run).toHaveProperty("schema")
 	})
+
+	it("prints the package version", async () => {
+		const pkg = JSON.parse(await readFile(fileURLToPath(new URL("../../package.json", import.meta.url)), "utf8"))
+		expect(await cli(["--version"])).toMatchObject({ code: 0, stdout: `${pkg.version}\n` })
+	})
 })
