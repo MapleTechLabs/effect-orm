@@ -3,7 +3,7 @@
 // no Effect `SqlClient`. Compiles for SQLite, binds, runs, decodes: what
 // `Database.run` does, without an Effect around it.
 
-import { Cause, Effect, Exit } from "effect"
+import { Cause, Context, Effect, Exit, Fiber } from "effect"
 import { fillDefaults, type RequirementsOf } from "../ch/client-defaults"
 import { compileCHRaw, compileUnionRaw, type CompiledQuery } from "../ch/compile"
 import type { DialectSatisfied, ParamsSatisfied, SourcesSatisfied } from "../ch/expr"
@@ -11,6 +11,7 @@ import { compiledUnsafe } from "../ch/failure"
 import type { QueryParams } from "../ch/union"
 import type { RowOf, Runnable, RunCheck } from "../database/database"
 import { QueryBuilderDefect } from "../ch/errors"
+import { traceStatement, type StatementObservation } from "../database/tracing"
 import { sqliteDialect } from "./dialect"
 
 /**
@@ -20,6 +21,24 @@ import { sqliteDialect } from "./dialect"
  */
 export interface SqlStorageLike {
 	exec(query: string, ...bindings: Array<unknown>): { toArray(): Array<Record<string, unknown>> }
+}
+
+/** What `runSync` does besides running: the context its span runs in, and what it reports. */
+export interface RunSyncOptions {
+	/**
+	 * The services the statement's span and observation run with: a `Tracer`,
+	 * a parent span (`Tracer.ParentSpan`), a `QuerySummary`. Defaults to the
+	 * context of the Effect fiber calling `runSync`, when there is one (a
+	 * `runSync` inside `Effect.sync` nests its span under the caller's), else
+	 * none: Effect's default tracer, which records the span nowhere. Pass
+	 * `yield* Effect.context()` captured where the Durable Object is built to
+	 * trace calls made outside any fiber.
+	 */
+	readonly context?: Context.Context<never> | undefined
+	/** As `FromSqlClientOptions.observeExit`: called with the statement once it has ended. */
+	readonly observeExit?: ((observation: StatementObservation) => Effect.Effect<void>) | undefined
+	/** As `FromSqlClientOptions.spanParameters`: the bound values as span attributes. */
+	readonly spanParameters?: boolean | undefined
 }
 
 /** `unknown` when a write's client defaults need no service, so they can run here; otherwise why not. */
@@ -39,7 +58,8 @@ const orThrow = <A>(exit: Exit.Exit<A, unknown>): A => {
  * its RETURNING rows, or none without `returning`. A write's client defaults
  * (`defaultFn` / `onUpdate`) run first, and must be synchronous Effects that
  * need no service. Throws the `QueryBuilderError`, the
- * `CompiledQueryDecodeError` or the storage's own error.
+ * `CompiledQueryDecodeError` or the storage's own error. The statement runs
+ * in a client span; see `RunSyncOptions` for where the span goes.
  *
  * ```ts
  * const rows = SQLite.runSync(ctx.storage.sql, SQLite.from(Jobs).select().where(($) => [$.id.eq(id)]))
@@ -54,6 +74,7 @@ export function runSync<Q extends Runnable, const Given extends object = {}>(
 		DialectSatisfied<QueryParams<Q>, "sqlite"> &
 		SourcesSatisfied<QueryParams<Q>>,
 	params?: Given,
+	options?: RunSyncOptions,
 ): ReadonlyArray<RowOf<Q>> {
 	const runnable = query as Runnable
 	const values = (params ?? {}) as Record<string, unknown>
@@ -71,7 +92,20 @@ export function runSync<Q extends Runnable, const Given extends object = {}>(
 			? compiledUnsafe(() => compileUnionRaw(filled as never, values, { dialect: sqliteDialect }))
 			: compiledUnsafe(() => compileCHRaw(filled as never, values, { dialect: sqliteDialect }))
 	})()
-	const rows = storage.exec(compiled.sql, ...compiled.parameters).toArray()
+	// The statement runs in a client span, as `Database.run`'s do (`traceStatement`):
+	// a failure is recorded on it (`error.type`, the span's failed exit) before
+	// it is thrown, and `observeExit` hears of it. `runSyncExitWith` runs it
+	// synchronously, in the caller's fiber context when there is one.
+	const context = options?.context ?? Fiber.getCurrent()?.context ?? Context.empty()
+	const exec = Effect.try({
+		try: () => storage.exec(compiled.sql, ...compiled.parameters).toArray(),
+		catch: (error) => error,
+	})
+	const traced = traceStatement(sqliteDialect, compiled, exec, (wire) => wire.length, {
+		observeExit: options?.observeExit,
+		spanParameters: options?.spanParameters,
+	})
+	const rows = orThrow(Effect.runSyncExitWith(context as Context.Context<never>)(traced))
 	if (compiled.kind !== "select" && compiled.returning === undefined) return []
 	return orThrow(Effect.runSyncExit(compiled.decodeRows(rows)))
 }

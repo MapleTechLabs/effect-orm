@@ -34,7 +34,7 @@ import {
 } from "./errors"
 import { isSqlTemplate, renderTemplate, type SqlTemplate } from "./sql"
 import { errorCodeOf, firstLine, reasonOf, sqlStateOf, toDatabaseError } from "./sql-error"
-import { traceStatement, traceStream, type StatementObservation, type TraceOptions, type TracedStatement } from "./tracing"
+import { traceBatch, traceStatement, traceStream, type StatementObservation, type TraceOptions, type TracedStatement } from "./tracing"
 
 /** SQL and the values bound to its placeholders. A `CompiledQuery` is one. */
 export interface Statement {
@@ -74,14 +74,22 @@ export type RowOf<Q> =
  * otherwise the first refusal (a missing param, a function of another
  * dialect, a query with no SELECT list), naming the statement's position.
  */
-export type BatchCheck<Qs extends ReadonlyArray<Runnable>, Given, Functions extends string> = {
-	readonly [K in keyof Qs]: RunCheck<Qs[K]> &
-		ParamsSatisfied<QueryParams<Qs[K]>, Given> &
-		DialectSatisfied<QueryParams<Qs[K]>, Functions> &
-		SourcesSatisfied<QueryParams<Qs[K]>>
-} extends infer Checks
-	? FirstRefusal<Checks>
-	: unknown
+export type BatchCheck<Qs extends ReadonlyArray<Runnable>, Given, Functions extends string> = number extends Qs["length"]
+	? // An array, not a tuple: its indexes are `number`, so check its element type as one statement.
+		StatementCheck<Qs[number], Given, Functions> extends infer Check
+		? unknown extends Check
+			? unknown
+			: { readonly batchStatementRefused: { readonly statement: number; readonly refused: Check } }
+		: unknown
+	: { readonly [K in keyof Qs]: StatementCheck<Qs[K], Given, Functions> } extends infer Checks
+		? FirstRefusal<Checks>
+		: unknown
+
+/** What `run` checks of one statement. */
+type StatementCheck<Q, Given, Functions extends string> = RunCheck<Q> &
+	ParamsSatisfied<QueryParams<Q>, Given> &
+	DialectSatisfied<QueryParams<Q>, Functions> &
+	SourcesSatisfied<QueryParams<Q>>
 
 type FirstRefusal<Checks> = {
 	readonly [K in keyof Checks]: unknown extends Checks[K] ? never : { readonly statement: K; readonly refused: Checks[K] }
@@ -506,12 +514,17 @@ export const fromSqlClient = <Functions extends string = string>(
 			Effect.gen(function* () {
 				for (const statement of compiled) yield* guard(statement)
 				const statements = compiled.map((statement) => raw.unsafe<Record<string, unknown>>(statement.sql, statement.parameters))
-				const wire = yield* driver(
-					(nativeBatch as (statements: ReadonlyArray<unknown>) => Effect.Effect<ReadonlyArray<ReadonlyArray<Record<string, unknown>>>, unknown>).call(
-						sql,
-						statements,
-					),
-				).pipe(Effect.mapError(toDatabaseError(compiled.map((statement) => statement.sql).join(";\n"))))
+				const wire = yield* traceBatch(
+					dialect,
+					compiled,
+					driver(
+						(nativeBatch as (statements: ReadonlyArray<unknown>) => Effect.Effect<ReadonlyArray<ReadonlyArray<Record<string, unknown>>>, unknown>).call(
+							sql,
+							statements,
+						),
+					).pipe(Effect.mapError(toDatabaseError(compiled.map((statement) => statement.sql).join(";\n")))),
+					traceOptions,
+				) as Effect.Effect<ReadonlyArray<ReadonlyArray<Record<string, unknown>>>, DatabaseError>
 				return yield* decodeAll(compiled, wire)
 			})
 		const inTransaction = (compiled: ReadonlyArray<CompiledQuery<any, any>>) =>
@@ -741,7 +754,7 @@ export const batch = <const Qs extends ReadonlyArray<Runnable>, const Given exte
 	BatchRows<Qs>,
 	DatabaseError | QueryBuilderError | CompiledQueryDecodeError | TransactionError,
 	Database | RequirementsOf<Qs[number]>
-> => Effect.flatMap(Effect.service(Database), (db) => db.batch(queries, params))
+> => Effect.flatMap(Effect.service(Database), (db) => db.batch(queries as never, params))
 
 /** What `run` can fail with. */
 type RunError = DatabaseError | QueryBuilderError | CompiledQueryDecodeError
