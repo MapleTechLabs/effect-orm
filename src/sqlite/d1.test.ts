@@ -165,3 +165,41 @@ it("streams rows on D1, whose driver has no streaming read, and keeps the tenant
 	expect(result.rows).toEqual([{ id: "ack_1" }, { id: "ack_2" }])
 	expect(Exit.isFailure(result.unscoped) && Cause.squash(result.unscoped.cause)).toBeInstanceOf(Db.TenantScopeViolation)
 })
+
+it("runs window functions, json_each, jsonRows upserts, UPDATE ... FROM and FTS5 on D1, and an atomic batch", async () => {
+	const Daily = SQLite.table("daily", { external: true, columns: { day: SQLite.text, dau: SQLite.integer } })
+	const Fts = SQLite.fts5Table("notes_fts", { body: SQLite.text })
+	const result = await withD1((db, statements) => Effect.gen(function* () {
+		yield* db.execute({ sql: "CREATE TABLE daily (day TEXT PRIMARY KEY, dau INTEGER NOT NULL)" })
+		yield* db.execute({ sql: "CREATE VIRTUAL TABLE notes_fts USING fts5(body)" })
+		const days = Array.from({ length: 120 }, (_, i) => ({ day: `2026-01-${String(i).padStart(3, "0")}`, dau: i }))
+		// 120 rows in one bound parameter, past D1's 100.
+		yield* db.run(SQLite.insertInto(Daily).select(SQLite.jsonRows(days, { day: SQLite.text, dau: SQLite.integer }))
+			.onConflictDoUpdate({ target: ["day"], set: SQLite.excluded(["dau"]) }))
+		yield* db.run(SQLite.update(Daily).from(SQLite.jsonRows([{ day: "2026-01-001", dau: 50 }], { day: SQLite.text, dau: SQLite.integer }), "r")
+			.set(($) => ({ dau: $.r.dau })).where(($) => [$.day.eq($.r.day)]))
+		const windowed = yield* db.run(SQLite.from(Daily)
+			.select(($) => ({ day: $.day, next: SQLite.over(SQLite.lead($.dau), SQLite.windowSpec({ orderBy: [[$.day, "asc"]] })) }))
+			.where(($) => [SQLite.inSubquery($.day, SQLite.from(SQLite.jsonEach(["2026-01-000", "2026-01-001", "2026-01-119"], { value: SQLite.text })).select(($) => ({ value: $.value })))])
+			.orderBy(["day", "asc"]))
+		statements.length = 0
+		const [inserted, matched] = yield* db.batch([
+			SQLite.insertInto(Fts).values({ rowid: 1, body: "hello d1" }).returning("rowid"),
+			SQLite.from(Fts).select(($) => ({ rowid: $.rowid, marked: SQLite.fts5.highlight($, "body", "<", ">") })).where(($) => [SQLite.fts5.match($, "hello")]),
+		])
+		const batchStatements = [...statements]
+		const failed = yield* Effect.exit(db.batch([
+			SQLite.insertInto(Daily).values({ day: "2026-02-01", dau: 1 }),
+			SQLite.insertInto(Daily).values({ day: "2026-02-01", dau: 1 }),
+		]))
+		const rolledBack = yield* db.run(SQLite.from(Daily).select("day").where(($) => [$.day.eq("2026-02-01")]))
+		return { windowed, inserted, matched, batchStatements, failed: failed._tag, rolledBack }
+	}))
+	// The window reads the rows the WHERE kept.
+	expect(result.windowed).toEqual([{ day: "2026-01-000", next: 50 }, { day: "2026-01-001", next: 119 }, { day: "2026-01-119", next: null }])
+	expect(result.inserted).toEqual([{ rowid: 1 }])
+	expect(result.matched).toEqual([{ rowid: 1, marked: "<hello> d1" }])
+	expect(result.batchStatements).toHaveLength(2)
+	expect(result.failed).toBe("Failure")
+	expect(result.rolledBack).toEqual([])
+}, 30_000)
