@@ -220,7 +220,7 @@ export interface DatabaseApi<Functions extends string = string> {
 export class Database extends Context.Service<Database, DatabaseApi>()("@maple-dev/effect-orm/Database") {}
 
 export interface FromSqlClientOptions<Functions extends string = string> {
-	/** The dialect the database speaks: `postgresDialect` or `clickhouseDialect`. */
+	/** The dialect the database speaks: `clickhouseDialect`, `postgresDialect`, `sqliteDialect`, `d1Dialect`, `mysqlDialect` or `mariadbDialect`. */
 	readonly dialect: Dialect<Functions>
 	/**
 	 * Wraps statements run by `execute`. Pass the ClickHouse client's

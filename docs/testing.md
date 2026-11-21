@@ -32,6 +32,18 @@ bun run test:clickhouse
 an unreachable server, a failed assertion, or a decoding error fails the command.
 The user defaults to `default` and the password to an empty string.
 
+The MySQL and MariaDB suites read a connection URL each, and skip without one. CI runs them this
+way:
+
+```sh
+EFFECT_ORM_MYSQL_URL=mysql://maple:maple@127.0.0.1:3306/maple \
+EFFECT_ORM_MARIADB_URL=mysql://maple:maple@127.0.0.1:3307/maple \
+bunx vitest run src/mysql tests/core.mysql.test.ts tests/fuzz -t "mysql|mariadb"
+```
+
+Postgres (PGlite) and SQLite (`node:sqlite`, and D1 through Miniflare) run in process, in
+`bun run test`.
+
 `bun run test:package` builds and packs the package, installs the tarball outside the
 workspace with its Effect peer, typechecks a consumer with strict declarations, and
 executes imports from the public entry points under Node. This needs npm registry

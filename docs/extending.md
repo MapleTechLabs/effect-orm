@@ -40,7 +40,8 @@ rule instead of a type:
 | Rule            | Meaning                                       | Example                     |
 | --------------- | --------------------------------------------- | --------------------------- |
 | `sameAs(i)`     | decodes as argument `i` does                  | `min`, `argMax`, `over`     |
-| `firstTyped()`  | decodes as the first argument that has a type | `coalesce`, `if`            |
+| `firstTyped()`  | decodes as the first argument that has a type | `if`, `least`               |
+| `firstTypedNonNull()` | every argument's values; not NULL when one argument cannot be NULL | `coalesce`, `ifNull` |
 | `elementOf(i)`  | one element of argument `i`'s array           | `arrayJoin`, `arrayElement` |
 | `arrayOfArg(i)` | an array of argument `i`                      | `groupUniqArray`            |
 
@@ -48,7 +49,27 @@ rule instead of a type:
 const anyLast = CH.defineFn<[CH.Expr<string>], string>("anyLast", CH.sameAs(0))
 ```
 
-Any function of your own works: the rule is `(...args) => Schema.Codec | undefined`.
+Any function of your own works: the rule is `(...args) => Schema.Codec | undefined`. The
+helpers the built-in rules use are exported for that: `schemaOf(expr)` (an expression's codec,
+or `undefined`), `schemaOfAny(...exprs)` (the first one found), `elementSchema(arraySchema)` and
+`withoutNull(schema)` (a nullable codec without its `| null`).
+
+```ts title="result-rules.ts"
+import * as CH from "@maple-dev/effect-orm/clickhouse"
+
+// assumeNotNull(x): x's type without the NULL.
+const assumeNotNull = CH.defineFn<[CH.Expr<string | null>], string>("assumeNotNull", (x) =>
+	CH.withoutNull(CH.schemaOf<string | null>(x)),
+)
+
+const Users = CH.table("users", {
+	columns: { Id: CH.string, Email: CH.nullable(CH.string) },
+	engine: CH.engine.mergeTree(),
+	orderBy: ["Id"],
+})
+export const compiled = CH.compileUnsafe(CH.from(Users).select(($) => ({ email: assumeNotNull($.Email) })))
+// SELECT assumeNotNull(users.Email) AS email FROM users — decodes as string
+```
 
 A rule is an _assertion_, the same way `rawExpr`'s type is: nothing checks that `sameAs(0)` on a
 function you declared as returning a `number` actually yields one. Declare the rule that matches
@@ -105,15 +126,18 @@ anything bespoke:
 
 ```ts
 import { makeExpr } from "@maple-dev/effect-orm/clickhouse"
-import { raw, compile } from "@maple-dev/effect-orm/sql"
+import { lazy, compile } from "@maple-dev/effect-orm/sql"
 
 const quantileExact =
 	(q: number) =>
 	<Q = never>(expr: CH.Expr<number, Q>) =>
-		makeExpr(raw(`quantileExact(${q})(${compile(expr.toFragment())})`), CH.float64.schema, undefined, [expr])
+		makeExpr(lazy(() => `quantileExact(${q})(${compile(expr.toFragment())})`), CH.float64.schema, undefined, [expr])
 ```
 
-This is how the bundled `quantile` is built. The last argument, `uses`, lists the expressions
+This is how the bundled `quantile` is built. `lazy` renders the SQL when the query compiles, so
+the argument is written for the dialect being compiled for and a bad value fails that compile;
+`raw` with the text built up front works too, but renders the argument before any dialect is
+installed. The last argument, `uses`, lists the expressions
 the fragment interpolates (see [below](#params-and-checks-on-a-custom-function)). The value
 type comes from the schema; `makeExpr<number>(…)` with an explicit type argument does not
 type-check. Note the second argument: `makeExpr` requires a
@@ -144,6 +168,11 @@ themselves. `makeExpr`, `makeUntypedExpr` and `makeCond` cannot see inside the S
 so they take the expressions you interpolate as `uses` (the last argument): the result carries
 their params, and compiling fails with a `QueryBuilderDefect` if the SQL holds a param that no
 `uses` entry carries. A param can therefore not reach a query without being in its type.
+
+SQL that is not built from an expression, but must hold a param the outer `compile` resolves,
+spells the placeholder with `paramPlaceholder(kind, name)`; `paramPlaceholder("string", "orgId")`
+is the text `param.string("orgId")` renders to. Pass that param as a `uses` entry so the query's
+type asks for it.
 
 Generic functions take their params as one type parameter per argument (`Expr<number, Q>`
 above); a parameter written as a plain `Expr<T>` accepts any expression but drops its params
@@ -316,6 +345,7 @@ import { raw, str, ident, int, join, as_, when, compile } from "@maple-dev/effec
 - `ident(name)` — an identifier
 - `raw(sql)` — verbatim SQL, escaping nothing
 - `int(value)`, `join(sep, ...frags)`, `as_(frag, alias)`, `when(cond, frag)`
+- `lazy(render)` — SQL produced by a function when the fragment is compiled
 - `compile(fragment)` — render a fragment to a string
 - `escapeClickHouseString(value)` — the escaping primitive itself
 

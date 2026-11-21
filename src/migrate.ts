@@ -1,7 +1,8 @@
 // @maple-dev/effect-orm/migrate
 //
 // Applies migrations written by `effect-orm generate` (or by hand) to a
-// ClickHouse or Postgres database through a `MigrationDriver` you provide. On
+// ClickHouse or Postgres database through a `MigrationDriver` you provide (SQLite
+// and MySQL migrations are generated but not applied here). On
 // ClickHouse statements are journaled one by one, so a failed run resumes
 // where it stopped; on Postgres each migration is one transaction. See
 // docs/migrations.md.

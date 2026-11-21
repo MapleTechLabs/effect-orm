@@ -72,10 +72,9 @@ See the [Effect ClickHouse driver source](https://github.com/Effect-TS/effect/bl
 Provide `FetchHttpClient.layer` and it runs wherever `fetch` does; give it to `Database` like
 any other client:
 
-```ts
+```ts title="clickhouse-http-layer.ts"
 import { Effect, Layer, Redacted } from "effect"
 import { FetchHttpClient } from "effect/http"
-import * as SqlClient from "effect/sql/SqlClient"
 import * as CH from "@maple-dev/effect-orm/clickhouse"
 import * as ClickhouseHttp from "@maple-dev/effect-orm/clickhouse-http"
 import * as Db from "@maple-dev/effect-orm/database"
@@ -85,15 +84,30 @@ const ClickHouse = ClickhouseHttp.layer({
 	username: "reader",
 	password: Redacted.make("…"),
 	database: "analytics",
+	settings: { max_execution_time: 60 }, // sent with every statement
 }).pipe(Layer.provide(FetchHttpClient.layer))
 
 const DatabaseLive = Layer.effect(
 	Db.Database,
 	Effect.gen(function* () {
-		return Db.fromSqlClient(yield* SqlClient.SqlClient, { dialect: CH.clickhouseDialect })
+		const client = yield* ClickhouseHttp.ClickhouseHttpClient
+		return Db.fromSqlClient(client, { dialect: CH.clickhouseDialect, command: client.asCommand })
 	}),
 ).pipe(Layer.provideMerge(ClickHouse))
+
+// The client itself, for what `Database` does not cover: a query id to find the
+// statement in `system.query_log`, and settings for one statement.
+export const topRoutes = Effect.gen(function* () {
+	const client = yield* ClickhouseHttp.ClickhouseHttpClient
+	return yield* client
+		.unsafe<{ route: string; hits: string }>("SELECT route, count() AS hits FROM requests GROUP BY route ORDER BY hits DESC LIMIT 10")
+		.pipe(client.withSettings({ max_threads: 4 }), client.withQueryId("top-routes-1"))
+}).pipe(Effect.provide(DatabaseLive))
 ```
+
+`layer` provides both `ClickhouseHttpClient` and `SqlClient`. `make(config)` is the same client
+as an `Effect` that needs an `HttpClient`, Effect's `Reactivity` and a `Scope`, for building it
+inside a layer of your own.
 
 What it does for you:
 
@@ -111,7 +125,8 @@ What it does for you:
   the reply instead of cutting the connection, and the client reads it there: the statement
   fails with the server's reason and message, and a `.stream` fails after the rows before it.
   The rows already read are never returned as a result. The same goes for a statement whose
-  `200` carries an exception code, which happens once progress headers are on. Needs
+  `200` carries an exception code, which happens once progress headers are on. A body that
+  cannot be read to the end fails with a `ConnectionError`. Needs
   ClickHouse 23.9 or later, the first with that setting.
 - **A `readonly = 1` user cannot change settings,** only repeat their current values. For one,
   put `cancel_http_readonly_queries_on_client_close` and `http_write_exception_in_output_format`
@@ -125,8 +140,8 @@ What it does for you:
 - `asCommand` runs DDL and writes, `withQueryId` sets the `query_id`, and `withSettings` adds
   ClickHouse settings over the configured ones. Statements bind `sql` template values on the
   server, as `{pN: Type}` placeholders: a string as `String`, a number as `Float64`, a `bigint`
-  as the narrowest of `Int64`, `UInt64`, `Int128` and the 256-bit types that holds it, a `Date`
-  as `DateTime64(3)`, `null` as a `Nullable(String)` NULL, and an array as an `Array` of its
+  as the narrowest of `Int64`, `UInt64`, `Int128`, `UInt256` and `Int256` that holds it, a
+  boolean as `Bool`, a `Date` as `DateTime64(3)`, `null` as a `Nullable(String)` NULL, and an array as an `Array` of its
   elements' type, read from all of them: `Nullable` when any is null, at any depth, and wide
   enough for the largest `bigint`.
 
@@ -135,7 +150,7 @@ are `Database`'s, described in [Running statements: tracing](./database.md#traci
 
 For a client that implements Effect's `SqlClient`, the opt-in
 [`@maple-dev/effect-orm/database`](./database.md) entry point does this loop for you
-(`Db.run(compiled)`), and adds transactions on Postgres.
+(`Db.run(compiled)`), and adds transactions on Postgres, MySQL and SQLite.
 
 ## Formats and numeric precision
 

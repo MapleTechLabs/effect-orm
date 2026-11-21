@@ -105,8 +105,9 @@ test has no row index.
 
 ## Unique columns
 
-A column in `unique` gets distinct values. A Postgres or SQLite table's one-column primary key
-and its `unique: true` columns are added from its DDL. When the column's values cannot give `count`
+A column named in the `unique` option gets distinct values: `{ count: 50, unique: ["email"] }`. A
+Postgres or SQLite table's one-column primary key and its `unique: true` columns are added from
+its DDL. A MySQL table's are not read yet, and a ClickHouse table has none: name them in `unique`. When the column's values cannot give `count`
 distinct ones (a `bool` key, a short `Literals` list), seeding fails with `SeedError`. Then give
 the column a function of the row index.
 
@@ -138,8 +139,11 @@ const seedOrgsAndMembers = Effect.gen(function* () {
 ```
 
 A failed batch stops the seed. Run it in `transaction` to keep all of it or none of it, where the
-dialect has transactions. On Postgres, a statement can bind at most 65535 parameters: keep
-`batchSize` times the column count below that.
+dialect has transactions (not ClickHouse or D1). An `INSERT` binds one value per column per row,
+and a statement over the dialect's limit fails with `QueryBuilderError` before it is sent:
+Postgres and MySQL take 65,535, SQLite 32,766, and D1 only 100. On D1, keep `batchSize` times the
+column count at 100 or less (`batchSize: 10` for a table of ten columns). ClickHouse writes the
+values into the SQL and has no limit.
 
 ## Property tests
 

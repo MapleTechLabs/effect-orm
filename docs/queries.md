@@ -13,6 +13,11 @@ const limited = base.limit(10) // `base` still has no LIMIT
 
 That makes shared base queries safe to hand around and specialise per caller.
 
+The SQL in these guides is shown with its whitespace collapsed. Every column reference is
+qualified with its source, on every dialect: `events.Name` on ClickHouse, `"events"."Name"` on
+Postgres and SQLite, `` `events`.`Name` `` on MySQL. Short fragments in comments sometimes leave the
+qualifier out.
+
 _(Backed by `docs/queries.md > Queries are immutable`.)_
 
 ## `select`
@@ -24,14 +29,14 @@ its key, as drizzle's bare `select()` does:
 
 ```ts
 CH.from(Events).select()
-// SELECT Name AS Name, DurationMs AS DurationMs, ... FROM events
+// SELECT events.Name AS Name, events.DurationMs AS DurationMs, ... FROM events
 ```
 
 **By column name** — output keys match the column names:
 
 ```ts
 CH.from(Events).select("Name", "DurationMs")
-// SELECT Name AS Name, DurationMs AS DurationMs FROM events
+// SELECT events.Name AS Name, events.DurationMs AS DurationMs FROM events
 ```
 
 **By callback** — for computed expressions, aliases, and aggregates:
@@ -53,6 +58,55 @@ value can remove a `select()`.
 Calling `select` again replaces the previous projection rather than adding to it.
 
 _(Backed by `docs/queries.md > select by column name`.)_
+
+### Select keys are names
+
+A select key is written as a SQL alias, so any string works as one, including a key built from
+input. Postgres, SQLite and MySQL quote every alias. ClickHouse writes a plain name (letters,
+digits, `_`) bare, as before, and puts any other in backticks:
+
+```ts title="select-keys.ts" dialect="clickhouse"
+import * as CH from "@maple-dev/effect-orm/clickhouse"
+
+const Events = CH.table("events", {
+	columns: { Name: CH.string, DurationMs: CH.uint64 },
+	engine: CH.engine.mergeTree(),
+	orderBy: ["Name"],
+})
+
+export const compiled = CH.compileUnsafe(
+	CH.from(Events)
+		.select(($) => ({ "by service": $.Name, "p-95": CH.quantile(0.95)($.DurationMs), null: CH.count() }))
+		.groupBy("by service")
+		.orderBy(["p-95", "desc"]),
+)
+// SELECT events.Name AS `by service`, quantile(0.95)(events.DurationMs) AS `p-95`, count() AS `null`
+// FROM events GROUP BY `by service` ORDER BY `p-95` DESC
+```
+
+```ts title="select-keys.pg.ts" dialect="postgres,sqlite,mysql"
+import * as PG from "@maple-dev/effect-orm/postgres"
+
+const Events = PG.table("events", { columns: { name: PG.text, duration_ms: PG.int8 } })
+
+export const compiled = PG.compileUnsafe(
+	PG.from(Events)
+		.select(($) => ({ "by service": $.name, "max ms": PG.max($.duration_ms) }))
+		.groupBy("by service")
+		.orderBy(["max ms", "desc"]),
+)
+// SELECT "events"."name" AS "by service", max("events"."duration_ms") AS "max ms"
+// FROM "events" GROUP BY 1 ORDER BY "max ms" DESC
+```
+
+SQLite quotes the same way; MySQL uses backticks. Postgres, SQLite and MySQL write a GROUP BY
+key by its position in the select list.
+
+The row comes back under the same keys. On ClickHouse a key with a dot, and a few words that
+ClickHouse reads as something else (`null`, `true`, `all`, `select` and others), are quoted
+too; [Names](./params-and-compilation.md#names) has the full list. A key that contains
+`__PARAM_`, the text the builder marks params with, is escaped on ClickHouse and fails the
+compile with `InvalidLiteral` on the other dialects.
 
 ## `where`
 
@@ -149,7 +203,8 @@ _(Backed by `docs/queries.md > orderBy takes tuples` and `> orderBy rejects a ba
 ```
 
 `distinctOn` takes selected aliases and keeps the first row of each group in ORDER BY order;
-Postgres wants those keys to lead the ORDER BY. Both ClickHouse and Postgres support it.
+Postgres wants those keys to lead the ORDER BY. ClickHouse and Postgres support it; SQLite and
+MySQL have no `DISTINCT ON`, and compiling it for them is a `QueryBuilderDefect`.
 
 ## `limit` / `offset`
 
@@ -169,8 +224,9 @@ request boundary. Use a stable `orderBy` when paging;
 .format("JSON") // appends `FORMAT JSON`
 ```
 
-Accepts `"JSON"` or `"JSONEachRow"`. Most clients set the format themselves; use this only
-when you are sending raw SQL somewhere that does not.
+ClickHouse only. Accepts `"JSON"` or `"JSONEachRow"`. Most clients set the format themselves;
+use this only when you are sending raw SQL somewhere that does not. On another dialect a query
+with `format` is a `QueryBuilderDefect`.
 
 ## Row locks
 
@@ -192,6 +248,19 @@ are a `QueryBuilderDefect`, refused before anything is sent: `skipLocked` and `n
 a qualified name in `of` (use the alias or `jobs`, not `public.jobs`); a lock on a query with
 DISTINCT, GROUP BY or HAVING, or on a `unionAll` branch, which Postgres refuses; and any lock on
 ClickHouse, SQLite or D1, which have no row locks.
+
+## Selecting without a table
+
+`selectNoFrom(() => ({ … }))` is a SELECT of values with no FROM. Its `where` takes conditions
+that read no source, such as `exists(…)`:
+
+```ts
+PG.selectNoFrom(() => ({ found: PG.lit(1) })).where(() => [PG.exists(PG.from(Users).select("id"))])
+// SELECT 1 AS "found" WHERE EXISTS (SELECT "users"."id" AS "id" FROM "users")
+```
+
+MySQL writes `FROM DUAL`. The usual use is as an insert's source, to insert a row only when a
+condition holds; see [Insert ... select](./inserts.md#insert--select).
 
 ## `withCTE`
 
@@ -248,6 +317,7 @@ _(Backed by `docs/queries.md > Pipeable, data-last queries`.)_
 const compiled = CH.compileUnsafe(query, params)
 ```
 
-`compile` writes its entry's dialect: ClickHouse from `/clickhouse`, Postgres from `/postgres`.
+`compile` writes its entry's dialect: ClickHouse from `/clickhouse`, Postgres from `/postgres`,
+SQLite from `/sqlite`, MySQL from `/mysql` (pass `{ dialect: mariadbDialect }` for MariaDB).
 Unions compile with `compileUnion`.
 See [Params and compilation](./params-and-compilation.md).

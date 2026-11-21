@@ -60,8 +60,10 @@ Everything in this section is exported, identically, from `/clickhouse`, `/postg
 | `excluded`    | `(columns) => ExcludedColumns`: an `onConflictDoUpdate` `set` that copies the named columns from the proposed row. See [On conflict](./inserts.md#on-conflict) |
 | `excludedAll` | `(except?) => ExcludedAll`: an `onConflictDoUpdate` `set` that copies every column the insert writes, except these and the target's |
 
-Tables come from the dialect's `table`: [`CH.table`](#tables-and-ddl) or
-[`PG.table`](#tables-and-ddl-1).
+Tables come from the dialect's `table`: [`CH.table`](#tables-and-ddl),
+[`PG.table`](#tables-and-ddl-1), [`SQLite.table`](#tables-and-ddl-2) or
+[`MySQL.table`](#tables-and-ddl-3). [Recipes](./recipes.md) has complete examples of reads,
+upserts, pagination and transactions.
 
 ### `CHQuery` methods
 
@@ -282,7 +284,7 @@ Tag `"@maple-dev/effect-orm/QueryBuilderError"`. Recorded while compiling and su
 | `code`             | Cause                                                                    |
 | ------------------ | ------------------------------------------------------------------------ |
 | `UnresolvedParam`  | A param the params bag has no value for                                  |
-| `InvalidLiteral`   | A param value, or a comparison operand, the column's codec rejects       |
+| `InvalidLiteral`   | A param value, or a comparison operand, the column's codec rejects; or a literal or name that would spell the reserved param marker `__PARAM_` (Postgres, SQLite and MySQL refuse such a name; ClickHouse escapes it) |
 | `InvalidArguments` | Arguments a function cannot use — an empty condition list, a bad pattern, an insert with no rows or an unknown column, more bound values than the dialect allows |
 
 #### `QueryBuilderDefect`
@@ -322,8 +324,8 @@ raw Schema error message, which can hold row values.
 
 #### `SchemaDefinitionError`
 
-Tag `"@maple-dev/effect-orm/SchemaDefinitionError"`. Fails `S.entitiesOf`, `S.pgEntitiesOf`, `S.sqliteEntitiesOf` and
-`TB.buildProject` when a definition cannot render: a name that is not a plain identifier, a
+Tag `"@maple-dev/effect-orm/SchemaDefinitionError"`. Fails `S.entitiesOf`, `S.pgEntitiesOf`, `S.sqliteEntitiesOf`,
+`S.mysqlEntitiesOf` and `TB.buildProject` when a definition cannot render: a name that is not a plain identifier, a
 MergeTree-family engine with no `orderBy`, a view reading from a union, a view writing to a table
 outside the schema. Fields: `problems` (every `DefinitionProblem`, `{ object, message }`) and
 `message`. Definitions never throw; each records its own on `problems`.
@@ -496,6 +498,12 @@ Types: `WindowSpec`, `CompiledWindowSpec`, `WindowFrameBound`, `WindowRowsFrame`
 SQL as ClickHouse literals. A `CurrentDialect` in context, or `options.dialect`, overrides
 the default.
 
+`clickhouseDialect` writes a plain name (letters, digits, `_`, dots) bare and any other in
+backticks, so a select key such as `"p-95"` or one built from input is always one name. A select
+key, alias or CTE name that ClickHouse reads as something else (`all`, `null`, `select`, `top`, …)
+is quoted too. A table name is written as given (`rawTableNames`), since an external table's name
+can be a table function or a subquery. See [Names](./params-and-compilation.md#names).
+
 ---
 
 ## `/postgres`
@@ -625,14 +633,14 @@ the default.
 | `defineDatasource`, `defineMaterializedView`, `node`, `column`, `t`, `engine`, `buildProject`, `InferRow` — the `@tinybirdco/sdk` call shapes, whose results are also query tables ([Tinybird](./tinybird.md)) | `/tinybird` |
 | Definition types: `Datasource`, `AnyDatasource`, `DatasourceOptions`, `DatasourceIndex`, `SchemaDefinition`, `ColumnDefinition`, `EngineConfig`, `MaterializedViewDefinition`, `NodeDefinition`, `TinybirdType`, `AnyTinybirdType`, `TypeModifiers`, `ColumnsOfSchema`, `DefaultedColumnsOfSchema`, `RowOf` | `/tinybird` |
 | Datafiles: `TinybirdProject` and `Datafile` (what `buildProject` returns), `generateDatasource`, `generatePipe`, `formatDefaultValue`; and the readers `getColumnType`, `getColumnJsonPath`, `getModifiers`, `getTinybirdType`, `isTinybirdType`, `isDatasourceDefinition`, `isPipeDefinition` | `/tinybird` |
-| `run`, `status`, `verify`, `verifySnapshot`, `baseline`, `MigrationDriver` and the migrate errors | `/migrate`        |
+| `run` (apply pending migrations), `status` (each migration's state), `verify` and `verifySnapshot` (compare the database with the last snapshot), `baseline` (record migrations as applied without running them), `MigrationDriver` (the service they run through) and the migrate errors; ClickHouse and Postgres ([Applying migrations](./migrations.md#applying-migrations)) | `/migrate`        |
 | The driver: `MigrationDriverApi` (`execute`, `query`, optional `transaction`), `fromSqlClient` and `layerSqlClient` to build one from an Effect `SqlClient`, `FromSqlClientOptions` | `/migrate` |
 | Migration sources: `fromFileSystem`, `fromRecord`, `MigrationInput`, `LoadedMigration`, `MigrationStep`, `orderMigrations`, `stepsOf`, `dialectOf`, `isStagingName`, `STATEMENT_BREAKPOINT` | `/migrate` |
 | Running a migration a step at a time, for an orchestrator: `pendingMigrations`, `planMigration`, `planSteps`, `applyStep`, `completeMigration`, `resolveStep`, with `MigrationPlan`, `PlannedStep`, `ResolveStepOptions` | `/migrate` |
 | Options and results: `RunOptions`, `BaselineOptions`, `VerifyOptions`, `VerifyResult`, `Drift`, `AppliedMigration`, `MigrationStatus`, `MigrationState`; `LEDGER_TABLES` names the three ledger tables | `/migrate` |
 | The errors, each a tagged error, and their union `MigrateError`: `MigrateSqlError`, `MigrateSourceError`, `MigrateHashMismatch`, `MigrateLeaseHeld`, `MigrateStepFailed`, `MigrateStepChanged`, `MigrateStepUncertain` | `/migrate` |
-| `Database`, `run`, `runOne`, `runOption`, `runNonEmpty`, `stream`, `batch` (`BatchCheck`, `BatchRows`), `paginate`, `sql`, `query`, `execute`, `transaction`, `requireTransaction`, `afterCommit`, `retryContention`, `Transaction` | `/database` |
-| `DatabaseError`, `ResultCardinalityError`, `InvalidCursor`, `TransactionCommitFailed`, `TransactionRollbackFailed` and the other transaction errors | `/database` |
+| `Database` (the service), `run` (compile, run and decode a query or write), `runOne`, `runOption`, `runNonEmpty` (the same with a row-count check), `stream` (rows as a `Stream`), `batch` (several statements, `BatchCheck`, `BatchRows`; [Batches](./database.md#batches)), `paginate` (a keyset page; [Pagination](./database.md#pagination), [recipe](./recipes.md#page-through-rows-with-a-cursor)), `sql` (a template with bound values), `query`, `execute` (run a statement, with or without rows), `transaction`, `requireTransaction`, `afterCommit`, `retryContention`, `Transaction` ([Transactions](./database.md#transactions), [recipe](./recipes.md#several-writes-in-one-transaction)). See [Running statements and transactions](./database.md) | `/database` |
+| `DatabaseError` (a failed statement, with the driver's `reason`), `ResultCardinalityError` (`runOne` and friends got the wrong number of rows), `InvalidCursor` (a `paginate` cursor that does not decode), `TransactionCommitFailed`, `TransactionRollbackFailed` and the other transaction errors ([Errors](./database.md#errors)) | `/database` |
 | Building one: `fromSqlClient`, `layerSqlClient`, `FromSqlClientOptions`, `DatabaseApi` | `/database` |
 | What statements are: `Runnable` and `RowOf` (for `run`), `Statement` and `StatementInput` (for `query` and `execute`), `RowSchema` (the row codec `query` takes), and the `sql` template's `SqlTemplate`, `SqlIdentifier`, `SqlRawText` | `/database` |
 | Transactions: `TransactionOptions`, `TransactionInfo`, `RetryOptions`, `isContention`, the union `TransactionError`, and `TransactionUnsupported`, `TransactionOptionsRejected`, `TransactionClosed`; `TenantScopeViolation`, the defect a `requireTenantScope` database raises | `/database` |
@@ -646,16 +654,16 @@ the default.
 | `layerTest`, `TestDatabase`, `TestDatabaseApi`, `TestDatabaseOptions`, `TestReply`, `TestStatement` — a `Database` with no server, for unit tests | `/database` |
 | `rows`, `insert`, `arbitrary`, `pick`, `SeedError`, `SeedRow`, `SeedRowOf`, `ColumnOverride`, `RowsOptions`, `InsertOptions`, `ArbitraryOptions` — rows from the column Schemas; see [Seeding](./seeding.md) | `/seed` |
 | `StatementObservation` — what `observeExit` gets for each statement: names, duration, rows, `error.type` | `/database` |
-| `ClickhouseHttpClient`, `layer`, `make`, `ClickhouseHttpClientConfig`, `ClickhouseSetting` — a ClickHouse `SqlClient` over `fetch`, for Workers | `/clickhouse-http` |
-| `defineConfig`, `generate`, `check`, `pull`, `verifySchema`, `loadSchema`, `readMigrations`, `analyze`, `KitError` | `/kit`            |
+| `ClickhouseHttpClient` (the service: a `SqlClient` plus `asCommand`, `withQueryId`, `withSettings`), `layer` and `make` (build one from a `ClickhouseHttpClientConfig`: `url`, `username`, `password`, `database`, `settings`, `spanAttributes`), `ClickhouseSetting` (a setting value) — a ClickHouse `SqlClient` over `fetch`, for Workers. Needs ClickHouse 23.9+; a query that fails after its first rows fails, and values bind as typed server-side params ([On Workers and other fetch runtimes](./running-queries.md#on-workers-and-other-fetch-runtimes)) | `/clickhouse-http` |
+| `defineConfig` (type an `effect-orm.config.ts`), `generate` (write the next migration), `check` (validate the folder), `pull` (definitions from a ClickHouse database), `verifySchema` (compare a database with the definitions), `loadSchema` (import the schema modules), `readMigrations` (read the folder), `analyze` (the folder's snapshot graph), `KitError` (their failure, with a `code`); the functions behind the `effect-orm` commands ([Schema and migrations](./migrations.md)) | `/kit`            |
 | `KitConfig` (the shape of `effect-orm.config.ts`), and the option and result types of the functions above: `GenerateOptions`, `GenerateResult`, `PullOptions`, `PullResult`, `VerifySchemaResult`, `GraphAnalysis`, `GraphProblem` | `/kit` |
-| `defineSuite`, `query`, `caseFromCompiled`, `runSuite`, `compareRuns`, `compareBudgets`          | `/benchmark`      |
+| `defineSuite`, `query`, `caseFromCompiled` (declare a suite and its cases), `runSuite` (measure it), `compareRuns`, `compareBudgets` (compare a baseline and a candidate); see [Benchmarking](./benchmarking.md) | `/benchmark`      |
 | `Suite`, `RunOutput`, `BenchmarkError` and benchmark contracts                                   | `/benchmark`      |
 | The contracts by name: `Sample`, `SampleResult`, `RunMetrics`, `Aggregates`, `BenchmarkInput`, `RunOptions`, `BenchmarkTransport`, `BenchmarkResponse`, `BenchmarkProgress`, `LogMetrics`, `ComparisonOptions`, `ComparisonMetric`, `ComparisonRow`, `Verdict` | `/benchmark` |
 | Helpers the runner is built from: `validateSuite`, `sampleId`, `benchmarkSql`, `explainSql`, `validateReplaySql`, `mean`, `percentile`, `metricNumber`, `canonicalJson` | `/benchmark` |
 | `makeHttpClient`, `makeHttpTransport`, `httpConfigFromEnv`                                       | `/benchmark/http` |
 | `HttpConfig`, `decodeJson`, `decodeJsonLines` | `/benchmark/http` |
-| `runCli`                                                                                         | `/benchmark/cli`  |
+| `runCli(args)` — the `ch-bench` command as a function returning its exit code                    | `/benchmark/cli`  |
 
 Every export of every entry is named on this page; `bun run test` fails when one is not. The
 check reads the built declarations (`dist/*.d.mts`), so run `bun run build` after adding an
@@ -674,6 +682,34 @@ verification, and JSON protocol.
 Note `/sql` exports a `compile` (fragment → string) distinct from the dialect entries' `compile`
 (query → `CompiledQuery`), and a `when` distinct from the query builder's `when` (optional
 conditions).
+
+## Command-line tools
+
+The package installs two commands. Both take `--help` (the commands and flags), `--version` (the
+installed package version) and `--json` (machine-readable output).
+
+**`effect-orm`** reads `effect-orm.config.ts` (or `--config <path>`), whose shape is `KitConfig`.
+A name that is not a command fails with `unknown command "..."` before the config is read. See
+[Schema and migrations](./migrations.md).
+
+| Command | What it does |
+| --- | --- |
+| `generate [--name x] [--custom] [--hints <json>] [--hints-file <path>]` | Diff the schema against the folder and write the next migration, for any of the four databases. `--baseline [--from-drizzle]` starts the history of a folder another tool wrote |
+| `pull [--out <path>] [--tables a,b] [--force]` | Write table definitions from a ClickHouse database |
+| `check` | Validate the folder: snapshot chain, branch conflicts |
+| `migrate [--strict]` | Apply pending migrations (ClickHouse and Postgres) |
+| `status` | Applied, pending, partial or changed, per migration |
+| `verify [--schema]` | Compare the database with the last applied snapshot, or with `--schema` with the definitions |
+| `baseline <migration>` | Record a migration and every one before it as applied, without running them |
+| `resolve <migration> <step> --ran \| --not-ran` | Record what a step left "started" did |
+
+Exit codes: 0 ok, 1 error, 2 missing hints (a change that loses data, or an enum label rename),
+3 drift found.
+
+**`ch-bench`** measures ClickHouse queries: `doctor`, `export`, `run`, `compare`, `inspect` and
+`schema`. It reads `CLICKHOUSE_URL`, `CLICKHOUSE_USER`, `CLICKHOUSE_PASSWORD` and
+`CLICKHOUSE_DATABASE`. Exit codes: 0 pass, 1 regression, 2 invalid or error, 3 inconclusive. See
+[Benchmarking](./benchmarking.md).
 
 ## SQLite and D1
 

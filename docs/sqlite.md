@@ -92,6 +92,7 @@ declared yet.
 
 The entry exports `text`, `integer` (a safe JavaScript integer), `real` (finite numbers),
 `boolean` (0/1), `blob`, `timestamp`, `json(schema)`, `nullable`, `custom` and `brand`.
+`SqliteType` is the descriptor type.
 
 `integer` refuses a stored value past 2^53 with a decode error: as a JavaScript number it would
 no longer be the stored integer (D1 rounds it; node:sqlite refuses it). Use `custom` with a
@@ -103,7 +104,9 @@ and ISO-8601; text without a zone is UTC. SQLite compares text by bytes, so a ti
 orders by time only when every value in it has one form: write them through the builder or with
 `strftime('%Y-%m-%d %H:%M:%f', ...)`. `CURRENT_TIMESTAMP` writes no milliseconds
 (`2026-01-01 00:00:00`), which compares as earlier than the same instant written with them, so
-a `timestamp` column refuses it as a `defaultExpr`; use `defaultExpr: SQLite.timestampNow`.
+a `timestamp` column refuses it as a `defaultExpr`; use `defaultExpr: SQLite.timestampNow`
+(`(strftime('%Y-%m-%d %H:%M:%f', 'now'))`). `sqliteTimestampText(epochMillis)` is the same text
+for an instant, for raw SQL and seeds.
 `blob` accepts the Uint8Array wire form from Node and the array-of-bytes form from D1.
 `json` always uses the supplied schema to validate decoded JSON.
 Use `text` when a stored date/time must remain a string.
@@ -397,20 +400,63 @@ database wraps into it for tests (`exec` must run the statement when called, as 
 
 Install a compatible Effect SQL driver, for example `@effect/sql-sqlite-node` on Node 24+.
 No driver is a runtime dependency of this package. Use current SQLite with RETURNING support.
+This example runs from the table definition to decoded rows:
 
 ```ts title="sqlite-node.ts"
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient"
-import { Layer } from "effect"
+import { Effect, Layer } from "effect"
 import * as Db from "@maple-dev/effect-orm/database"
-import { sqliteDialect } from "@maple-dev/effect-orm/sqlite"
+import * as S from "@maple-dev/effect-orm/schema"
+import * as SQLite from "@maple-dev/effect-orm/sqlite"
+
+const Tasks = SQLite.table("tasks", {
+	columns: {
+		id: SQLite.text,
+		orgId: SQLite.column(SQLite.text, { name: "org_id" }),
+		title: SQLite.text,
+		done: SQLite.column(SQLite.boolean, { default: false }),
+		createdAt: SQLite.column(SQLite.timestamp, { name: "created_at", defaultExpr: SQLite.timestampNow }),
+	},
+	primaryKey: ["id"],
+	indexes: [SQLite.index("tasks_org", ["orgId", "createdAt"])],
+	tenantColumn: "orgId",
+})
 
 export const SQLiteLive = Db.layerSqlClient({
-	dialect: sqliteDialect,
+	dialect: SQLite.sqliteDialect,
 	requireTenantScope: true,
-}).pipe(Layer.provide(SqliteClient.layer({ filename: ":memory:" })))
+}).pipe(Layer.provideMerge(SqliteClient.layer({ filename: ":memory:" })))
+
+export const program = Effect.gen(function* () {
+	// The DDL from the definition; migrations.md shows the managed way.
+	const ddl = S.renderSqliteSchema(yield* S.sqliteEntitiesOf([Tasks]))
+	for (const statement of ddl) yield* Db.execute({ sql: statement })
+
+	// One VALUES list gives every row the same columns; `createdAt` takes its default.
+	yield* Db.run(
+		SQLite.insertInto(Tasks).values([
+			{ id: "t1", orgId: "org_1", title: "Write docs", done: false },
+			{ id: "t2", orgId: "org_1", title: "Ship 1.0", done: true },
+		]),
+	)
+	yield* Db.run(SQLite.insertInto(Tasks).values({ id: "t3", orgId: "org_2", title: "Other tenant" }))
+	return yield* Db.run(
+		SQLite.from(Tasks)
+			.select("id", "title", "done")
+			.where(($) => [$.orgId.eq(SQLite.param.string("orgId"))])
+			.orderBy(["id", "asc"]),
+		{ orgId: "org_1" },
+	)
+})
+
+export const rows = await Effect.runPromise(program.pipe(Effect.provide(SQLiteLive)))
+// [{ id: "t1", title: "Write docs", done: false }, { id: "t2", title: "Ship 1.0", done: true }]
 ```
 
-`Db.run(query, params)` compiles for the database dialect and decodes the selected rows.
+`Db.run(query, params)` compiles for the database dialect, runs the statement and decodes the
+selected rows; `requireTenantScope: true` makes it refuse a statement that is not confined to one
+`orgId`, an insert of rows for two tenants included. A `VALUES` list writes the same columns for
+every row, so a row may leave out a defaulted column only when every row does (see below).
 SQLite transactions and nested savepoints use the supplied client's `withTransaction`.
 `serializable` is the only accepted explicit isolation level. Per-transaction access modes
 and deferrable settings are refused. The driver must support the declared transaction behavior;
@@ -482,6 +528,8 @@ fraction compared with an `integer` column (`Amount > 9.75`) compiles as on Post
 - Per-cell `DEFAULT` in a VALUES tuple. Omit a defaulted column from every row in the statement,
   or group rows by their present columns. All-default rows are not supported by the builder.
 - ClickHouse FORMAT/SETTINGS and built-in functions from another dialect.
+- A name (select key, alias, CTE name) that spells the builder's reserved param marker
+  `__PARAM_`. It fails with `InvalidLiteral`, as on Postgres and MySQL; ClickHouse escapes it.
 
 The tests run real SQLite through `@effect/sql-sqlite-node` and local workerd/D1 through
 Miniflare. They require no deployed database or Cloudflare credentials. Both run the shared core

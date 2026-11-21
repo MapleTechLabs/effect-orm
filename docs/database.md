@@ -5,7 +5,7 @@
 connections: a `Database` is a small object over your client.
 
 ```sh
-npm install @effect/sql-pg@4.1.2   # or @effect/sql-pglite, @effect/sql-clickhouse
+npm install @effect/sql-pg@4.1.2   # or @effect/sql-pglite, @effect/sql-mysql2, @effect/sql-sqlite-node, @effect/sql-d1, @effect/sql-clickhouse
 ```
 
 Transactions are Effect's own `SqlClient.withTransaction`, with four additions:
@@ -15,7 +15,15 @@ Transactions are Effect's own `SqlClient.withTransaction`, with four additions:
 - **A guard** against statements that outlive their transaction.
 - **Contention retry** for SQLSTATE 40001 and 40P01.
 
-Postgres supports all of it. ClickHouse has no transactions here; see [ClickHouse](#clickhouse).
+What each dialect supports:
+
+| Dialect | `transaction` | Settings | Nested | `batch` |
+| --- | --- | --- | --- | --- |
+| `postgresDialect` | Yes | `isolationLevel`, `accessMode`, `deferrable` | Savepoint | In a transaction |
+| `mysqlDialect`, `mariadbDialect` | Yes | `isolationLevel`, `accessMode` ([MySQL](./mysql.md#execute-through-effectsql-mysql2)) | Savepoint | In a transaction |
+| `sqliteDialect` | Yes | `isolationLevel: "serializable"` only | Savepoint | In a transaction |
+| `d1Dialect` | No: `TransactionUnsupported` | — | — | One D1 batch ([D1](./sqlite.md#execute-on-d1)) |
+| `clickhouseDialect` | No: `TransactionUnsupported` ([why](#clickhouse)) | — | — | `TransactionUnsupported` |
 
 ## A complete example
 
@@ -115,8 +123,8 @@ have been compiled for the same dialect, or `run` dies: `CH.compile` from `/clic
 ClickHouse, `PG.compile` from `/postgres` writes Postgres.
 
 `sql` writes the statements the builder does not have yet (DDL, bulk `UPDATE ... FROM`, advisory
-locks). Each `${value}` is bound, as `$1, $2, ...` on Postgres and as an escaped literal on
-ClickHouse, so nothing in a value becomes SQL. A `sql` inside another is spliced, so
+locks). Each `${value}` is bound, as `$1, $2, ...` on Postgres, `?` on SQLite, D1 and MySQL, and
+as an escaped literal on ClickHouse, so nothing in a value becomes SQL. A `sql` inside another is spliced, so
 statements compose. Names go through `sql.identifier`, which accepts only plain identifiers
 (dotted for `schema.table`) and quotes them:
 
@@ -176,11 +184,13 @@ For SQL inside a builder query rather than a whole statement, use
 
 | Option | Meaning |
 | --- | --- |
-| `dialect` | `postgresDialect` or `clickhouseDialect` |
-| `command` | Wraps `execute`. Pass ClickHouse's `asCommand`: DDL has no JSON result |
+| `dialect` | Required: `postgresDialect`, `clickhouseDialect`, `sqliteDialect`, `d1Dialect`, `mysqlDialect` or `mariadbDialect` |
+| `command` | Wraps `execute`. Pass ClickHouse's `asCommand`: DDL has no JSON result. Leave it unset elsewhere |
 | `observe` | Called with every statement before it runs, including the `BEGIN ...` or `SET TRANSACTION` a transaction's settings become |
 | `observeExit` | Called with every statement after it ends: names, duration, rows or `error.type`. See [Observing statements](#observing-statements) |
 | `spanParameters` | Put the bound values on the span as `db.query.parameter.<index>`. Off by default. See [Redaction](#redaction) |
+| `driverSpans` | Keep the SQL driver's own span as a child of the statement span. Off by default. See [Tracing](#tracing) |
+| `requireTenantScope` | Refuse a cross-tenant statement that was not declared `.crossTenant()`. Off by default. See [Tenant scoping](./tenant-scoping.md#enforcing-it) |
 
 `run` refuses a query compiled for another dialect (`CompiledQuery.dialect`), as a defect: a
 query compiled with the `/clickhouse` entry's `compile` would run on Postgres with the wrong
@@ -348,18 +358,21 @@ transaction that has already ended (a fiber forked inside it and not joined).
 
 ### Settings
 
-| Option | Postgres |
-| --- | --- |
-| `isolationLevel` | `"read committed"`, `"repeatable read"` or `"serializable"` |
-| `accessMode` | `"read write"` or `"read only"` |
-| `deferrable` | With `serializable` and `read only`, wait for a safe snapshot |
-| `retry` | `"contention"`, or `{ times, schedule }` |
+| Option | Postgres | MySQL, MariaDB | SQLite |
+| --- | --- | --- | --- |
+| `isolationLevel` | `"read committed"`, `"repeatable read"` or `"serializable"` | The same | `"serializable"` |
+| `accessMode` | `"read write"` or `"read only"` | The same | Refused |
+| `deferrable` | With `serializable` and `read only`, wait for a safe snapshot | Refused | Refused |
+| `retry` | `"contention"`, or `{ times, schedule }` | The same | The same |
 
 On Postgres, settings go into the statement that starts the transaction,
 `BEGIN ISOLATION LEVEL SERIALIZABLE, READ ONLY`, through Effect's `SqlClient.BeginTransaction`,
 which saves the round trip of a separate `SET TRANSACTION`. On SQLite, `serializable` is the
 only level, so there is nothing to send and the client keeps its own BEGIN (`BEGIN IMMEDIATE`
-for `@effect/sql-sqlite-node`). Inside the body,
+for `@effect/sql-sqlite-node`). On MySQL they go into the statement that starts it,
+`SET TRANSACTION ISOLATION LEVEL ...; START TRANSACTION READ ONLY`, which needs a client that runs
+two statements in one (see [MySQL](./mysql.md#execute-through-effectsql-mysql2)). A refused
+setting fails with `TransactionOptionsRejected` before anything is sent. Inside the body,
 `BeginTransaction` is cleared, so a transaction the body starts on another client keeps that
 client's own BEGIN. A nested transaction cannot
 set any of them, or `retry`, and fails with `TransactionOptionsRejected`: Postgres fixes the
@@ -370,11 +383,11 @@ again. `read uncommitted` is not offered because Postgres runs it as `read commi
 
 | Error | When |
 | --- | --- |
-| `DatabaseError` | A statement failed. `reason` is the driver's classification (`UniqueViolation`, `SerializationError`, ...), `sqlState` the server's five-character code (Postgres) and `errorCode` its numeric code (ClickHouse) |
+| `DatabaseError` | A statement failed. `reason` is the driver's classification (`UniqueViolation`, `SerializationError`, `DeadlockError`, ...), `sqlState` the server's five-character code (Postgres) and `errorCode` its numeric code (ClickHouse) |
 | `TransactionCommitFailed` | COMMIT failed: a deferred constraint, a serialization failure at commit, a dropped connection. Carries `reason`, `sqlState` and `errorCode` |
 | `TransactionRollbackFailed` | ROLLBACK failed after the body failed. `bodyCause` is the body's failure, `cause` the rollback's |
 | `TransactionOptionsRejected` | A setting the dialect does not support, or settings on a nested transaction |
-| `TransactionUnsupported` | The dialect has no transactions (ClickHouse) |
+| `TransactionUnsupported` | The dialect has no transactions (ClickHouse, D1) |
 
 ### Constraint violations
 
@@ -382,12 +395,12 @@ again. `read uncommitted` is not offered because Postgres runs it as `read commi
 constraint into one tagged error per kind, so you can `catchTag` a duplicate key instead of
 reading SQLSTATEs. Every other failure passes through unchanged.
 
-| Error | Postgres SQLSTATE | ClickHouse code | SQLite and D1 |
-| --- | --- | --- | --- |
-| `UniqueViolation` | 23505 | — | `SQLITE_CONSTRAINT_UNIQUE`, `SQLITE_CONSTRAINT_PRIMARYKEY` |
-| `ForeignKeyViolation` | 23503 | — | `SQLITE_CONSTRAINT_FOREIGNKEY` |
-| `NotNullViolation` | 23502 | — | `SQLITE_CONSTRAINT_NOTNULL` |
-| `CheckViolation` | 23514 | 469 (`VIOLATED_CONSTRAINT`) | `SQLITE_CONSTRAINT_CHECK` |
+| Error | Postgres SQLSTATE | ClickHouse code | SQLite and D1 | MySQL, MariaDB |
+| --- | --- | --- | --- | --- |
+| `UniqueViolation` | 23505 | — | `SQLITE_CONSTRAINT_UNIQUE`, `SQLITE_CONSTRAINT_PRIMARYKEY` | 1062 (`ER_DUP_ENTRY`) |
+| `ForeignKeyViolation` | 23503 | — | `SQLITE_CONSTRAINT_FOREIGNKEY` | — |
+| `NotNullViolation` | 23502 | — | `SQLITE_CONSTRAINT_NOTNULL` | — |
+| `CheckViolation` | 23514 | 469 (`VIOLATED_CONSTRAINT`) | `SQLITE_CONSTRAINT_CHECK` | — |
 
 Each carries `message`, `sql`, the server's `sqlState` or `errorCode`, and `cause` (the error it
 came from). It also carries `constraint`, `table` and `column` when the server named them:
@@ -397,7 +410,9 @@ or NOT NULL constraints to violate. SQLite names no unique index: a unique or NO
 carries the `table` and, when the key has one column, the `column`. A CHECK violation carries
 the CHECK's name as `constraint`, or its expression when it has no name. A foreign key violation
 names nothing. SQLite's extended code is read from `node:sqlite` and from D1's message; neither
-sets `sqlState` or `errorCode`.
+sets `sqlState` or `errorCode`. On MySQL only a duplicate key is refined, from the
+`UniqueViolation` reason `@effect/sql-mysql2` gives error 1062; a foreign key, NOT NULL or CHECK
+failure stays a `DatabaseError` (reason `ConstraintError`).
 
 ```ts title="database-constraints.ts"
 import { Effect } from "effect"
@@ -416,6 +431,19 @@ export const register = (email: string) =>
 A deferred constraint fails at COMMIT, so put `refineConstraints` outside the `transaction`
 to see it.
 
+`constraintViolation(error)` is the same reading without changing the error channel: an
+`Option` of the violation, for code that already holds an error, such as a logger or a mapping
+to an HTTP status:
+
+```ts
+Effect.catchTag(createUser(input), "@maple-dev/effect-orm/DatabaseError", (error) =>
+	Option.match(Db.constraintViolation(error), {
+		onNone: () => Effect.fail(error),
+		onSome: (violation) => Effect.fail(new Conflict({ constraint: violation.constraint })),
+	}),
+)
+```
+
 Effect fails with a bare `SqlError` on a failed COMMIT, dies on a failed ROLLBACK and, when
 ROLLBACK fails, drops the body's own failure. `transaction` turns these into the typed errors above. Defects
 from `body` stay defects.
@@ -428,12 +456,21 @@ would run on a connection already back in the pool, so `run`, `query` and `execu
 ### Contention retry
 
 `retryContention(effect)` re-runs `effect` when it fails with `DatabaseError` or
-`TransactionCommitFailed` for a serialization failure or deadlock (SQLSTATE 40001 or 40P01).
-By default it retries 3 times with exponential backoff from 50 ms. It never retries your own
+`TransactionCommitFailed` for a serialization failure or deadlock: SQLSTATE 40001 or 40P01, or
+a driver reason of `SerializationError` or `DeadlockError` (MySQL's deadlock, error 1213, is the
+latter). By default it retries 3 times with exponential backoff from 50 ms. It never retries your own
 errors. Use it around a transaction, or around a single statement outside one. Inside an open
 transaction it fails with `TransactionOptionsRejected`, because the database has already
 aborted the whole transaction. `transaction(body, { retry: "contention" })` is shorthand for
 `retryContention(transaction(body))`, so each attempt starts with a fresh BEGIN.
+
+```ts
+// Five attempts, a fixed pause between them.
+Db.transaction(claimSeat(seatId)).pipe(Db.retryContention({ times: 4, schedule: Schedule.spaced("20 millis") }))
+
+// Your own retry policy: `isContention` says which failures are safe to replay.
+Db.transaction(claimSeat(seatId)).pipe(Effect.retry({ times: 2, while: Db.isContention }))
+```
 
 ## Batches
 
@@ -572,7 +609,7 @@ leading word and the first table the text names, as the conventions allow:
 
 | Attribute                   | Value                                                                |
 | --------------------------- | -------------------------------------------------------------------- |
-| `db.system.name`            | `clickhouse`, or `postgresql`                                        |
+| `db.system.name`            | `clickhouse`, `postgresql`, `sqlite`, `d1`, `mysql` or `mariadb`      |
 | `db.operation.name`         | `SELECT`, `INSERT`, `UPDATE` or `DELETE`                              |
 | `db.collection.name`        | The `FROM` or written table; absent over a subquery, union or CTE    |
 | `db.query.summary`          | `SELECT events`, or the name given with `withQuerySummary`           |
@@ -678,6 +715,11 @@ A `ReplacingMergeTree` keeps one row per sorting key whatever its tenant, so put
 column in `ORDER BY`. Otherwise an `insertVoid` for one tenant with another tenant's id
 replaces that tenant's row when the parts merge.
 
+### MySQL and MariaDB
+
+There is no `RETURNING` either, so `insert` and `update` are defects as on ClickHouse. Use
+`insertVoid` and `updateVoid`, then `findById`.
+
 ### SQLite and D1
 
 Both have `RETURNING`, so every method works as on Postgres. A column SQLite fills in (an
@@ -719,7 +761,7 @@ const db = Db.fromSqlClient(sql, {
 ### Redaction
 
 Spans carry no bound values by default. The statement span carries the query text
-(`db.query.text`), which has placeholders, not values, on Postgres, SQLite and D1. To put the
+(`db.query.text`), which has placeholders, not values, on Postgres, SQLite, D1 and MySQL. To put the
 values on the span, as `db.query.parameter.<index>`, set `spanParameters: true`.
 
 A value given as `Redacted` never reaches a span or `observeExit` as plain text. Give a column a
@@ -736,7 +778,7 @@ yield* Db.run(PG.insertInto(Codes).values({ id: 1, code: Redacted.make("4821") }
 `compile` marks such values in `CompiledQuery.sensitiveParameters`, whether they are compared
 values, `param.*` values, or values an insert or update writes. `sql\`...\`` binds a
 `Redacted` value as its plain value and marks it too. This holds on every dialect that binds
-values: Postgres, SQLite and D1.
+values: Postgres, SQLite, D1, MySQL and MariaDB.
 
 ClickHouse writes values into the statement text, so there the text, and the span's
 `db.query.text` with it, carries them, including a `Redacted` column value the builder wrote.

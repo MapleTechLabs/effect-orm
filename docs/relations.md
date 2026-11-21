@@ -95,8 +95,8 @@ The levels are separate statements. Outside a transaction, a write from another 
 land between two of them. Run `findMany` inside [`Db.transaction`](./database.md#transactions)
 with `isolationLevel: "repeatable read"` for one snapshot across all levels.
 
-A level's keys go into one `IN` list when they fit the dialect's bound-value limit (Postgres
-65,535, SQLite 32,766, D1 100). Past it the level is split into several `IN` statements, each
+A level's keys go into one `IN` list when they fit the dialect's bound-value limit (Postgres and
+MySQL 65,535, SQLite 32,766, D1 100; ClickHouse writes values into the SQL and has none). Past it the level is split into several `IN` statements, each
 within the limit, and their rows are joined before grouping, so the result is the same. On D1
 a level with 250 keys sends three statements. Keep the top level paged with `limit`.
 
@@ -228,6 +228,11 @@ SQLite and D1 as on Postgres, with the same tenant rule. Each filter binds its o
 inside the outer statement, so they count toward D1's 100 bound values.
 
 _(Backed by `src/sqlite/relations.test.ts`.)_
+
+## On MySQL and MariaDB
+
+`findMany`, the filters and the counts compile to the same plain SQL there. No test runs them
+against a MySQL or MariaDB server yet.
 
 ## Not yet
 

@@ -57,7 +57,10 @@ await db.close()
 ```
 
 `PGlite` stands in for any driver that takes `(sql, values)`: node-postgres, postgres.js, or
-`@effect/sql-pg`'s `unsafe`. The builder never runs the query. `Id` is an identity column, so an
+`@effect/sql-pg`'s `unsafe`. The builder never runs the query. To run it through an Effect
+`SqlClient` (`@effect/sql-pg`, `@effect/sql-pglite`), with transactions and tenant checks,
+provide `Db.layerSqlClient({ dialect: PG.postgresDialect })` from `/database` and call `Db.run`;
+see [Database](./database.md). `Id` is an identity column, so an
 insert may leave it out: `PG.InsertRowOf<typeof Requests>` makes it optional. See
 [Tables and column types](./tables-and-types.md) for column options and external tables, and
 [Schema and migrations](./migrations.md#postgres) for indexes, unique constraints, foreign keys,
@@ -88,7 +91,9 @@ which Postgres matches against a partial index's predicate as written, and DDL.
 
 Every string that reaches the SQL as a literal is escaped for Postgres. A value that spells the
 param marker `__PARAM_` is written as an `E'…'` string with the marker hex-escaped, and a
-literal that still contained it would fail the compile with `InvalidLiteral`.
+literal that still contained it would fail the compile with `InvalidLiteral`. A name has no such
+escape, so a select key, alias or CTE name that spells `__PARAM_` fails the compile with
+`InvalidLiteral` too.
 
 ## Column types
 
@@ -272,8 +277,8 @@ await db.close()
 | `countIf(c)`, `sumIf(x, c)` | `count(*) FILTER (WHERE c)`, `sum(x) FILTER (WHERE c)` | ClickHouse's `-If` combinators |
 | `sum`, `avg`, `min`, `max` | same | `null` over no rows, where ClickHouse returns `0` for `sum` |
 | `percentileCont(f, x)` | `percentile_cont(f) WITHIN GROUP (ORDER BY x)` | Interpolated |
-| `arrayAgg(x)` | `array_agg(x)` | |
-| `dateTrunc(unit, ts)` | `date_trunc(unit, ts, 'UTC')` | UTC buckets; Postgres 12+ |
+| `arrayAgg(x)` | `array_agg(x)` | `null` over no rows |
+| `dateTrunc(unit, ts)` | `date_trunc(unit, ts, 'UTC')` | UTC buckets; `unit` is `second` to `year`; Postgres 12+ |
 | `dateBin(seconds, ts)` | `date_bin(…, ts, epoch)` | Epoch-aligned buckets; Postgres 14+ |
 | `now()` | `now()` | |
 | `lower`, `upper`, `length` | same | |

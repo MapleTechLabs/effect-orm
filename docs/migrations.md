@@ -19,6 +19,13 @@ not transactional and cannot change most things in place, and Postgres DDL is an
 sections below describe ClickHouse first; [Postgres](#postgres) covers what differs.
 [SQLite](#sqlite) and [MySQL](#mysql) have `generate` only: another tool applies their migrations for now.
 
+| Dialect | `generate`, `check` | `migrate`, `status`, `baseline` | `verify`, `verify --schema` | `pull` |
+| --- | --- | --- | --- | --- |
+| ClickHouse | Yes | Yes, statement by statement | Yes | Yes |
+| Postgres | Yes | Yes, one transaction per migration | Yes | No |
+| SQLite, D1 | Yes (`migration.sql`) | No: apply the folder with another tool | No | No |
+| MySQL, MariaDB | Yes (`migration.sql`) | No: apply the folder with another tool | No | No |
+
 ## Defining tables
 
 `CH.table` returns a `Table`, so every query API accepts it. Columns are the usual column
@@ -92,10 +99,21 @@ export default defineConfig({
 })
 ```
 
+The config's fields:
+
+| Field | Meaning |
+| --- | --- |
+| `schema` | The module, or modules, whose exports hold the `table` and `materializedView` values. Required |
+| `out` | The migrations folder. Required |
+| `dialect` | `"clickhouse"` (default), `"postgres"`, `"sqlite"` or `"mysql"`. Only the tables of this dialect are read |
+| `driver` | A `MigrationDriver` layer with no requirements left. Needed by `migrate`, `status`, `verify`, `baseline`, `resolve` and `pull` |
+| `render` | ClickHouse only: `{ cluster, replicated }`, how `migrate`, `status` and `verify` write the DDL for this deployment |
+| `emit` | Postgres only: `"ops"` (default) writes `migration.json`, `"sql"` writes `migration.sql` |
+
 Then `effect-orm generate --name add_status` (with Bun, or Node with type stripping) imports the
 schema modules, diffs them against the newest snapshot in `out`, and writes
-`migrations/<YYYYMMDDHHMMSS>_add_status/` holding `migration.json` and `snapshot.json`. It never
-connects to a database. The plan it prints labels each statement:
+`migrations/<YYYYMMDDHHMMSS>_add_status/` holding `migration.json` and `snapshot.json`. Without
+`--name` it picks a name of two random words (`steady_otter`). It never connects to a database. The plan it prints labels each statement:
 
 - `metadata`: a schema change with no data rewrite.
 - `ingest gap`: a materialized view is dropped and recreated. Inserts in between are not
@@ -108,6 +126,7 @@ writes nothing, and prints the hints to pass back:
 
 ```sh
 effect-orm generate --hints '[{"type":"confirm_data_loss","kind":"column","entity":"requests.Route"}]'
+effect-orm generate --hints-file hints.json   # the same array, from a file
 ```
 
 Changes ClickHouse cannot make with `ALTER` (engine, sorting key, partition key, primary key,
@@ -225,8 +244,48 @@ export const program = Effect.gen(function* () {
 )
 ```
 
-`Migrate.fromFileSystem(dir)` reads a migrations folder through Effect's `FileSystem`; add a
-`driver` layer to the config and the CLI runs `effect-orm migrate`, `status`, and `verify`.
+`Migrate.fromFileSystem(dir)` reads a migrations folder through Effect's `FileSystem` and `Path`
+(provide them from `@effect/platform-node` or `@effect/platform-bun`); `fromRecord` takes the files
+as strings, for a bundle that has no file system, such as a Worker. `Migrate.layerSqlClient(options)`
+is the driver as a layer over the `SqlClient` in context.
+
+Add a `driver` to the config and the CLI runs `effect-orm migrate`, `status`, and `verify`. This
+one migrates over HTTP with [`/clickhouse-http`](./running-queries.md#on-workers-and-other-fetch-runtimes):
+
+```ts title="effect-orm-config-driver.ts"
+import { Effect, Layer, Redacted } from "effect"
+import { FetchHttpClient } from "effect/http"
+import * as ClickhouseHttp from "@maple-dev/effect-orm/clickhouse-http"
+import { defineConfig } from "@maple-dev/effect-orm/kit"
+import * as Migrate from "@maple-dev/effect-orm/migrate"
+
+const Driver = Layer.effect(
+	Migrate.MigrationDriver,
+	Effect.gen(function* () {
+		const client = yield* ClickhouseHttp.ClickhouseHttpClient
+		return Migrate.fromSqlClient(client, { command: client.asCommand })
+	}),
+).pipe(
+	Layer.provide(
+		ClickhouseHttp.layer({
+			url: process.env.CLICKHOUSE_URL ?? "http://localhost:8123",
+			username: process.env.CLICKHOUSE_USERNAME ?? "default",
+			password: Redacted.make(process.env.CLICKHOUSE_PASSWORD ?? ""),
+		}),
+	),
+	Layer.provide(FetchHttpClient.layer),
+)
+
+export default defineConfig({
+	schema: "./src/schema.ts",
+	out: "./migrations",
+	render: { cluster: "main", replicated: {} },
+	driver: Driver,
+})
+```
+
+On Postgres, `Migrate.layerSqlClient()` over the `PgClient` layer is the whole driver: no `command`
+is needed.
 
 How a run behaves:
 
@@ -243,9 +302,13 @@ How a run behaves:
   the next run stops there with `MigrateStepUncertain` (status `uncertain`). Check the database,
   then record what happened: `Migrate.resolveStep` or `effect-orm resolve <migration> <step>
   --ran | --not-ran`. A statement the server rejected is journaled `failed` and simply runs again.
-- **A lease** in `_effect_orm_migration_lease` stops a second run while one is active. It is best
-  effort: two runs starting in the same instant can both proceed. Serialize deploys if that
-  matters.
+- **A lease** in `_effect_orm_migration_lease` stops a second run while one is active: it fails
+  with `MigrateLeaseHeld`, naming the `owner` and when the lease expires. `run` takes `owner` (a
+  name for this run; random by default) and `leaseSeconds`; each finished statement renews the
+  lease. It is best effort: two runs starting in the same instant can both proceed. Serialize
+  deploys if that matters.
+- **A rejected statement** fails the run with `MigrateStepFailed` (`migration`, `step`, `sql`, the
+  server's error as `cause`). Rerunning resumes at that statement.
 - **No rollback.** Write a new migration. Prefer expand, then contract: add the new shape, move
   readers, and drop the old shape in a later migration.
 
@@ -277,11 +340,11 @@ It reads the config's `schema` modules and `driver`, and nothing in `out`. The c
 one `verify` makes, with the same checks and the same limits, against a snapshot of the
 definitions as they stand instead of the last applied one. So a database that is behind reports
 the missing parts as drift; use plain `verify` where the ledger exists. The ledger tables are
-never reported. ClickHouse and Postgres only: effect-orm has no SQLite catalog reader yet, so
-with `dialect: "sqlite"` (SQLite or D1) it fails with a `KitError` (`unsupported`) before it
-connects. In code, `verifySchema(config, cwd)` from `/kit` does the same, and
-`Migrate.verifySnapshot(snapshot)` compares the database with any snapshot (a SQLite snapshot
-fails with `MigrateSourceError`):
+never reported. ClickHouse and Postgres only: effect-orm has no SQLite or MySQL catalog reader
+yet, so with `dialect: "sqlite"` (SQLite or D1) or `"mysql"` it fails with a `KitError`
+(`unsupported`) before it connects. In code, `verifySchema(config, cwd)` from `/kit` does the same,
+and `Migrate.verifySnapshot(snapshot)` compares the database with any snapshot (a SQLite or MySQL
+snapshot fails with `MigrateSourceError`):
 
 ```ts title="migrations-verify-schema.ts"
 import { Effect } from "effect"
@@ -317,10 +380,108 @@ for (const migration of pending) {
 
 Plan a migration only once the ones before it are applied: a backfill reads its source when it
 is planned. These calls take no lease, so the orchestrator must run one migration at a time.
+`planSteps(migration)` gives the statements without reading the journal, and `stepsOf(migration)`
+the same without a database, so with each backfill as one statement over the whole source rather
+than its windows: use it to show or review a migration, not to run one.
 
 _(Effect's own `ClickhouseMigrator` creates its ledger with a statement ClickHouse 26.8
 rejects, and inserts ledger rows before running each migration. That is why this package has
 its own runner.)_
+
+## The `effect-orm` command
+
+| Command | Does |
+| --- | --- |
+| `generate [--name x] [--custom] [--hints <json>] [--hints-file <path>]` | Write the next migration ([Generating](#generating-migrations)) |
+| `generate --baseline [--from-drizzle]` | Start the history from the schema, or from drizzle-kit's last snapshot |
+| `pull [--out <path>] [--tables a,b] [--force]` | Write table definitions from a ClickHouse database |
+| `check` | Validate the migrations folder |
+| `migrate [--strict]` | Apply pending migrations |
+| `status` | `applied`, `pending`, `partial`, `uncertain` or `changed`, per migration |
+| `verify [--schema]` | Compare the database with the last applied snapshot, or with the schema modules |
+| `baseline <migration>` | Record `<migration>` and every one before it as applied, without running them |
+| `resolve <migration> <step> --ran \| --not-ran` | Record what an uncertain step did |
+
+Every command reads `effect-orm.config.ts` from the working directory; `--config <path>` names
+another. `--json` prints the result as one JSON value instead of text, and never prompts.
+`--help` prints the list above and `--version` the package version; neither reads the config.
+A command the CLI does not have fails at once with `unknown command "..."`, before it looks for
+the config.
+
+Exit codes: `0` ok, `1` error, `2` missing hints (a drop or an enum label rename to confirm), `3`
+drift found. Errors go to stderr as `effect-orm: <message>`, with details on the lines below.
+
+## In code: `/kit` and `/migrate`
+
+The CLI is a thin layer over exports you can call yourself, in a deploy script, a test, or a
+command of your own.
+
+`/kit` (Node or Bun: it reads files and imports modules):
+
+| Export | Does |
+| --- | --- |
+| `defineConfig(config)` | Types a `KitConfig` |
+| `generate(config, cwd, options?)` | `effect-orm generate`. `options`: `name`, `custom`, `hints`, `baseline` (`"schema"` or `"drizzle"`), and `confirm`, asked for each drop the hints do not cover. Returns `{ written, plan }`; `written` is `undefined` when nothing changed |
+| `check(config, cwd)` | `effect-orm check`. Returns `{ migrations, leaves, legacy }` |
+| `pull(config, cwd, { out, tables?, force? })` | `effect-orm pull`. Returns `{ written, tables, external, review }` |
+| `verifySchema(config, cwd)` | `effect-orm verify --schema`. Returns `{ drift }` |
+| `readMigrations(dir)` | The folder as `LoadedMigration`s, ordered as `run` orders them; `[]` when it does not exist |
+| `loadSchema(config, cwd)` | The `table` and `materializedView` values the schema modules export, for the config's dialect |
+| `analyze(migrations)` | The snapshot graph: `problems`, `leaves`, and the schema the next migration starts from |
+| `runCli(args, print?)` | The whole CLI. Resolves to the exit code |
+| `KitError` | Every failure. `code` is `config`, `io`, `check`, `unsupported` or `missing_hints` (exit 2) |
+
+```ts title="kit-generate.ts"
+import { Effect } from "effect"
+import * as Kit from "@maple-dev/effect-orm/kit"
+
+const config = Kit.defineConfig({ dialect: "postgres", schema: "./src/db/schema.ts", out: "./migrations" })
+
+// In CI: the folder is consistent, and the schema has no change without a migration.
+export const ci = Effect.gen(function* () {
+	yield* Kit.check(config, process.cwd())
+	const { drift } = yield* Kit.verifySchema(config, process.cwd())
+	return drift
+})
+
+// A data-loss confirmation given in code, as `--hints` gives it on the command line.
+export const next = Kit.generate(config, process.cwd(), {
+	name: "drop_legacy_flag",
+	hints: [{ type: "confirm_data_loss", kind: "column", entity: "users.legacy_flag" }],
+})
+
+// The bundled command, from a script of your own.
+export const exitCode = await Kit.runCli(["status", "--json"])
+```
+
+`/migrate` (anywhere Effect runs; every function needs a `MigrationDriver`, except the loaders):
+
+| Export | Does |
+| --- | --- |
+| `run({ migrations, dialect?, render?, strict?, owner?, leaseSeconds? })` | Apply pending migrations. Returns `{ name, steps, resumedSteps }` per applied one |
+| `status(migrations, render?, dialect?)` | `{ name, state, appliedAt }` per migration |
+| `verify(migrations, { dialect?, ignoreTables? })` | `{ against, drift }`: drift from the last applied snapshot |
+| `verifySnapshot(snapshot, options?)` | Drift from any snapshot |
+| `baseline({ migrations, upTo, dialect?, render? })` | Record migrations as applied without running them. Returns the names recorded |
+| `resolveStep({ migration, step, outcome, render?, dialect? })` | Record an uncertain step as `"ran"` or `"not-ran"` (ClickHouse) |
+| `pendingMigrations`, `planMigration`, `applyStep`, `completeMigration` | The parts of `run`, for an orchestrator ([above](#running-one-step-at-a-time)) |
+| `planSteps(migration, render?)`, `stepsOf(migration, render?)` | A migration's statements, with and without a database |
+| `fromFileSystem(dir)`, `fromRecord(files)` | Load migrations, ordered by their snapshots' parents, then names |
+| `orderMigrations(migrations)`, `dialectOf(migrations)` | The order `run` uses; the dialect the snapshots name |
+| `fromSqlClient(sql, { command? })`, `layerSqlClient(options?)`, `MigrationDriver` | The driver ([Applying](#applying-migrations)) |
+| `STATEMENT_BREAKPOINT`, `isStagingName(name)`, `LEDGER_TABLES` | The `--> statement-breakpoint` separator; whether a folder entry is a half-written `generate` (`<name>.tmp-<pid>`), which loaders skip; the ledger's table names |
+
+The errors, all tagged `@maple-dev/effect-orm/<Name>` and in the error channel:
+
+| Error | When |
+| --- | --- |
+| `MigrateSqlError` | A ledger or catalog statement failed, or the connection did. Carries `sql` |
+| `MigrateSourceError` | A file or snapshot does not decode, migrations cannot be ordered, or the dialect is one `/migrate` does not run (SQLite, MySQL) |
+| `MigrateHashMismatch` | With `strict`, an applied migration's file changed |
+| `MigrateLeaseHeld` | Another run holds the lease (ClickHouse) |
+| `MigrateStepFailed` | The server rejected a statement. On ClickHouse a rerun resumes there; on Postgres the migration was rolled back and reruns from the top |
+| `MigrateStepChanged` | A finished statement of a partial migration has different SQL now |
+| `MigrateStepUncertain` | A statement started and never reported back; see `resolveStep` |
 
 ## Postgres
 

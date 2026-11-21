@@ -7,6 +7,9 @@ Build and decode your first query without connecting to a database. Then follow
 
 This is an ESM TypeScript package built on **Effect 4**. You do not need an
 Effect application: `Effect.runPromise` lets you use it from ordinary async code.
+It needs Node 20.19 or later (the package's `engines`) or Bun. The query builder, `/database`
+and `/clickhouse-http` also run on Cloudflare Workers; the `effect-orm` and `ch-bench` commands
+need Node or Bun.
 CommonJS code can `require()` every entry point too, on Node 20.19+ or 22.12+, which
 load ES modules synchronously (`require(esm)`). That is the same way such code loads Effect 4,
 which is also ESM-only, so the library and its caller share one Effect.
@@ -50,13 +53,20 @@ Each database has one entry that holds everything for it: the query builder, its
 its functions, table definitions, and a `compile` that writes its dialect.
 
 ```ts
-import * as CH from "@maple-dev/effect-orm/clickhouse"
-import * as PG from "@maple-dev/effect-orm/postgres"
+import * as CH from "@maple-dev/effect-orm/clickhouse" // ClickHouse
+import * as PG from "@maple-dev/effect-orm/postgres" // Postgres
+import * as SQLite from "@maple-dev/effect-orm/sqlite" // SQLite and Cloudflare D1
+import * as MySQL from "@maple-dev/effect-orm/mysql" // MySQL 8 and MariaDB 10.6+
 ```
 
-The builder (`from`, `param`, `and`, `insertInto`, …) is the same in both. Import the one for the
-database you query; the examples below use ClickHouse, and [Postgres](./postgres.md) shows the
-same flow with `PG`.
+The builder (`from`, `param`, `and`, `insertInto`, …) is the same in all four. Import the one for
+the database you query. The examples below use ClickHouse; [Postgres](./postgres.md),
+[SQLite and D1](./sqlite.md) and [MySQL and MariaDB](./mysql.md) show the same flow with their
+entry, and [Recipes](./recipes.md#top-values-per-tenant-on-each-database) has one query written
+for each.
+
+ClickHouse writes params into the SQL as escaped literals. Postgres, SQLite and MySQL send them
+as bound values (`$1`, `?`), listed in `compiled.parameters`.
 
 ## A complete first example
 
@@ -116,8 +126,9 @@ The keys returned by `select` become both SQL aliases and result properties. Thi
 `{ name: string; p95: number | null; count: number }`: ClickHouse can return JSON `null` for an
 aggregate with a non-finite result.
 
-`compile` returns an Effect that must be run. Its parameters are validated and escaped into
-the SQL string at compilation time. They are **not** ClickHouse server-side placeholders.
+`compile` returns an Effect that must be run. Its parameters are validated and, on ClickHouse,
+escaped into the SQL string at compilation time. They are **not** ClickHouse server-side
+placeholders.
 Use `compileUnsafe(query, params)` if synchronous throwing fits your caller instead.
 
 The result schema is derived from the typed SELECT, so you do not need to write a second schema.
@@ -165,7 +176,8 @@ Always supply the tenant from your trusted application context. See [Tenant scop
 ## Where to next
 
 - [Running a query](./running-queries.md): a complete client example using `system.numbers`, with no table setup.
-- [Recipes](./recipes.md): time buckets, optional filters, aggregate filters, pagination, and lossless IDs.
+- [Statements and transactions](./database.md): `Db.run` compiles, runs and decodes in one step, over an Effect `SqlClient`.
+- [Recipes](./recipes.md): time buckets, optional filters, aggregate filters, pagination, upserts, transactions, and lossless IDs.
 - [Tables and column types](./tables-and-types.md): model your actual schema and wire formats.
-- [Postgres](./postgres.md): the same builder against Postgres, from `@maple-dev/effect-orm/postgres`.
+- [Postgres](./postgres.md), [SQLite and D1](./sqlite.md), [MySQL and MariaDB](./mysql.md): the same builder on the other databases.
 - [Troubleshooting](./troubleshooting.md): installation, compilation, decoding, and unexpected results.
