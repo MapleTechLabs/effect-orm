@@ -1,5 +1,29 @@
 # @maple-dev/effect-orm
 
+## 1.0.0
+
+### Major Changes
+
+- 6708ad8: 1.0.0. The package follows semantic versioning from here: a breaking change to a documented export is a major release. Every export of every entry is named in the API reference (`docs/reference.md`), and `bun run test` now fails when one is not; before, only the four dialect entries were checked. The Alpha notice is gone from the README and the docs site. `package.json` declares `engines.node >= 20.19.0`, the oldest Node the build was run on.
+
+### Minor Changes
+
+- 2d2fe62: ClickHouse names are quoted when they need to be. The ClickHouse dialect wrote every identifier bare, so a select key such as `"p-95"` or `"by service"` was a syntax error, a key named `null` ordered by the literal, and a key built from input was SQL: `{ "x FROM system.users --": $.Name }` compiled to `events.Name AS x FROM system.users --`. A plain name (letters, digits, `_`, dots for a Nested column) is still bare, so existing SQL does not change; any other is written in backticks with `` ` `` and `\` escaped. That covers select keys, GROUP BY and ORDER BY keys, column names of an external table, source and join aliases, and CTE names. As a select key, an alias or a CTE name, the words ClickHouse reads as something else there are quoted too (`all`, `cube`, `distinct`, `false`, `inf`, `infinity`, `nan`, `not`, `null`, `recursive`, `rollup`, `select`, `top`, `true`); a column of such a name is still read bare, so a table's DDL does not change, and `generate` does not recreate a materialized view whose SELECT differs from its snapshot only by those backticks. A select key with a dot is quoted too, so selecting a Nested column by name (`.select("Events.Name")`) works: it used to write `AS Events.Name`, a syntax error. A ClickHouse table name is still written as given, since an external table's name may be a table function or a subquery; `Dialect.rawTableNames` says so.
+  
+  A name that spells the reserved param marker `__PARAM_` is escaped on ClickHouse and refused with `InvalidLiteral` on the other dialects. On Postgres it used to be rewritten into the placeholder's text (`AS "$1"`).
+  
+  `contains("")` is written with one wildcard (`LIKE '%'`) instead of two. It means the same, and ClickHouse 26.2 turns a `LEFT JOIN` filtered by `LIKE '%%'` on the joined table into an inner join, losing the unmatched rows.
+
+### Patch Changes
+
+- 6955a28: `effect-orm --version` and `ch-bench --version` print the package version. `effect-orm` names a command it does not have (`unknown command "frobnicate"`) before it looks for a config file; it used to report that `effect-orm.config.ts` could not be imported.
+- e972080: `/clickhouse-http` no longer returns the rows of a query that failed. ClickHouse answers `200` with the first block of rows, so a timeout, a memory limit or any exception after that arrives inside the body. On servers before 25.11 (25.8 LTS among them) the client read the rows sent so far as the whole result: `sql.unsafe(...)` succeeded with 900,000 of 2,000,000 rows, and `.stream` ended normally. On 25.11 and later it failed, but as "the response is not valid JSON" or "the stream failed", with the server's code lost, so a timeout was not a `StatementTimeoutError`.
+  
+  Queries now send `http_write_exception_in_output_format=1`, and the client reads the exception wherever the server puts it: an `exception` key beside `data`, a JSONEachRow exception line, the `__exception__` block (tagged or not), or the text after the rows of a compressed reply. The statement fails with the server's reason and message; a stream fails after the rows before the exception. A statement whose `200` carries `X-ClickHouse-Exception-Code` (a command with progress headers on) fails too; it used to succeed. A body that cannot be read to the end is a `ConnectionError`, not an `UnknownError`. Needs ClickHouse 23.9 or later. A `readonly = 1` user, who cannot change settings, sets both built-in settings in `settings` to the server's current values (`http_write_exception_in_output_format` is `1` before 25.11 and `0` from it).
+  
+  Bound values: `null` binds as NULL (it was the text `null`), an array holding a null is `Array(Nullable(T))` (its nulls were the type's default), and a `bigint` binds as the narrowest of `Int64`, `UInt64`, `Int128`, `UInt256` and `Int256` that holds it (2^64 - 1 arrived as -1). An array's element type is read from all of its elements, nested arrays included.
+- b35749b: MariaDB: an integer literal in a `unionAll` branch keeps its value beside a DECIMAL in another branch. MariaDB 11.4 sizes an integer literal one digit short when a union branch is a derived table, which is how `mariadbDialect` writes branches, and cut it down to fit: `lit(97)` in one branch and a `DECIMAL(5,4)` in the other came back `9.9999`. A selected integer literal is now written `CAST(n AS SIGNED) + 0` on MariaDB, which has the digits. MySQL is unaffected and unchanged.
+
 ## 0.11.0
 
 ### Minor Changes
