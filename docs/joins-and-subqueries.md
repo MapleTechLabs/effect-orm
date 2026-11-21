@@ -119,8 +119,8 @@ const outer = CH.fromQuery(inner, "sub")
 	.select(($) => ({ name: $.name, worst: CH.max($.ms) }))
 	.groupBy("name")
 
-// SELECT name AS name, max(ms) AS worst
-// FROM (SELECT Name AS name, DurationMs AS ms FROM events WHERE OrgId = 'org_123') AS sub
+// SELECT sub.name AS name, max(sub.ms) AS worst
+// FROM (SELECT events.Name AS name, events.DurationMs AS ms FROM events WHERE events.OrgId = 'org_123') AS sub
 // GROUP BY name
 ```
 
@@ -156,7 +156,7 @@ const query = CH.from(Services, "s")
 	.where(($) => [$.OrgId.eq(CH.param.string("orgId")), CH.notInSubquery($.Team, excluded)])
 
 const compiled = CH.compileUnsafe(query, { orgId: "org_123" })
-// … WHERE OrgId = 'org_123' AND Team NOT IN (SELECT Name AS n FROM events WHERE OrgId = 'org_123')
+// … WHERE s.OrgId = 'org_123' AND s.Team NOT IN (SELECT events.Name AS n FROM events WHERE events.OrgId = 'org_123')
 ```
 
 Params inside the subquery resolve from the **outer** param set: placeholders survive the splice

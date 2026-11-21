@@ -50,8 +50,8 @@ Each row is typed from the table:
 The row type is derived from the column options that also write the [DDL](./migrations.md), so
 it cannot drift from what the database fills in:
 
-- `default` or `defaultExpr` (both dialects) or `identity` (Postgres) makes a column optional.
-- `defaultFn` or `onUpdate` (Postgres) makes a column optional too. The client fills it, not the
+- `default` or `defaultExpr` (every dialect) or `identity` (Postgres) makes a column optional.
+- `defaultFn` or `onUpdate` (Postgres, SQLite, MySQL) makes a column optional too. The client fills it, not the
   database: see [client-side defaults](#client-side-defaults).
 - `materialized` or `alias` (ClickHouse) makes a column not writable: it is not in the row type,
   and a row that names it anyway fails to compile. It stays readable.
@@ -71,7 +71,7 @@ declare a default, so a forgotten value is a type error rather than a silent zer
 
 ### Client-side defaults
 
-A `PG.column` or `SQLite.column` can take a default that the client computes: `defaultFn` and
+A `PG.column`, `SQLite.column` or `MySQL.column` can take a default that the client computes: `defaultFn` and
 `onUpdate` are Effects, so they can read the `Clock`, `Random` or a service. They write no DDL,
 so neither the rendered schema nor a migration from `generate` carries them. ClickHouse columns
 do not take them yet.
@@ -145,8 +145,11 @@ the codec rejects fails to compile with a `QueryBuilderError` that names the row
 
 - **ClickHouse** writes each value into the SQL as an escaped literal, as it does for params.
 - **Postgres** binds each value as `$1, $2, ...` and returns them in `parameters`. A param used in
-  several rows is bound once. A statement over 65535 bound values (Postgres's limit) fails to
-  compile instead of being split: send fewer rows per statement.
+  several rows is bound once.
+- **SQLite and MySQL** bind each value as `?`, once per use.
+
+A statement over the dialect's bound-value limit fails to compile instead of being split: 65535
+on Postgres and MySQL, 32766 on SQLite, 100 on D1. Send fewer rows per statement.
 
 ## Insert ... select
 
@@ -172,7 +175,8 @@ CH.insertInto(Daily).select(
 		.groupBy("OrgId", "Name"),
 )
 // INSERT INTO daily (OrgId, Name, Total)
-// SELECT ... FROM spans WHERE spans.OrgId = 'o1' GROUP BY OrgId, Name
+// SELECT spans.OrgId AS OrgId, spans.Name AS Name, sum(spans.Ms) AS Total
+// FROM spans WHERE spans.OrgId = 'o1' GROUP BY OrgId, Name
 ```
 
 The selected row is checked against the table: selecting a column the table does not have (or
@@ -210,8 +214,8 @@ bound as one parameter, the usual source of a bulk `INSERT ... SELECT` there; se
 
 ## Returning
 
-On Postgres, `returning` adds a RETURNING list and `Database.run` returns the inserted rows,
-decoded. With no arguments it returns every column, as Drizzle's bare `.returning()` does; it
+On Postgres, SQLite and D1, `returning` adds a RETURNING list and `Database.run` returns the
+inserted rows, decoded. With no arguments it returns every column, as Drizzle's bare `.returning()` does; it
 also takes column names, or a callback building one expression per alias, as `select` does:
 
 ```ts
@@ -224,12 +228,13 @@ const created = PG.insertInto(ApiKeys)
 
 The row schema is derived from the list, as it is from a SELECT: an untyped expression
 (`untypedExpr`) leaves the insert undecoded, with `rowSchemaSource: "none"` and the alias in
-`untypedColumns`. `CompiledQuery.returning` lists the aliases. ClickHouse has no RETURNING, so
-compiling an insert with `returning` for it is a `QueryBuilderDefect`.
+`untypedColumns`. `CompiledQuery.returning` lists the aliases. ClickHouse and MySQL have no
+RETURNING, so compiling an insert with `returning` for them is a `QueryBuilderDefect`.
 
 ## On conflict
 
-On Postgres, `onConflictDoNothing` and `onConflictDoUpdate` add an `ON CONFLICT` clause. Their
+On Postgres, SQLite and D1, `onConflictDoNothing` and `onConflictDoUpdate` add an `ON CONFLICT`
+clause. Their
 options follow Drizzle's, so code moving from Drizzle changes little.
 
 ```ts
@@ -268,7 +273,9 @@ RETURNING "key" AS "key", "count" AS "count"
 - `where` limits the update to existing rows it holds for. A row it skips is not updated and,
   with `returning`, returns nothing; the same goes for a row `onConflictDoNothing` skips.
 - Calling either again replaces the clause. ClickHouse has no `ON CONFLICT` (deduplicate with a
-  `ReplacingMergeTree` instead), so compiling one for it is a `QueryBuilderDefect`.
+  `ReplacingMergeTree` instead), and MySQL's `ON DUPLICATE KEY UPDATE` reacts to every unique key
+  rather than one target, so compiling one for either is a `QueryBuilderDefect`. SQLite does not
+  take `{ constraint: "name" }` as a target.
 
 ### Set from the proposed row
 
@@ -322,8 +329,8 @@ CH.insertInto(Daily).values(rows).settings({ async_insert: 1, wait_for_async_ins
 ```
 
 Names must be plain identifiers; values (strings, numbers, booleans) are written as literals.
-Calling it again replaces them. Postgres has no insert settings, so compiling one with
-`settings` for it is a `QueryBuilderDefect`.
+Calling it again replaces them. Only ClickHouse has insert settings; compiling one with
+`settings` for another dialect is a `QueryBuilderDefect`.
 
 ## Tenant scope
 

@@ -109,17 +109,54 @@ collations are not declared yet.
 
 Install `@effect/sql-mysql2` and give the pool `timezone: "Z"`, so a `DATETIME` is read and
 written in UTC. With a `url`, put it in the URL (`?timezone=Z`), which mysql2 reads as an option.
+`Db.run` compiles a query for the layer's dialect, runs it and decodes its rows; with
+`requireTenantScope: true` it refuses a statement not confined to one `orgId`. Create the table
+first, with the DDL from [Declare a table with its DDL](#declare-a-table-with-its-ddl) or a
+migration. For MariaDB, give the layer `dialect: MySQL.mariadbDialect`.
 
 ```ts title="mysql-client.ts"
 import * as MysqlClient from "@effect/sql-mysql2/MysqlClient"
-import { Layer, Redacted } from "effect"
+import { Effect, Layer, Redacted } from "effect"
 import * as Db from "@maple-dev/effect-orm/database"
-import { mysqlDialect } from "@maple-dev/effect-orm/mysql"
+import * as MySQL from "@maple-dev/effect-orm/mysql"
+
+const Tours = MySQL.table("tours", {
+	columns: {
+		id: MySQL.bigint,
+		orgId: MySQL.column(MySQL.varchar(36), { name: "org_id" }),
+		title: MySQL.text,
+		seats: MySQL.column(MySQL.int, { default: 10 }),
+		startsAt: MySQL.column(MySQL.datetime, { name: "starts_at", defaultExpr: MySQL.dateTimeNow }),
+	},
+	primaryKey: ["orgId", "id"],
+	tenantColumn: "orgId",
+})
 
 export const MysqlLive = Db.layerSqlClient({
-	dialect: mysqlDialect,
+	dialect: MySQL.mysqlDialect,
 	requireTenantScope: true,
 }).pipe(Layer.provide(MysqlClient.layer({ url: Redacted.make("mysql://app:secret@localhost:3306/app?timezone=Z") })))
+
+export const upcoming = (orgId: string) =>
+	Effect.gen(function* () {
+		yield* Db.run(MySQL.insertInto(Tours).values({ id: 1, orgId, title: "Old town walk" }))
+		yield* Db.run(
+			MySQL.update(Tours)
+				.set({ seats: 12 })
+				.where(($) => [$.orgId.eq(orgId), $.id.eq(1)]),
+		)
+		// [{ id: 1, title: "Old town walk", seats: 12, startsAt: DateTime.Utc }]
+		return yield* Db.run(
+			MySQL.from(Tours)
+				.select("id", "title", "seats", "startsAt")
+				.where(($) => [$.orgId.eq(MySQL.param.string("orgId"))])
+				.orderBy(["startsAt", "asc"])
+				.limit(20),
+			{ orgId },
+		)
+	})
+
+// Effect.runPromise(upcoming("org_1").pipe(Effect.provide(MysqlLive)))
 ```
 
 For a proxy without prepared statements, such as Cloudflare Hyperdrive (as `@effect/sql-mysql2`
@@ -216,7 +253,8 @@ another dialect is refused in the type and at compile time.
   but over the text protocol (`disablePreparedStatements`) mysql2 escapes them with backslashes
   too, so under `NO_BACKSLASH_ESCAPES` a quote in a value can end the string: an injection. Do not
   run that mode on such a server. A literal containing the builder's reserved `__PARAM_` text is
-  written as a `CONCAT` of parts.
+  written as a `CONCAT` of parts. A name (select key, alias, CTE name) that spells it has no
+  such escape and fails the compile with `InvalidLiteral`.
 - **OFFSET without LIMIT** is written with MySQL's largest row count.
 - **MariaDB 11.4 pages `DISTINCT` over a join wrongly.** It counts `OFFSET` over the join's rows
   before `DISTINCT` removes their duplicates, so a page can repeat a row from the page before.

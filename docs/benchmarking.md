@@ -4,10 +4,11 @@ The package ships a driver-free `@maple-dev/effect-orm/benchmark` API,
 an HTTP adapter at `/benchmark/http`, and the `ch-bench` executable. The query
 builder entries (`/clickhouse`, `/postgres`) still do no networking. No Maple account or schema is required.
 
-The executable runs on Node 22.18+ or Bun. For TypeScript suites with extensionless
-imports or application path aliases, use Bun (`bun run ch-bench …`). With Node, use
-JavaScript modules or TypeScript supported by Node's native type stripping, with
-explicit import extensions. Suite modules execute trusted local code.
+The executable runs on Node or Bun. A TypeScript suite on Node needs Node 22.18+, whose
+native type stripping loads it. For TypeScript suites with extensionless imports or
+application path aliases, use Bun (`bun run ch-bench …`). With Node, use JavaScript
+modules or TypeScript supported by Node's native type stripping, with explicit import
+extensions. Suite modules execute trusted local code.
 
 ## Setup
 
@@ -101,6 +102,46 @@ Replaying a frozen JSON suite does not pick up source changes. `--match` filters
 case ID/context substrings; `--case` selects an exact ID. Empty selections fail.
 `--dataset` overrides the suite's revision; `--source-revision` records a Git SHA or
 other caller-supplied revision. Neither field creates a snapshot or detects data drift.
+
+### Commands and flags
+
+`ch-bench --help` lists these; `ch-bench --version` prints the package version.
+
+| Command | Does | Writes by default |
+| --- | --- | --- |
+| `doctor` | Checks the connection, query-log access, table metadata and measurement settings. Exit 0 when all are available, 3 when some are not | nothing |
+| `export <suite>` | Compiles a suite module (or reads a JSON suite) and saves its SQL | `.bench/suite.json` |
+| `run <suite>` | Compiles and measures | `.bench/run-<epoch ms>.json` |
+| `compare <baseline> <candidate>` | Compares two saved runs, offline | nothing |
+| `inspect <suite.json\|run.json>` | Saves `EXPLAIN indexes = 1, projections = 1` and `EXPLAIN PIPELINE` for the recorded SQL, and current table metadata | `.bench/plans.json` |
+| `schema` | Prints JSON Schema documents for suite files, run reports and budget files | nothing |
+
+| Flag | Commands | Default |
+| --- | --- | --- |
+| `--json` | all | Human output |
+| `--out PATH` | all | As above |
+| `--match TEXT`, `--case ID` | `export`, `run`, `inspect` | Every case |
+| `--runs N` | `run` | 20 (1 to 1000) |
+| `--warmup N` | `run` | 2 (0 to 100) |
+| `--threads N` | `run` | The server's `max_threads` (1 to 256 when given) |
+| `--timeout SECONDS` | `run` | 30 (1 to 3600), sent as `max_execution_time` |
+| `--cache warm\|bypass` | `run` | `warm` |
+| `--verify-results`, `--result-order ordered\|unordered` | `run` | Off, `unordered`; a case's own `results` wins |
+| `--log-wait SECONDS` | `run` | 12 (0 to 60) |
+| `--cluster NAME` | `doctor`, `run` | Node-local logs |
+| `--dataset REV`, `--source-revision REV` | `run` | The suite's `dataset`, none |
+| `--metric NAME`, `--threshold PERCENT`, `--min-delta N` | `compare` | `p95WallMs`, 10, 0 |
+| `--budgets FILE` | `compare` | One budget from the flags above; not both |
+| `--fail-on-regression` | `compare` | Accepted; comparisons always gate |
+
+A flag a command does not take fails with exit 2 instead of being ignored.
+
+| Variable | Default |
+| --- | --- |
+| `CLICKHOUSE_URL` | Required |
+| `CLICKHOUSE_USER` | `default` |
+| `CLICKHOUSE_PASSWORD` | Empty |
+| `CLICKHOUSE_DATABASE` | `default` |
 
 Credentials are read from the environment and are not written into artifacts.
 Endpoints must be HTTP(S), without embedded credentials, query strings or fragments.

@@ -3,7 +3,9 @@
 This page maps the Prisma and Drizzle operations you use every day to effect-orm. Its examples
 use Postgres. SQLite and Cloudflare D1 (`@maple-dev/effect-orm/sqlite`) have the same builder,
 `RETURNING` and `ON CONFLICT`; where a row differs on them, it says so, and
-[SQLite and Cloudflare D1](./sqlite.md) has the details. Each row says where effect-orm has the
+[SQLite and Cloudflare D1](./sqlite.md) has the details. MySQL and MariaDB
+(`@maple-dev/effect-orm/mysql`) have the same builder too, but no `RETURNING` and no
+`ON CONFLICT`; see [MySQL and MariaDB](./mysql.md). Each row says where effect-orm has the
 operation today.
 
 Two things change for every operation:
@@ -23,12 +25,12 @@ Two things change for every operation:
 | `include` / `select` a relation | `with: { posts: true }` | `Db.findMany` with nested `with` over `Db.defineRelations`, one statement per level ([Relational reads](./relations.md)); or `innerJoin` / `leftJoin` ([Joins](./joins-and-subqueries.md)) |
 | `_count: { select: { posts: true } }` | `db.$count(posts, eq(...))` | `_count: { posts: true }` in `Db.findMany` ([Count relations](./relations.md#count-relations)); or `leftJoin` + `PG.countDistinct` + `groupBy` |
 | `where: { posts: { some / none / every } }` | `exists(...)` | `r.posts.some(where)`, `none`, `every` in a `findMany` `where` ([Filter by relations](./relations.md#filter-by-relations)); or `PG.exists`, `PG.inSubquery` ([Subquery conditions](./joins-and-subqueries.md#subquery-conditions)) |
-| `create`, `createMany({ data })` | `db.insert(t).values([...])` | `PG.insertInto(T).values(row or rows)`, `.returning()` ([Inserting rows](./inserts.md)) |
-| `upsert` | `.onConflictDoUpdate({ target, set })` | `.onConflictDoUpdate({ target, set })`; `set: PG.excluded([...])` or `PG.excludedAll()` copies the proposed row ([On conflict](./inserts.md#on-conflict)) |
+| `create`, `createMany({ data })` | `db.insert(t).values([...])` | `PG.insertInto(T).values(row or rows)`, `.returning()` ([Inserting rows](./inserts.md)); MySQL has no `RETURNING` |
+| `upsert` | `.onConflictDoUpdate({ target, set })` | `.onConflictDoUpdate({ target, set })`; `set: PG.excluded([...])` or `PG.excludedAll()` copies the proposed row ([On conflict](./inserts.md#on-conflict), [recipe](./recipes.md#insert-or-update-a-row)). Postgres, SQLite and D1; not MySQL |
 | `update`, `updateMany` | `db.update(t).set().where()` | `PG.update(T).set(...).where(...)`; a write with no `where` or `allRows()` does not compile ([Updating and deleting](./updates-and-deletes.md)) |
 | `delete`, `deleteMany` | `db.delete(t).where()` | `PG.deleteFrom(T).where(...)` |
 | `$transaction(async (tx) => ...)` | `db.transaction(async (tx) => ...)` | `effect.pipe(Db.transaction())`; no `tx` handle, nesting is a savepoint ([Transactions](./database.md#transactions)). D1 has no interactive transactions: there `Db.transaction` fails with `TransactionUnsupported` |
-| `$transaction([a, b])` | `db.batch([a, b])` | Run them inside one `Db.transaction`. There is no single-round-trip batch, and no wrapper for D1's `batch` yet ([D1](./sqlite.md#execute-on-d1)) |
+| `$transaction([a, b])` | `db.batch([a, b])` | `Db.batch([a, b], params?)`: a tuple of each statement's rows, atomic. On D1 it is one D1 `batch`; elsewhere the statements run in a transaction ([Batches](./database.md#batches)) |
 | `$queryRaw`, `$executeRaw` | `` db.execute(sql`...`) `` | `` Db.query(Db.sql`...`, schema) ``, `` Db.execute(Db.sql`...`) ``; every `${value}` is bound |
 | `SELECT ... FOR UPDATE` by `$queryRaw` | `.for("update")` | `.forUpdate()`, `.forNoKeyUpdate()`, `.forShare()` on Postgres, `.forUpdate()` and `.forShare()` on MySQL ([Building queries](./queries.md)); SQLite has no row locks |
 | `P2002` (unique violation) | `DrizzleQueryError` and a `cause.code` check | `Db.refineConstraints` fails with a tagged `UniqueViolation` (and `ForeignKeyViolation`, `NotNullViolation`, `CheckViolation`) to catch by tag ([Constraint violations](./database.md#constraint-violations)) |
@@ -40,9 +42,9 @@ Two things change for every operation:
 | `@map("org_id")`, `@@map` | `text("org_id")` | `PG.column(PG.text, { name: "org_id" })`; the table name is the first argument of `PG.table`; `casing: "snake_case"` maps every key ([Column names](./tables-and-types.md#column-names)) |
 | `@@unique`, `@@index`, relations with `onDelete` | `unique()`, `index()`, `references()` | `uniqueConstraints`, `indexes`, `foreignKeys` on `PG.table` ([Postgres migrations](./migrations.md#postgres)). `SQLite.table` declares keys and indexes, not foreign keys ([SQLite](./sqlite.md#declare-a-table-with-its-ddl)) |
 | `prisma db seed` | `drizzle-seed` | `Seed.insert(T, { count })` writes rows generated from the column Schemas, deterministic by seed ([Seeding](./seeding.md)) |
-| `prisma migrate dev` / `deploy` | `drizzle-kit generate` / `migrate` | `effect-orm generate`, `effect-orm migrate` ([Schema and migrations](./migrations.md)). A drizzle-kit folder can be adopted. SQLite has `generate` only; a drizzle-kit-compatible tool applies its folders ([SQLite migrations](./migrations.md#sqlite)) |
-| `prisma db pull` | `drizzle-kit pull` | `effect-orm pull` for ClickHouse only; Postgres and SQLite are not supported yet |
-| `prisma migrate diff` (drift) | none | `effect-orm verify --schema` compares the database with the table definitions ([Checking the definitions](./migrations.md#checking-the-definitions-against-a-database)) |
+| `prisma migrate dev` / `deploy` | `drizzle-kit generate` / `migrate` | `effect-orm generate`, `effect-orm migrate` ([Schema and migrations](./migrations.md)). A drizzle-kit folder can be adopted. SQLite and MySQL have `generate` only; a drizzle-kit-compatible tool applies their folders ([SQLite migrations](./migrations.md#sqlite), [MySQL migrations](./migrations.md#mysql)) |
+| `prisma db pull` | `drizzle-kit pull` | `effect-orm pull` for ClickHouse only; Postgres, SQLite and MySQL are not supported yet |
+| `prisma migrate diff` (drift) | none | `effect-orm verify --schema` compares the database with the table definitions, on ClickHouse and Postgres ([Checking the definitions](./migrations.md#checking-the-definitions-against-a-database)) |
 | `prisma migrate status` | `drizzle-kit check` | `effect-orm status`; `effect-orm check` validates the migrations folder, as `drizzle-kit check` does |
 | A mocked client in unit tests | a mocked `db` | `Db.layerTest` answers statements with no server ([layerTest](./testing.md#testing-your-own-code-layertest)); or run on PGlite, as below, or in-memory SQLite |
 
@@ -253,7 +255,8 @@ drop that row, as it would in SQL.
 
 - **Effect services and Layers.** `Database` is a service. You build it with
   `Db.layerSqlClient` over any Effect `SqlClient` (`@effect/sql-pg`, `@effect/sql-pglite`,
-  `@effect/sql-clickhouse`, `@effect/sql-sqlite-node`, `@effect/sql-d1`), and provide it once. A test swaps the client layer, not a mock.
+  `@effect/sql-clickhouse`, `@effect/sql-sqlite-node`, `@effect/sql-d1`, `@effect/sql-mysql2`, or
+  the bundled `/clickhouse-http`), and provide it once. A test swaps the client layer, not a mock.
 - **Typed errors.** A failed statement is a `DatabaseError` with the driver's `reason` and the
   server's `sqlState`. COMMIT and ROLLBACK failures are their own errors. A helper marked
   `Db.requireTransaction` does not compile outside `Db.transaction`, so a missing transaction is

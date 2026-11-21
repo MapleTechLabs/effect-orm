@@ -28,6 +28,24 @@ themselves keep whatever ordering they declared.
 
 Unions compile with **`compileUnion`**, not `compile`.
 
+Each dialect writes the union the way its server needs it. An outer `orderBy`, `limit` or
+`offset` goes on `SELECT * FROM (…) AS "__union"` everywhere but ClickHouse, which needs no alias.
+
+- **Postgres and MySQL** put each branch in parentheses, so a branch keeps its own ORDER BY and
+  LIMIT.
+- **SQLite and MariaDB** write each branch as `SELECT * FROM (…) AS "__union_branch"`.
+- **MariaDB** writes a selected integer literal as `CAST(n AS SIGNED) + 0`, in a union or not. MariaDB 11.4 sizes
+  an integer literal in such a branch one digit short and cuts it to fit a DECIMAL that another
+  branch has in the same column: `lit(97)` beside a `DECIMAL(5,4)` came back as `9.9999`. MySQL
+  writes `CAST(n AS SIGNED)`.
+
+```ts
+MySQL.compileUnionUnsafe(MySQL.unionAll(withLiteral, withDecimal), {}, { dialect: MySQL.mariadbDialect })
+// SELECT * FROM (SELECT CAST(97 AS SIGNED) + 0 AS `v` FROM `prices`) AS `__union_branch`
+// UNION ALL
+// SELECT * FROM (SELECT `prices`.`amount` AS `v` FROM `prices`) AS `__union_branch`
+```
+
 > **Numeric branch types.** ClickHouse has no common type for some numeric pairs (`UInt64` and
 > `Int64`, `Int64` and `Float64`): it makes the column a `Variant`, which ORDER BY refuses, or,
 > with `use_variant_as_common_type = 0`, rejects the union. So on ClickHouse the union's `orderBy`
@@ -74,14 +92,20 @@ const query = CH.from(Recent)
 	.select(($) => ({ name: $.Name }))
 
 const compiled = CH.compileUnsafe(query, {})
-// WITH recent AS ( SELECT Name AS Name FROM events WHERE OrgId = 'org_123' )
-// SELECT Name AS name FROM recent
+// WITH recent AS ( SELECT events.Name AS Name FROM events WHERE events.OrgId = 'org_123' )
+// SELECT recent.Name AS name FROM recent
 compiled.tenantScope // "single-tenant" — read off the CTE, not declared
 ```
 
 To _read_ a CTE, declare an external table (`external: true`) whose name matches it and start the
 query there. That is what gives you typed accessors over the CTE's columns; being external, it
 carries no DDL, so `effect-orm generate` never tries to create it.
+
+A CTE name is quoted like a select key: always on Postgres, SQLite and MySQL, and on ClickHouse
+when it is not a plain name or is one of the words ClickHouse reads as something else (see
+[Names](./params-and-compilation.md#names)). Give the CTE a plain name on ClickHouse: the external
+table's name is written as given, so a CTE called `by service` would need the table declared as
+``CH.table("`by service`", …)``.
 
 _(Backed by `docs/unions-and-ctes.md > Selecting from a CTE`.)_
 

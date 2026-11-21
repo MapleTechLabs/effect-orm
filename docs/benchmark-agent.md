@@ -23,7 +23,7 @@ Objective: change a query and produce comparable, reviewable performance evidenc
    the current server. Schema-hash mismatches invalidate query-only comparisons;
    a schema experiment requires a separately designed validation, not relabeling data.
 8. Report the exact case, controls, dataset, metric deltas, correctness status,
-   warnings, and artifact paths. Do not describe empty-table timings as evidence.
+   warnings, artifact paths, and the `ch-bench --version` that produced them. Do not describe empty-table timings as evidence.
 
 Commands do not create data or change schemas. Shared-server background activity
 and data drift can affect results. Result/condition caches are disabled, while the

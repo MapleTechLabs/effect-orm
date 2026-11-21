@@ -205,6 +205,9 @@ is `"cross-tenant"` without `crossTenantDeclared`. `"single-tenant"` and `"unten
 a defect rather than an error because the bug is in the query: no caller should catch it and
 carry on. `query` and `execute` apply the same check to a compiled query, but SQL written with
 `Db.sql` has no scope to check and runs as it is, so keep tenant-table reads in the builder.
+Everything else that runs builder queries goes through the same check: `stream`, `batch`
+(each statement), `paginate`, `findById` and `findAllBy` (each batch statement), each level of
+[`findMany`](./relations.md#tenant-scope-on-every-level), repositories and `Seed.insert`.
 
 It is off by default, and without it `tenantColumn` only labels compiled queries.
 

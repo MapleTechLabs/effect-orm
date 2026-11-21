@@ -28,14 +28,14 @@ const revoke = PG.deleteFrom(Tickets).where(($) => [$.id.eq(PG.param.int("id"))]
 
 `set` takes a record of values, params or expressions, or a callback that gets the row's
 columns as `$`. A key left out (or `undefined`) keeps the existing value. Values are encoded
-through the column's codec and bound on Postgres, as in an insert. A column that is not
+through the column's codec and bound on Postgres, SQLite and MySQL, as in an insert. A column that is not
 writable (a ClickHouse `materialized` or `alias` column, see
 [the row type](./inserts.md#which-columns-have-defaults)) cannot be set. `UpdateSetOf<typeof T>`
 names the record type.
 
 `update(table)` offers only `set` until it has one (its type is `CHUpdateStart`).
 
-A Postgres or SQLite column with `onUpdate` (an Effect, see
+A Postgres, SQLite or MySQL column with `onUpdate` (an Effect, see
 [client-side defaults](./inserts.md#client-side-defaults)) is set by every update that does not
 set it: `Database.run` runs the Effect once and adds the value to the SET. With a SET callback,
 the Effect runs before the callback, and a value the callback gives wins. The update requires
@@ -111,9 +111,15 @@ so optional filters compose. A write with no `where` would change every row, so:
 
 ## RETURNING
 
-On Postgres, `returning` works as on an insert: no arguments for every column, column names, or
-a callback. `Database.run` returns the changed or deleted rows, decoded. Without it, a write
-returns no rows.
+On Postgres, SQLite and D1, `returning` works as on an insert: no arguments for every column,
+column names, or a callback. `Database.run` returns the changed or deleted rows, decoded.
+Without it, a write returns no rows. ClickHouse and MySQL have no RETURNING; compiling a write
+with `returning` for them is a `QueryBuilderDefect`.
+
+```ts
+SQLite.deleteFrom(Sessions).where(($) => [$.expiresAt.lt(SQLite.param.string("now"))]).returning("id")
+// DELETE FROM "sessions" WHERE "expiresAt" < ? RETURNING "id" AS "id"
+```
 
 ## ClickHouse
 
@@ -133,7 +139,7 @@ rows change. Pass `settings({ mutations_sync: 2 })` when the caller reads its ow
 Mutations rewrite whole parts, so they suit occasional corrections, not per-request updates;
 model frequently changing state with a `ReplacingMergeTree` and inserts instead. ClickHouse
 cannot update a column of the sorting key. `returning` is refused on ClickHouse
-(`QueryBuilderDefect`), and `settings` on Postgres.
+(`QueryBuilderDefect`), and `settings` on every other dialect.
 
 ## Tenant scope
 

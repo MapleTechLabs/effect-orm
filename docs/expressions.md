@@ -33,7 +33,7 @@ const Notes = CH.table("notes", {
 	orderBy: [],
 })
 export const compiled = CH.compileUnsafe(CH.from(Notes).select("Note").where(($) => [$.Note.isNull()]))
-console.log(compiled.sql) // SELECT Note AS Note FROM notes WHERE Note IS NULL
+console.log(compiled.sql) // SELECT notes.Note AS Note FROM notes WHERE notes.Note IS NULL
 ```
 
 ### Invalid literals
@@ -96,6 +96,7 @@ wildcards. Use them for a search box; use `.like()` only for a pattern you wrote
 // ClickHouse: … AND events.Name ILIKE '%50\\%\\_off%'
 // Postgres:   … AND "events"."Name" ILIKE $1                              -- $1 = '%50\%\_off%'
 // SQLite, D1: … AND lower("events"."Name") LIKE lower(?) ESCAPE '\'       -- ? = '%50\%\_off%'
+// MySQL:      … AND lower(`events`.`Name`) LIKE lower(?)                  -- ? = '%50\%\_off%'
 ```
 
 - The value is a string, or a param or expression of one. A string is escaped before it is bound.
@@ -105,13 +106,15 @@ wildcards. Use them for a search box; use `.like()` only for a pattern you wrote
   default, and SQLite gets `ESCAPE '\'`, as `.like()` does there.
 - Case-sensitive by default, also on SQLite and D1, whose `LIKE` ignores ASCII case. There the
   helpers write `GLOB` instead (`"Name" GLOB ?` with `? = '*50%*'`), escaping GLOB's `*`, `?` and `[` the same
-  way.
+  way. MySQL compares under the column's collation, which usually ignores case, so the
+  case-sensitive form there is `CAST(… AS BINARY) LIKE CAST(? AS BINARY)`.
 - `{ insensitive: true }` writes `ILIKE`, or on SQLite and D1 (which have no `ILIKE`) a `LIKE`
   of `lower()` on both sides. Which characters fold is the database's choice. ClickHouse folds
   UTF-8 (`'ÉCOLE' ILIKE 'é%'` is true). Postgres folds by the database's `LC_CTYPE`: a `C` locale
   (PGlite's default) folds ASCII only. SQLite's `lower()` folds ASCII only (without the ICU
   extension).
-- An empty value matches every non-NULL row. A NULL column never matches.
+- An empty value matches every non-NULL row: `contains("")` is `LIKE '%'`. A NULL column never
+  matches.
 - `escapeLike(text)` is the escape step on its own, for a pattern you build for `.like()`.
 
 _(Backed by `docs/expressions.md > Text search escapes LIKE wildcards`.)_
@@ -249,8 +252,14 @@ Raw helpers interpolate nothing and escape nothing. Never build one from user in
 
 ## Aggregates
 
-`count()`, `sum()`, `avg()`, `min()`, `max()`, `uniq()`, `groupUniqArray()`, `argMaxMerge()`,
-and the conditional forms `countIf()`, `sumIf()`, `avgIf()`, `minIf()`, `maxIf()`, `anyIf()`.
+`count()`, `sum()`, `avg()`, `min()`, `max()`, `any()`, `uniq()` (an estimate), `uniqExact()`,
+`argMin(value, by)`, `argMax(value, by)`, `groupUniqArray()`, `groupUniqArrayArray()`,
+`argMaxMerge()`, and the conditional forms `countIf()`, `sumIf()`, `avgIf()`, `minIf()`,
+`maxIf()`, `anyIf()`, `uniqIf()`, `groupUniqArrayIf()`.
+
+Postgres, SQLite and MySQL have `count`, `countIf`, `countDistinct`, `sum`, `avg`, `min` and
+`max` on their own entries; see [Postgres](./postgres.md), [SQLite](./sqlite.md) and
+[MySQL](./mysql.md) for the rest of their functions.
 
 The `*If` family takes a `Condition` as its last argument:
 
@@ -259,7 +268,16 @@ The `*If` family takes a `Condition` as its last argument:
 	total: CH.count(),
 	slow: CH.countIf($.DurationMs.gt(1000)),
 }))
-// count() AS total, countIf(DurationMs > 1000) AS slow
+// count() AS total, countIf(events.DurationMs > 1000) AS slow
+```
+
+`argMax` reads one column from the row where another is largest, which is how to get the latest
+value per group:
+
+```ts
+.select(($) => ({ name: $.Name, lastMs: CH.argMax($.DurationMs, $.Timestamp), callers: CH.uniqExact($.OrgId) }))
+.groupBy("name")
+// argMax(events.DurationMs, events.Timestamp) AS lastMs, uniqExact(events.OrgId) AS callers
 ```
 
 `quantile` is curried, taking the quantile first:
@@ -296,5 +314,38 @@ which ClickHouse serializes as JSON null. Use the guards above when the empty re
 ## Everything else
 
 String, numeric, date/time, array, map, JSON, and window functions are catalogued in the
-[API reference](./reference.md#clickhouse-functions). Anything not wrapped can be declared in
-one line with [`defineFn`](./extending.md).
+[API reference](./reference.md#functions). A few that most dashboards use:
+
+```ts title="clickhouse-functions.ts"
+import * as CH from "@maple-dev/effect-orm/clickhouse"
+
+const Requests = CH.table("requests", {
+	columns: { OrgId: CH.string, At: CH.dateTime, Route: CH.string, Tags: CH.array(CH.string) },
+	engine: CH.engine.mergeTree(),
+	orderBy: ["OrgId", "At"],
+})
+
+export const compiled = CH.compileUnsafe(
+	CH.from(Requests)
+		.select(($) => ({
+			bucket: CH.toStartOfInterval($.At, 300), // 5-minute buckets
+			day: CH.formatDateTime(CH.toStartOfHour($.At), "%Y-%m-%d"),
+			routes: CH.arrayStringConcat(CH.arraySort(CH.groupUniqArray($.Route)), ","),
+			count: CH.count(),
+		}))
+		.where(($) => [
+			$.OrgId.eq(CH.param.string("orgId")),
+			$.At.gte(CH.intervalSub(CH.param.dateTime("end"), 3600)),
+			CH.has($.Tags, "prod"),
+		])
+		.groupBy("bucket", "day"),
+	{ orgId: "org_123", end: "2026-01-01 12:00:00" },
+)
+// SELECT toStartOfInterval(requests.At, INTERVAL 300 SECOND) AS bucket, …
+// WHERE requests.OrgId = 'org_123' AND requests.At >= '2026-01-01 12:00:00' - INTERVAL 3600 SECOND
+//   AND has(requests.Tags, 'prod')
+```
+
+Interval helpers take seconds. `arrayFilter(lambda, arr)` takes its lambda as SQL text
+(`"x -> x != ''"`), so write that text yourself, never from input. Anything not wrapped can be
+declared in one line with [`defineFn`](./extending.md).

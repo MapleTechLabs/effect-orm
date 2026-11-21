@@ -25,7 +25,7 @@ is a `QueryBuilderDefect` when the query compiles: there is nothing to compare y
 param sits on is written in the source, so no input can cause or avoid it. See
 [Failures and defects](#failures-and-defects).
 
-Param names must be alphanumeric, optionally separated by single underscores — the name travels
+Param names must be letters, digits and `$`, optionally separated by single underscores — the name travels
 through the placeholder that `compile` later matches, and `__` would make its boundary
 ambiguous. A name that cannot round-trip is a `QueryBuilderDefect` when the query compiles.
 
@@ -170,7 +170,7 @@ const query = CH.from(Logs)
 	.where(($) => [$.Level.eq(CH.param.of(Level, "level"))])
 
 const compiled = await Effect.runPromise(CH.compile(query, { level: "warn" }))
-// WHERE Level = 'warn'
+// WHERE logs.Level = 'warn'
 // CH.compile(query, { level: "banana" }) fails when run: the codec rejects the value.
 ```
 
@@ -187,7 +187,7 @@ const byDuration = CH.from(Events)
 	.where(($) => [$.DurationMs.gte(CH.param.int("minDurationMs"))])
 
 const compiled = yield * CH.compile(byDuration, { minDurationMs: 100 })
-// WHERE DurationMs >= 100
+// WHERE events.DurationMs >= 100
 // Replacing 100 with 10.5 fails with code "InvalidLiteral".
 // Passing {} fails with code "UnresolvedParam".
 ```
@@ -207,14 +207,18 @@ _(Backed by `src/ch/core-dsl.test.ts > param resolution`.)_
 
 ## How params are resolved
 
-> **Params are resolved at compile time, not execution time.** `compile` substitutes each
-> value into the SQL text. This is _not_ server-side parameter binding — ClickHouse never sees
-> a placeholder.
+> **On ClickHouse, params are resolved at compile time, not execution time.** `compile`
+> substitutes each value into the SQL text. This is _not_ server-side parameter binding —
+> ClickHouse never sees a placeholder.
 
 ```ts
 const compiled = CH.compileUnsafe(query, { orgId: "org_123" })
-compiled.sql // … WHERE OrgId = 'org_123'
+compiled.sql // … WHERE events.OrgId = 'org_123'
 ```
+
+Postgres, SQLite and MySQL bind instead: the SQL holds `$1` or `?`, and the values are in
+`compiled.parameters`, encoded by each column's codec (see [Dialects](#dialects)). The rest of
+this section is about ClickHouse.
 
 Two consequences worth planning around:
 
@@ -225,7 +229,7 @@ Two consequences worth planning around:
 
     ```ts
     CH.compileUnsafe(query, { orgId: "a'b\\c" })
-    // … WHERE OrgId = 'a\'b\\c'
+    // … WHERE events.OrgId = 'a\'b\\c'
     ```
 
     Values flowing through `param.*` and the comparison methods are escaped. Values you splice
@@ -251,10 +255,11 @@ CH.compileUnsafe(query, params, options?)  // CompiledQuery, throws
 | `options.rowSchema`   | Effect `Schema` used by `decodeRows` / `decodeFirstRow`              |
 | `options.skipFormat`  | Omit a trailing `FORMAT` clause (used internally for subqueries)     |
 | `options.deferParams` | Leave placeholders unresolved, for SQL spliced into an outer compile |
-| `options.dialect`     | Overrides `CurrentDialect` and the entry's dialect (`clickhouseDialect` from `/clickhouse`, `postgresDialect` from `/postgres`, `sqliteDialect` from `/sqlite`) |
+| `options.dialect`     | Overrides `CurrentDialect` and the entry's dialect (`clickhouseDialect` from `/clickhouse`, `postgresDialect` from `/postgres`, `sqliteDialect` from `/sqlite`, `mysqlDialect` from `/mysql`; `/sqlite` also has `d1Dialect`, `/mysql` `mariadbDialect`) |
 
 Each dialect entry exports its own `compile`, defaulting to that dialect. Unions use
-`compileUnion(union, params)`.
+`compileUnion(union, params, options?)`, whose options are `rowSchema`, `deferParams` and
+`dialect`. Inserts, updates and deletes take only `dialect`.
 
 ## The `CompiledQuery`
 
@@ -315,7 +320,7 @@ const numbered: CH.Dialect = {
 }
 
 const compiled = CH.compileUnsafe(query, { orgId: "org_1" }, { dialect: numbered })
-// compiled.sql:        ... WHERE OrgId = $1
+// compiled.sql:        ... WHERE events.OrgId = $1
 // compiled.parameters: ["org_1"]
 ```
 
@@ -349,7 +354,7 @@ for two dialects can run at the same time in one program:
 const compiled = yield* CH.compile(query, { orgId: "org_1" }).pipe(
 	Effect.provideService(CH.CurrentDialect, numbered),
 )
-// compiled.sql:        ... WHERE OrgId = $1
+// compiled.sql:        ... WHERE events.OrgId = $1
 // compiled.parameters: ["org_1"]
 ```
 
@@ -360,9 +365,11 @@ module state.
 _(Backed by `docs/params-and-compilation.md > The dialect can come from Effect context`.)_
 
 Params are resolved by rewriting placeholders in the finished SQL, so a dialect's literals and
-names must never spell the param marker `__PARAM_`. ClickHouse writes it as `\x5F_PARAM_`; a
-literal or a name that does contain the marker fails the compile with `InvalidLiteral` rather
-than being rewritten.
+names must never spell the param marker `__PARAM_`. ClickHouse escapes it, in a string literal
+and in a quoted name alike, as `\x5F_PARAM_`: a select key `"__PARAM_x"` is written
+`` `\x5F_PARAM_x` `` and comes back as `__PARAM_x`. Postgres, SQLite and MySQL have no such
+escape in a name, so a name that contains the marker (a select key, an alias, a CTE name) fails
+the compile with `InvalidLiteral`, as does any literal of a custom dialect that spells it.
 
 ### Names
 
@@ -420,7 +427,7 @@ input, so `compile` puts them in the Effect error channel, catchable by the tag
 | Code               | Cause                                                                    |
 | ------------------ | ------------------------------------------------------------------------ |
 | `UnresolvedParam`  | A param the params bag has no value for                                  |
-| `InvalidLiteral`   | A param value, or a comparison operand, the column's codec rejects       |
+| `InvalidLiteral`   | A param value, or a comparison operand, the column's codec rejects; a name or literal that spells `__PARAM_` (not on ClickHouse) |
 | `InvalidArguments` | Arguments a function cannot use — an empty condition list, a bad pattern |
 
 `QueryBuilderDefect` describes a **call** that could not be right for any value: a query with no
