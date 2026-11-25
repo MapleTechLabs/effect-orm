@@ -99,9 +99,9 @@ _(Backed by `docs/updates-and-deletes.md > UPDATE ... FROM reads the source in S
 ## ORDER BY and LIMIT (MySQL)
 
 On MySQL and MariaDB, `orderBy` and `limit` bound a single-table UPDATE or DELETE:
-`DELETE FROM t WHERE ... ORDER BY ... LIMIT ?`. `orderBy` takes `[column, "asc" | "desc"]`
+`DELETE FROM t WHERE ... ORDER BY ... LIMIT n`. `orderBy` takes `[column, "asc" | "desc"]`
 tuples of the table's columns, or a callback giving `[expression, direction]` pairs; calling it
-again replaces the order. `limit(n)` takes a non-negative integer and binds it; a negative or
+again replaces the order. `limit(n)` takes a non-negative integer, written as a literal as a query's limit is; a negative or
 fractional literal is a type error, and such a value at run time is a `QueryBuilderError`
 (`InvalidArguments`). Without `orderBy`, which rows a `limit` takes is up to the server.
 
@@ -116,7 +116,7 @@ const chunk = MySQL.deleteFrom(Steps)
 	.where(($) => [$.runId.eq(MySQL.param.string("runId"))])
 	.orderBy(["id", "asc"])
 	.limit(20000)
-// DELETE FROM `steps` WHERE `runId` = ? ORDER BY `id` ASC LIMIT ?
+// DELETE FROM `steps` WHERE `runId` = ? ORDER BY `id` ASC LIMIT 20000
 
 // let deleted = 20000
 // while (deleted === 20000) deleted = (yield* Db.runWrite(chunk, { runId })).affectedRows

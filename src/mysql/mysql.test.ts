@@ -109,11 +109,11 @@ describe("the MySQL dialect", () => {
 		})
 		const ofRun = MySQL.deleteFrom(Runs).where(($) => [$.orgId.eq(MySQL.param.string("org")), $.runId.eq(MySQL.param.string("run"))])
 
-		it("binds the limit after the WHERE's params, on MySQL and MariaDB", () => {
+		it("writes the limit as a literal after the WHERE, on MySQL and MariaDB", () => {
 			for (const dialect of [MySQL.mysqlDialect, MySQL.mariadbDialect]) {
 				const compiled = MySQL.compileUnsafe(ofRun.orderBy(["id", "asc"]).limit(20000), { org: "o", run: "r" }, { dialect })
-				expect(compiled.sql).toBe("DELETE FROM `runs`\nWHERE `org_id` = ?\n  AND `run_id` = ?\nORDER BY `id` ASC\nLIMIT ?")
-				expect(compiled.parameters).toEqual(["o", "r", 20000])
+				expect(compiled.sql).toBe("DELETE FROM `runs`\nWHERE `org_id` = ?\n  AND `run_id` = ?\nORDER BY `id` ASC\nLIMIT 20000")
+				expect(compiled.parameters).toEqual(["o", "r"])
 			}
 		})
 
@@ -121,12 +121,12 @@ describe("the MySQL dialect", () => {
 			const compiled = MySQL.compileUnsafe(
 				MySQL.update(Runs).set({ n: 1 }).where(($) => [$.orgId.eq("o")]).orderBy(($) => [[$.runId, "desc"], [$.id, "asc"]]).limit(5),
 			)
-			expect(compiled.sql).toBe("UPDATE `runs` SET `n` = ?\nWHERE `org_id` = ?\nORDER BY `run_id` DESC, `id` ASC\nLIMIT ?")
-			expect(compiled.parameters).toEqual([1, "o", 5])
+			expect(compiled.sql).toBe("UPDATE `runs` SET `n` = ?\nWHERE `org_id` = ?\nORDER BY `run_id` DESC, `id` ASC\nLIMIT 5")
+			expect(compiled.parameters).toEqual([1, "o"])
 		})
 
 		it("takes ORDER BY or LIMIT alone, and a later orderBy replaces the earlier one", () => {
-			expect(MySQL.compileUnsafe(MySQL.deleteFrom(Runs).allRows().limit(0).crossTenant()).sql).toBe("DELETE FROM `runs`\nLIMIT ?")
+			expect(MySQL.compileUnsafe(MySQL.deleteFrom(Runs).allRows().limit(0).crossTenant()).sql).toBe("DELETE FROM `runs`\nLIMIT 0")
 			expect(MySQL.compileUnsafe(MySQL.update(Runs).set({ id: 1 }).allRows().orderBy(["n", "asc"]).orderBy(["id", "desc"]).crossTenant()).sql).toBe(
 				"UPDATE `runs` SET `id` = ?\nORDER BY `id` DESC",
 			)
@@ -148,6 +148,13 @@ describe("the MySQL dialect", () => {
 			for (const n of [-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, 2 ** 53, undefined]) {
 				expect(() => MySQL.compileUnsafe(ofRun.limit(n as number), { org: "o", run: "r" })).toThrow(/limit\(.*\): expected a non-negative integer/)
 			}
+		})
+
+		it("never lets the limit stand in for a param the statement names but was not given", () => {
+			// The limit is a literal, so a WHERE param of any name still has to be given.
+			const byId = MySQL.deleteFrom(Runs).where(($) => [$.id.eq(MySQL.param.int("$$limit"))]).limit(10).crossTenant()
+			expect(() => MySQL.compileUnsafe(byId as any, {})).toThrow(/no value given for param '\$\$limit'/)
+			expect(MySQL.compileUnsafe(byId as any, { $$limit: 3 }).parameters).toEqual([3])
 		})
 
 		it("refuses an orderBy naming no column of the table", () => {

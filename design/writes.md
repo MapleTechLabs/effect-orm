@@ -296,7 +296,8 @@ compiled beside INSERT and sharing its value encoding (`valueCells`), SET record
   MariaDB only (`DialectClauses.writeOrderLimit`). They add `WriteLimitClause` to the write's
   params, so `compile` for another dialect is a type error, and the compile refuses them as a
   defect too (Postgres, ClickHouse; SQLite unless built with `SQLITE_ENABLE_UPDATE_DELETE_LIMIT`,
-  which is not modelled). The limit is bound (`LIMIT ?`), checked as a query's: a negative or
+  which is not modelled). The limit is checked and written as a query's is, a literal (`LIMIT 20000`), so no generated
+  param name can stand in for one the statement names: a negative or
   fractional value is an `InvalidArguments` failure. MySQL refuses both on a multi-table write,
   so beside `from` they are a defect. They do not change the tenant scope; a subquery in the
   ORDER BY counts as a read. The use: chunked deletes that keep each transaction small

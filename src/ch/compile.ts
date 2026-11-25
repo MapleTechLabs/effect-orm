@@ -2559,18 +2559,15 @@ const valuesColumns = (
 /** Whether `limit` was called: `limit(undefined)` (a missing value at run time) is refused, not dropped. */
 const hasLimit = (state: CHUpdateState | CHDeleteState): boolean => Object.hasOwn(state, "limitValue")
 
-/** Prefix of the param a write's `limit` is bound as. */
-const LIMIT_PARAM = "$$limit"
-
 /**
  * A write's `ORDER BY ... LIMIT ?`, or "" without either. Order specs name the
  * table's columns, which render as `$` does (so a renamed column is written by
- * its database name); the limit is checked as a query's is, then bound.
+ * its database name); the limit is checked and written as a query's is, a
+ * literal, so no generated param name can stand in for one the statement names.
  */
 const writeOrderLimit = (
 	state: CHUpdateState | CHDeleteState,
 	$: Record<string, unknown>,
-	values: Record<string, unknown>,
 	where: string,
 ): string => {
 	let sql = ""
@@ -2595,10 +2592,7 @@ const writeOrderLimit = (
 		if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
 			return fail(new QueryBuilderError({ code: "InvalidArguments", message: `${where}: limit(${String(value)}): expected a non-negative integer` }), "")
 		}
-		let name = LIMIT_PARAM
-		for (let next = 0; Object.hasOwn(values, name); next++) name = `${LIMIT_PARAM}${next}`
-		values[name] = value
-		sql += `\nLIMIT ${compileSqlFragment(param.of(insertWireValue, name).toFragment())}`
+		sql += `\nLIMIT ${compileSqlFragment(rowCount("limit", value)!)}`
 	}
 	return sql
 }
@@ -2706,7 +2700,7 @@ function compileUpdateOrDelete(
 					: dialect.clauses.alterTableUpdate === true
 						? "\nWHERE 1"
 						: ""
-			return [assignments, whereSql, fromSql, writeOrderLimit(state, $, values, where)] as const
+			return [assignments, whereSql, fromSql, writeOrderLimit(state, $, where)] as const
 		},
 	)
 
