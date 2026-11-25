@@ -19,6 +19,7 @@ import { Effect, Exit, Option, Schema } from "effect"
 import * as CH from "./ch/index"
 import * as T from "./ch/types"
 import * as CHE from "./clickhouse"
+import * as MySQL from "./mysql"
 import * as PG from "./postgres"
 import * as Seed from "./seed"
 import * as SQLite from "./sqlite"
@@ -1260,5 +1261,18 @@ describe("docs/updates-and-deletes.md", () => {
 			`UPDATE "daily" SET "dau" = json_extract("j"."value", '$.dau') FROM json_each(?) AS "j" WHERE "daily"."day" = json_extract("j"."value", '$.day')`,
 		)
 		expect(compiled.parameters).toEqual([`[{"day":"2026-01-01","dau":9}]`])
+	})
+
+	it("A chunked DELETE with ORDER BY and LIMIT", () => {
+		const Steps = MySQL.table("steps", { id: MySQL.bigint, runId: MySQL.varchar(36) })
+		const chunk = MySQL.deleteFrom(Steps)
+			.where(($) => [$.runId.eq(MySQL.param.string("runId"))])
+			.orderBy(["id", "asc"])
+			.limit(20000)
+		const compiled = MySQL.compileUnsafe(chunk, { runId: "r" })
+		expect(oneLine(compiled.sql)).toBe("DELETE FROM `steps` WHERE `runId` = ? ORDER BY `id` ASC LIMIT 20000")
+		expect(compiled.parameters).toEqual(["r"])
+		// @ts-expect-error -- Postgres has no DELETE ... LIMIT
+		expect(() => PG.compileUnsafe(chunk, { runId: "r" })).toThrow(/orderBy\(\) and limit\(\) have no meaning for the postgres dialect/)
 	})
 })

@@ -119,6 +119,10 @@ export interface DialectClauses {
 	readonly alterTableUpdate?: boolean
 	/** `UPDATE t SET … FROM source WHERE …`: Postgres, and SQLite 3.33+. */
 	readonly updateFrom?: boolean
+	/** `ORDER BY` and `LIMIT` on a single-table UPDATE or DELETE (MySQL,
+	 *  MariaDB). Absent means no: a write with `.orderBy()` or `.limit()`
+	 *  fails to compile for the dialect. */
+	readonly writeOrderLimit?: boolean
 	/** The FROM a SELECT with no source writes, where one is needed (MySQL's `DUAL`, for a WHERE). */
 	readonly fromlessSelect?: string
 }

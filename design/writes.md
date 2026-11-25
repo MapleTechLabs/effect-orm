@@ -292,5 +292,15 @@ compiled beside INSERT and sharing its value encoding (`valueCells`), SET record
   Checked on 26.2.19.43 and 26.8.2.7.
 - **Tenant scope** is derived from the WHERE as for a query over the table; an UPDATE that sets
   the tenant column to anything but the pinned value is cross-tenant.
-- Not built: UPDATE ... FROM / joins, DELETE USING, ORDER BY / LIMIT, a VALUES source for bulk
-  updates. See `design/gap-review.md`.
+- **ORDER BY / LIMIT** (`orderBy`, `limit`) on a single-table UPDATE or DELETE, MySQL and
+  MariaDB only (`DialectClauses.writeOrderLimit`). They add `WriteLimitClause` to the write's
+  params, so `compile` for another dialect is a type error, and the compile refuses them as a
+  defect too (Postgres, ClickHouse; SQLite unless built with `SQLITE_ENABLE_UPDATE_DELETE_LIMIT`,
+  which is not modelled). The limit is checked and written as a query's is, a literal (`LIMIT 20000`), so no generated
+  param name can stand in for one the statement names: a negative or
+  fractional value is an `InvalidArguments` failure. MySQL refuses both on a multi-table write,
+  so beside `from` they are a defect. They do not change the tenant scope; a subquery in the
+  ORDER BY counts as a read. The use: chunked deletes that keep each transaction small
+  (`DELETE ... WHERE runId = ? LIMIT 20000`, looped until `Db.runWrite` reports fewer rows).
+- Not built: UPDATE ... FROM / joins on MySQL, DELETE USING, a VALUES source for bulk updates.
+  See `design/gap-review.md`.

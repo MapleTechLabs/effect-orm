@@ -58,6 +58,39 @@ for (const [name, url, dialect] of servers) {
 					inTransaction: { affectedRows: 1, insertId: 501 },
 				})
 			})
+
+			it(`deletes a run's rows in LIMIT chunks until a chunk comes back short (${prepared ? "prepared" : "text protocol"})`, async () => {
+				const runs = `${table}_runs`
+				const Runs = MySQL.table(runs, { id: MySQL.bigint, runId: MySQL.varchar(36) }, { defaults: ["id"] })
+				const chunk = 4
+				const counts = await Effect.runPromise(
+					Effect.gen(function* () {
+						const db = Db.fromSqlClient(yield* SqlClient.SqlClient, { dialect })
+						const drop = Effect.orDie(db.execute({ sql: `DROP TABLE IF EXISTS \`${runs}\`` }))
+						yield* drop
+						yield* db.execute({ sql: `CREATE TABLE \`${runs}\` (id BIGINT AUTO_INCREMENT PRIMARY KEY, runId VARCHAR(36) NOT NULL)` })
+						return yield* Effect.gen(function* () {
+							// 10 rows of run "a" (two full chunks and a short one), 3 of run "b" that must survive.
+							yield* db.runWrite(MySQL.insertInto(Runs).values([...Array.from({ length: 10 }, () => ({ runId: "a" })), ...Array.from({ length: 3 }, () => ({ runId: "b" }))]))
+							const ofRun = MySQL.deleteFrom(Runs).where(($) => [$.runId.eq(MySQL.param.string("run"))]).orderBy(["id", "asc"]).limit(chunk)
+							const deleted: Array<number> = []
+							while (deleted.length === 0 || deleted[deleted.length - 1]! === chunk) {
+								deleted.push((yield* db.runWrite(ofRun, { run: "a" })).affectedRows)
+							}
+							// ORDER BY with LIMIT on an UPDATE takes the lowest ids first.
+							const updated = yield* db.runWrite(MySQL.update(Runs).set({ runId: "c" }).where(($) => [$.runId.eq("b")]).orderBy(["id", "asc"]).limit(2))
+							const left = yield* db.run(MySQL.from(Runs).select("id", "runId").orderBy(["id", "asc"]))
+							return { deleted, updated: updated.affectedRows, left: left.map((row) => `${row.id - 10}:${row.runId}`) }
+						}).pipe(Effect.ensuring(drop))
+					}).pipe(
+						Effect.provide(
+							MysqlClient.layer({ url: Redacted.make(`${url}${url?.includes("?") ? "&" : "?"}timezone=Z`), disablePreparedStatements: !prepared }),
+						),
+					),
+				)
+				// Run "b" was ids 11-13: the two lowest became "c".
+				expect(counts).toEqual({ deleted: [4, 4, 2], updated: 2, left: ["1:c", "2:c", "3:b"] })
+			})
 		}
 	})
 }

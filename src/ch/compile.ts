@@ -12,7 +12,7 @@ import { CHFloatResult, CHNumber, columnSqlName, custom, dateTime, dateTime64, t
 import type { CHQuery, CHQueryState, ColumnAccessor, NeedsSelect } from "./query"
 import type { CHUnionQuery } from "./union"
 import { isExcludedSet, isInsert, type AnyInsert, type CHInsert, type ConflictClause, type ConflictTarget, type ExcludedSet } from "./insert"
-import { isDelete, isUpdate, type CHDelete, type CHUpdate } from "./update"
+import { isDelete, isUpdate, type CHDelete, type CHDeleteState, type CHUpdate, type CHUpdateState } from "./update"
 import type { Table } from "./table"
 import { createColumnAccessor, createQualifiedColumnAccessor, createJoinedColumnAccessor, sourceAlias } from "./query"
 import {
@@ -120,10 +120,10 @@ const orderByClause = (specs: ReadonlyArray<[string, "asc" | "desc"]>): Array<st
 	})
 
 /** The callback form of `orderBy`: each expression as it renders, then its direction. */
-const orderByExprs = (specs: ReadonlyArray<readonly [Expr<any, any>, "asc" | "desc"]>): Array<string> =>
+const orderByExprs = (specs: ReadonlyArray<readonly [Expr<any, any>, "asc" | "desc"]>, where = "CHQuery"): Array<string> =>
 	specs.map(([expr, direction]) => {
 		if (!isExprLike(expr) || (direction !== "asc" && direction !== "desc")) {
-			return fail(new QueryBuilderDefect({ message: "CHQuery: orderBy(($) => ...) returns [expression, \"asc\" | \"desc\"] pairs" }), "")
+			return fail(new QueryBuilderDefect({ message: `${where}: orderBy(($) => ...) returns [expression, "asc" | "desc"] pairs` }), "")
 		}
 		return `${compileSqlFragment(expr.toFragment())} ${direction.toUpperCase()}`
 	})
@@ -2556,6 +2556,47 @@ const valuesColumns = (
 
 // UPDATE and DELETE
 
+/** Whether `limit` was called: `limit(undefined)` (a missing value at run time) is refused, not dropped. */
+const hasLimit = (state: CHUpdateState | CHDeleteState): boolean => Object.hasOwn(state, "limitValue")
+
+/**
+ * A write's `ORDER BY ... LIMIT ?`, or "" without either. Order specs name the
+ * table's columns, which render as `$` does (so a renamed column is written by
+ * its database name); the limit is checked and written as a query's is, a
+ * literal, so no generated param name can stand in for one the statement names.
+ */
+const writeOrderLimit = (
+	state: CHUpdateState | CHDeleteState,
+	$: Record<string, unknown>,
+	where: string,
+): string => {
+	let sql = ""
+	const order =
+		state.orderByFn !== undefined
+			? orderByExprs(state.orderByFn($), where)
+			: (state.orderBySpecs ?? []).map((spec) => {
+					const [column, direction] = Array.isArray(spec) ? spec : []
+					if (typeof column !== "string" || !Object.hasOwn(state.table.columns, column) || (direction !== "asc" && direction !== "desc")) {
+						return fail(new QueryBuilderDefect({
+							message: `${where}: orderBy() takes [column, "asc" | "desc"] tuples naming the table's columns, got ${JSON.stringify(spec)}`,
+						}), "")
+					}
+					return `${compileSqlFragment(($[column] as Expr<any>).toFragment())} ${direction.toUpperCase()}`
+				})
+	if ((state.orderBySpecs !== undefined || state.orderByFn !== undefined) && order.length === 0) {
+		return fail(new QueryBuilderDefect({ message: `${where}: orderBy() needs at least one column` }), "")
+	}
+	if (order.length > 0) sql += `\nORDER BY ${order.join(", ")}`
+	if (hasLimit(state)) {
+		const value: unknown = state.limitValue
+		if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+			return fail(new QueryBuilderError({ code: "InvalidArguments", message: `${where}: limit(${String(value)}): expected a non-negative integer` }), "")
+		}
+		sql += `\nLIMIT ${compileSqlFragment(rowCount("limit", value)!)}`
+	}
+	return sql
+}
+
 /**
  * An UPDATE or DELETE. Postgres writes `UPDATE t SET ... WHERE ...` and
  * `DELETE FROM t WHERE ...`; ClickHouse an `ALTER TABLE t UPDATE ... WHERE ...`
@@ -2599,11 +2640,25 @@ function compileUpdateOrDelete(
 	}
 	const conditions = (state.whereFn?.($) ?? []).filter((c): c is NonNullable<typeof c> => c != null)
 
+	// ORDER BY and LIMIT: MySQL's single-table UPDATE and DELETE. A multi-table
+	// write (a FROM source) refuses them there, so it is refused here too.
+	const ordered = state.orderBySpecs !== undefined || state.orderByFn !== undefined
+	const limited = hasLimit(state)
+	if ((ordered || limited) && dialect.clauses.writeOrderLimit !== true) {
+		const named = ordered && limited ? "orderBy() and limit() have" : ordered ? "orderBy() has" : "limit() has"
+		return fail(new QueryBuilderDefect({
+			message: `${where}: ${named} no meaning for the ${dialect.name} dialect, whose ${kind === "update" ? "UPDATE" : "DELETE"} takes no ORDER BY or LIMIT`,
+		}), failedQuery<any, undefined>())
+	}
+	if ((ordered || limited) && from !== undefined) {
+		return fail(new QueryBuilderDefect({ message: `${where}: orderBy() and limit() write a single-table UPDATE; an UPDATE ... FROM takes neither` }), failedQuery<any, undefined>())
+	}
+
 	const tenant = table.tenantColumn
 	const setWrites: Array<{ readonly value: unknown; readonly sql: string }> = []
 
 	const reads: Array<TenantSource> = []
-	const [assignments, whereSql, fromSql] = withSubqueryCompiler(
+	const [assignments, whereSql, fromSql, orderLimitSql] = withSubqueryCompiler(
 		recordingSubqueries(values, reads),
 		() => {
 			let fromSql = ""
@@ -2621,11 +2676,11 @@ function compileUpdateOrDelete(
 			let assignments: ReadonlyArray<string> = []
 			if (write._tag === "CHUpdate") {
 				const set = (write as CHUpdate<any, any, any>)._state.set
-				if (set === undefined) return fail(new QueryBuilderDefect({ message: `${where}: set() is required` }), [assignments, "", ""] as const)
+				if (set === undefined) return fail(new QueryBuilderDefect({ message: `${where}: set() is required` }), [assignments, "", "", ""] as const)
 				const record = typeof set === "function" ? set($) : set
 				const unfilled = missingClientDefaults(table.clientDefaults?.update, record as Record<string, unknown>)
 				if (unfilled.length > 0) {
-					return fail(new QueryBuilderDefect({ message: clientDefaultsMessage(where, "update", unfilled) }), [assignments, "", ""] as const)
+					return fail(new QueryBuilderDefect({ message: clientDefaultsMessage(where, "update", unfilled) }), [assignments, "", "", ""] as const)
 				}
 				assignments = setAssignments(table, record as Record<string, unknown>, cell, (column, value, sql) => {
 					if (column === tenant) setWrites.push({ value, sql })
@@ -2637,7 +2692,7 @@ function compileUpdateOrDelete(
 				return fail(new QueryBuilderError({
 					code: "InvalidArguments",
 					message: `${where}: where() gave no conditions (each was undefined or empty), which would write every row; call allRows() if that is meant`,
-				}), [assignments, "", ""] as const)
+				}), [assignments, "", "", ""] as const)
 			}
 			const whereSql =
 				rendered.length > 0
@@ -2645,7 +2700,7 @@ function compileUpdateOrDelete(
 					: dialect.clauses.alterTableUpdate === true
 						? "\nWHERE 1"
 						: ""
-			return [assignments, whereSql, fromSql] as const
+			return [assignments, whereSql, fromSql, writeOrderLimit(state, $, where)] as const
 		},
 	)
 
@@ -2688,7 +2743,7 @@ function compileUpdateOrDelete(
 			: dialect.clauses.alterTableUpdate === true
 				? `ALTER TABLE ${target} UPDATE ${assignments.join(", ")}`
 				: `UPDATE ${target} SET ${assignments.join(", ")}`
-	const rendered = renderParams(`${head}${fromSql}${whereSql}${returning?.sql ?? ""}${settings}`, values, dialect)
+	const rendered = renderParams(`${head}${fromSql}${whereSql}${orderLimitSql}${returning?.sql ?? ""}${settings}`, values, dialect)
 	const scope = withReads({ scope: tenantScope, bound: tenantScope === "single-tenant" ? tenantBound : undefined }, reads)
 	return writeCompiledQuery(rendered, kind, scope.scope, scope.bound, returning, state.crossTenant, table.name)
 }

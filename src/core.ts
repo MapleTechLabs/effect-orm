@@ -150,6 +150,8 @@ export {
 	type CHUpdateStart,
 	type UpdateSet,
 	type UpdateSetOf,
+	type WriteLimitClause,
+	type WriteOrderBySpec,
 	deleteFrom,
 	update,
 } from "./ch/update"
