@@ -1,6 +1,6 @@
 {
 	"name": "@maple-dev/effect-orm",
-	"version": "1.1.0",
+	"version": "1.2.0",
 	"description": "Type-safe ClickHouse, Postgres, SQLite and MySQL queries, result decoding, and reproducible benchmarks for Effect and TypeScript",
 	"keywords": [
 		"clickhouse",

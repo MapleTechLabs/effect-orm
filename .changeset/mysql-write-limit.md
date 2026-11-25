@@ -1,5 +1,0 @@
----
-"@maple-dev/effect-orm": minor
----
-
-MySQL and MariaDB `ORDER BY` and `LIMIT` on a single-table UPDATE or DELETE: `deleteFrom(table).where(...).orderBy(["id", "asc"]).limit(20000)` writes `DELETE FROM t WHERE ... ORDER BY ... LIMIT 20000`, and `update(table)` takes the same two clauses, for chunked deletes that keep each transaction small (loop until `Db.runWrite` reports fewer `affectedRows` than the limit). `orderBy` takes `[column, direction]` tuples of the table's columns or a callback of `[expression, direction]` pairs; `limit(n)` writes `n` as a literal, as a query's limit, and a negative or fractional literal is a type error, such a value at run time an `InvalidArguments` failure. Both add the new `WriteLimitClause` to the write's params, so compiling it for Postgres, SQLite, D1 or ClickHouse is a type error, and the compile refuses it as a `QueryBuilderDefect`; beside `update(...).from(...)`, a multi-table write MySQL refuses them on, they are a defect too. Tenant scope is unchanged: the WHERE decides it, and a subquery in the ORDER BY counts as a read. New: `Dialect.clauses.writeOrderLimit`, and the `WriteLimitClause` and `WriteOrderBySpec` types.
