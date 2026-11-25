@@ -1,9 +1,0 @@
----
-"@maple-dev/effect-orm": patch
----
-
-`/clickhouse-http` no longer returns the rows of a query that failed. ClickHouse answers `200` with the first block of rows, so a timeout, a memory limit or any exception after that arrives inside the body. On servers before 25.11 (25.8 LTS among them) the client read the rows sent so far as the whole result: `sql.unsafe(...)` succeeded with 900,000 of 2,000,000 rows, and `.stream` ended normally. On 25.11 and later it failed, but as "the response is not valid JSON" or "the stream failed", with the server's code lost, so a timeout was not a `StatementTimeoutError`.
-
-Queries now send `http_write_exception_in_output_format=1`, and the client reads the exception wherever the server puts it: an `exception` key beside `data`, a JSONEachRow exception line, the `__exception__` block (tagged or not), or the text after the rows of a compressed reply. The statement fails with the server's reason and message; a stream fails after the rows before the exception. A statement whose `200` carries `X-ClickHouse-Exception-Code` (a command with progress headers on) fails too; it used to succeed. A body that cannot be read to the end is a `ConnectionError`, not an `UnknownError`. Needs ClickHouse 23.9 or later. A `readonly = 1` user, who cannot change settings, sets both built-in settings in `settings` to the server's current values (`http_write_exception_in_output_format` is `1` before 25.11 and `0` from it).
-
-Bound values: `null` binds as NULL (it was the text `null`), an array holding a null is `Array(Nullable(T))` (its nulls were the type's default), and a `bigint` binds as the narrowest of `Int64`, `UInt64`, `Int128`, `UInt256` and `Int256` that holds it (2^64 - 1 arrived as -1). An array's element type is read from all of its elements, nested arrays included.
