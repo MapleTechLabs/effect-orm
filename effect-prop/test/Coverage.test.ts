@@ -48,6 +48,16 @@ describe("Coverage", () => {
 		expect(tracker.totals().covered).toBe(2)
 	})
 
+	it("forgets what was reached when a check begins, and keeps what is known to exist", () => {
+		const tracker = new Coverage.Tracker(() => true)
+		const called = [{ scriptId: "1", url: "file:///a.js", functions: [{ functionName: "f", ranges: [{ startOffset: 0, endOffset: 9, count: 1 }, { startOffset: 2, endOffset: 5, count: 0 }] }] }]
+		expect(tracker.absorb(called)).toBe(1)
+		expect(tracker.absorb(called)).toBe(0)
+		tracker.reset()
+		expect(tracker.totals()).toEqual({ covered: 0, total: 2 })
+		expect(tracker.absorb(called)).toBe(1)
+	})
+
 	// Before the search below makes the fixture hot: V8 stops counting calls of code it has optimized.
 	it("reports no novelty for an input that takes a path already seen", async () => {
 		const novelty: Array<number> = []
@@ -170,5 +180,23 @@ describe("Spans", () => {
 		expect(novelty.reduce((a, b) => a + b, 0)).toBe(3)
 		expect(novelty.filter((n) => n > 0).length).toBe(2)
 		expect(report.feedback).toEqual({ kind: "span edges", covered: 3, total: 3, files: [] })
+	})
+
+	it("starts each check from nothing when two share the layer", async () => {
+		const first: Array<number> = []
+		const traced = () => Effect.void.pipe(Effect.withSpan("work"))
+		const search = (into: Array<number>) => (run: Prop.Run<number>) =>
+			Effect.gen(function* () {
+				while (yield* run.wantsMore) into.push((yield* run.execute({ observe: true })).novelty)
+			})
+		const second: Array<number> = []
+		await Effect.runPromise(
+			Effect.gen(function* () {
+				yield* Prop.check(Gen.int(), traced, { runs: 3, search: search(first) })
+				yield* Prop.check(Gen.int(), traced, { runs: 3, search: search(second) })
+			}).pipe(Effect.provide(Spans.layer)),
+		)
+		expect(first).toEqual([1, 0, 0])
+		expect(second).toEqual([1, 0, 0])
 	})
 })

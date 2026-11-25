@@ -131,7 +131,8 @@ export class Source {
 	constructor(options: SourceOptions = {}) {
 		this.prefix = options.prefix ?? []
 		this.rng = options.rng
-		this.size = Math.max(0, Math.min(100, options.size ?? 30))
+		// A whole number: the size is part of a replay token.
+		this.size = Math.round(Math.max(0, Math.min(100, options.size ?? 30)))
 	}
 
 	/**

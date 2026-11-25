@@ -41,6 +41,41 @@ const bySizeDescending = (spans: ReadonlyArray<Span>): Array<Span> =>
 /** How many same-label descendants of one span the shrinker tries as its replacement. */
 const MAX_REPLACEMENTS = 8
 
+/** Spans of each label, by where they start. */
+const indexByLabel = (spans: ReadonlyArray<Span>): ReadonlyMap<string, ReadonlyArray<Span>> => {
+	const byLabel = new Map<string, Array<Span>>()
+	for (const span of spans) {
+		const same = byLabel.get(span.label)
+		if (same === undefined) byLabel.set(span.label, [span])
+		else same.push(span)
+	}
+	for (const same of byLabel.values()) same.sort((a, b) => a.start - b.start || b.end - a.end)
+	return byLabel
+}
+
+/**
+ * Up to `MAX_REPLACEMENTS` spans of `outer`'s label that lie inside it and are
+ * shorter. Found by binary search, so a pass over every span does not scan
+ * every span for each one.
+ */
+const within = (byLabel: ReadonlyMap<string, ReadonlyArray<Span>>, outer: Span): Array<Span> => {
+	const same = byLabel.get(outer.label) ?? []
+	let low = 0
+	let high = same.length
+	while (low < high) {
+		const middle = (low + high) >> 1
+		if (same[middle]!.start < outer.start) low = middle + 1
+		else high = middle
+	}
+	const found: Array<Span> = []
+	for (let i = low; i < same.length && same[i]!.start < outer.end && found.length < MAX_REPLACEMENTS; i++) {
+		const span = same[i]!
+		// One of the same extent would replace the span with itself.
+		if (span.end <= outer.end && span.end - span.start < outer.end - outer.start) found.push(span)
+	}
+	return found
+}
+
 export const shrink = <C extends Candidate, R>(initial: C, probe: Probe<C, R>, options: ShrinkOptions): Effect.Effect<ShrinkResult<C>, never, R> =>
 	Effect.gen(function* () {
 		let best = initial
@@ -80,19 +115,21 @@ export const shrink = <C extends Candidate, R>(initial: C, probe: Probe<C, R>, o
 		/** Replaces a span with a span of the same label inside it: a tree node with one of its subtrees. */
 		const hoistSpans = Effect.fnUntraced(function* () {
 			let spans = bySizeDescending(best.spans)
+			let byLabel = indexByLabel(best.spans)
 			for (let i = 0; i < spans.length && !done(); ) {
 				const outer = spans[i]!
-				const inner = spans.filter((s) => s !== outer && s.label === outer.label && s.start >= outer.start && s.end <= outer.end).slice(0, MAX_REPLACEMENTS)
 				let replaced = false
-				for (const candidate of inner) {
+				for (const candidate of within(byLabel, outer)) {
 					const choices = [...best.choices.slice(0, outer.start), ...best.choices.slice(candidate.start, candidate.end), ...best.choices.slice(outer.end)]
 					if (yield* attempt(choices)) {
 						replaced = true
 						break
 					}
 				}
-				if (replaced) spans = bySizeDescending(best.spans)
-				else i++
+				if (replaced) {
+					spans = bySizeDescending(best.spans)
+					byLabel = indexByLabel(best.spans)
+				} else i++
 			}
 		})
 

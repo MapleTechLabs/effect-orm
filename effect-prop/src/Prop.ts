@@ -174,7 +174,8 @@ export interface CheckOptions<A, E = never, R = never> {
 	/**
 	 * A single input taking longer than this fails with the signature `Timeout`.
 	 * An Effect that yields is interrupted at the limit. Code that never yields
-	 * cannot be, and fails once it returns. Measured on the real clock for both.
+	 * cannot be, and fails once it returns. Measured on the real clock for both,
+	 * also in a test that controls the Effect clock.
 	 */
 	readonly timeout?: Duration.Input | undefined
 	/** Values run before anything generated, whatever the generator has become. */
@@ -243,17 +244,34 @@ const failed = <E>(cause: Cause.Cause<E>, named: string | undefined): Verdict<E>
 	return { _tag: "Fail", signature: named ?? group, message: Cause.pretty(cause), cause }
 }
 
+/**
+ * The `Discard` an input was rejected with, when that is all that went wrong.
+ * A finalizer that died beside it is a failure: a fixture that cannot be
+ * released must not pass as a skipped input.
+ */
 const discardOf = (cause: Cause.Cause<unknown>): Discard | undefined => {
+	let discard: Discard | undefined
 	for (const reason of cause.reasons) {
-		if (Cause.isDieReason(reason) && reason.defect instanceof Discard) return reason.defect
+		if (!Cause.isDieReason(reason) || !(reason.defect instanceof Discard)) return undefined
+		discard ??= reason.defect
 	}
-	return undefined
+	return discard
 }
+
+/** Sleeps on the real clock: an input's time limit holds in a test that controls the Effect clock too. */
+const realSleep = (ms: number): Effect.Effect<void> =>
+	Effect.callback((resume) => {
+		const timer = setTimeout(() => resume(Effect.void), ms)
+		return Effect.sync(() => clearTimeout(timer))
+	})
 
 // Checking
 
 interface Found<A, E> {
+	/** The simplest input seen for the group. */
 	readonly tested: Tested<A, E> & { readonly value: A }
+	/** The value the group was first seen with. */
+	readonly first: A
 	readonly foundBy: Failure<A, E>["foundBy"]
 	/** A pinned example is a value with no choices behind it. */
 	readonly pinned: boolean
@@ -296,7 +314,8 @@ const checkScoped = <A, E, R>(gen: Gen.Gen<A>, property: Property<A, E, R | Scop
 		const started = performance.now()
 		const rng = new Rng(seed)
 		const found = new Map<string, Found<A, E>>()
-		const labels: Record<string, number> = {}
+		// No prototype: a label may be named `constructor`.
+		const labels: Record<string, number> = Object.create(null)
 		/** Generated inputs judged, which `runs` bounds; pinned and replayed ones are counted apart. */
 		let searched = 0
 		let pinned = 0
@@ -313,7 +332,9 @@ const checkScoped = <A, E, R>(gen: Gen.Gen<A>, property: Property<A, E, R | Scop
 				const result = property(value)
 				return Effect.isEffect(result) ? result : Effect.succeed(result)
 			}).pipe(Effect.scoped, Effect.provideService(CurrentCase, state))
-			const exit = yield* Effect.exit(options.timeout === undefined ? Effect.asSome(body) : Effect.timeoutOption(body, options.timeout))
+			const exit = yield* Effect.exit(
+				timeoutMs === undefined ? Effect.asSome(body) : Effect.raceFirst(Effect.asSome(body), Effect.as(realSleep(timeoutMs), Option.none<void | boolean>())),
+			)
 			const durationMs = performance.now() - before
 			let verdict: Verdict<E>
 			if (Exit.isSuccess(exit)) {
@@ -335,7 +356,8 @@ const checkScoped = <A, E, R>(gen: Gen.Gen<A>, property: Property<A, E, R | Scop
 			if (tested.verdict._tag !== "Fail") return
 			const known = found.get(tested.verdict.signature)
 			if (known !== undefined && (isExample || known.pinned || compareChoices(known.tested.choices, tested.choices) <= 0)) return
-			found.set(tested.verdict.signature, { tested: tested as Found<A, E>["tested"], foundBy: known?.foundBy ?? foundBy, pinned: isExample })
+			const failing = tested as Found<A, E>["tested"]
+			found.set(tested.verdict.signature, { tested: failing, first: known === undefined ? failing.value : known.first, foundBy: known?.foundBy ?? foundBy, pinned: isExample })
 		}
 
 		/** Builds the input the choices describe and judges it. Counts nothing. */
@@ -412,7 +434,8 @@ const checkScoped = <A, E, R>(gen: Gen.Gen<A>, property: Property<A, E, R | Scop
 				return !budgetSpent
 			}),
 			execute,
-			observe: (tested) => Effect.map(probe(new Source({ prefix: tested.choices, size: tested.size }), true), (result) => result.tested),
+			// Suspended: each execution of the effect reads the choices from the start.
+			observe: (tested) => Effect.suspend(() => Effect.map(probe(new Source({ prefix: tested.choices, size: tested.size }), true), (result) => result.tested)),
 			peek: feedback.peek,
 			keep: () => {
 				kept++
@@ -440,15 +463,16 @@ const checkScoped = <A, E, R>(gen: Gen.Gen<A>, property: Property<A, E, R | Scop
 			yield* feedback.novelty
 		}
 
-		// Shrink one input per failure group. A candidate that fails differently is a
-		// failure of its own, and is shrunk in turn while more failures are wanted.
+		// Shrink one input per failure group. A candidate that fails in a way not seen
+		// yet is a failure of its own, and is shrunk in turn while more are wanted. One
+		// that fails like a group already found is dropped: that group's report may be written.
 		const failures: Array<Failure<A, E>> = []
 		const shrunk = new Set<string>()
 		const shrinkingSince = performance.now()
 		for (;;) {
 			const next = [...found].find(([group]) => !shrunk.has(group))
 			if (next === undefined) break
-			const [group, { tested: original, foundBy, pinned: isPinned }] = next
+			const [group, { tested: original, first, foundBy, pinned: isPinned }] = next
 			shrunk.add(group)
 			const result = isPinned || replayed !== undefined
 				? { best: original, steps: 0 }
@@ -458,7 +482,7 @@ const checkScoped = <A, E, R>(gen: Gen.Gen<A>, property: Property<A, E, R | Scop
 							Effect.map(probe(new Source({ prefix: choices, size: original.size }), false), ({ tested }) => {
 								if (tested.verdict._tag !== "Fail") return undefined
 								if (tested.verdict.signature === group) return tested as Found<A, E>["tested"]
-								if (found.size < wanted) record(tested, "shrinking")
+								if (!found.has(tested.verdict.signature) && found.size < wanted) record(tested, "shrinking")
 								return undefined
 							}),
 						{ maxTries: maxShrinks, shouldStop: () => budgetMs !== undefined && performance.now() - shrinkingSince > budgetMs },
@@ -467,7 +491,7 @@ const checkScoped = <A, E, R>(gen: Gen.Gen<A>, property: Property<A, E, R | Scop
 			const failure: Failure<A, E> = {
 				signature: group,
 				value: result.best.value,
-				original: original.value,
+				original: first,
 				message: verdict.message,
 				cause: verdict.cause,
 				replay: isPinned ? undefined : encodeReplay(result.best),
@@ -476,10 +500,10 @@ const checkScoped = <A, E, R>(gen: Gen.Gen<A>, property: Property<A, E, R | Scop
 			}
 			failures.push(failure)
 			if (!isPinned && options.name !== undefined) {
-				// Bookkeeping must not cost the failure it is about.
-				yield* regressions
-					.save(name, { choices: result.best.choices, size: result.best.size, signature: group, value: format(failure.value) })
-					.pipe(Effect.catchCause((cause) => Effect.logWarning(`effect-prop: could not remember the failure of ${name}`, cause)))
+				// Bookkeeping must not cost the failure it is about, a `format` that throws included.
+				yield* Effect.suspend(() => regressions.save(name, { choices: result.best.choices, size: result.best.size, signature: group, value: format(failure.value) })).pipe(
+					Effect.catchCause((cause) => Effect.logWarning(`effect-prop: could not remember the failure of ${name}`, cause)),
+				)
 			}
 		}
 

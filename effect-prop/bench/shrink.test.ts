@@ -103,7 +103,11 @@ const challenges: ReadonlyArray<Challenge<any>> = [
 
 const SEEDS = 30
 const RUNS = 5000
-const median = (xs: ReadonlyArray<number>): number => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)] ?? Number.NaN
+const median = (xs: ReadonlyArray<number>): number => {
+	const sorted = [...xs].sort((a, b) => a - b)
+	const middle = sorted.length >> 1
+	return sorted.length === 0 ? Number.NaN : sorted.length % 2 === 1 ? sorted[middle]! : (sorted[middle - 1]! + sorted[middle]!) / 2
+}
 
 describe.skipIf(process.env.PROP_BENCH === undefined)("shrinking challenges", () => {
 	it("effect-prop against fast-check", async () => {

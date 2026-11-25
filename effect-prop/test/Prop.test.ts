@@ -1,4 +1,5 @@
 import { Cause, ConfigProvider, Context, Data, Effect, Ref } from "effect"
+import { TestClock } from "effect/testing"
 import { describe, expect, it } from "vitest"
 import { Gen, Prop, Regressions, Search, Source } from "../src/index"
 
@@ -146,6 +147,86 @@ describe("check", () => {
 	it("fails an input that outlasts the timeout", async () => {
 		const report = await run(check(Gen.int(0, 10), (n) => (n === 7 ? Effect.never : Effect.void), { runs: 500, timeout: "20 millis", seed: 1 }))
 		expect(report.failures.map((f) => [f.signature, f.value])).toEqual([["Timeout", 7]])
+	})
+
+	it("limits an input by real time, also under a clock the test controls", async () => {
+		const report = await run(
+			check(Gen.int(0, 10), (n) => (n === 7 ? Effect.never : Effect.void), { runs: 500, timeout: "20 millis", seed: 1 }).pipe(Effect.provide(TestClock.layer())),
+		)
+		expect(report.failures.map((f) => [f.signature, f.value])).toEqual([["Timeout", 7]])
+	})
+
+	it("fails an input whose fixture cannot be released, discarded or not", async () => {
+		const report = await run(
+			check(
+				Gen.int(0, 3),
+				(n) => Effect.gen(function* () {
+					yield* Effect.addFinalizer(() => (n === 2 ? Effect.die(new Error("cannot release")) : Effect.void))
+					yield* Prop.assume(n !== 2)
+				}),
+				{ runs: 200, seed: 1 },
+			),
+		)
+		expect(report.failures.map((f) => f.value)).toEqual([2])
+		expect(report.failures[0]!.message).toContain("cannot release")
+	})
+
+	it("reports the input a failure was first seen with beside the simplest", async () => {
+		// The search sees 9 and then the simpler 5; neither shrinks further.
+		const values = [9, 5]
+		const report = await run(
+			check(Gen.map(Gen.int(0, 1), (i) => values[i]!), () => false, {
+				runs: 10,
+				seed: 1,
+				search: (r) => Effect.gen(function* () {
+					yield* r.execute({ prefix: [0] })
+					yield* r.execute({ prefix: [1] })
+				}),
+			}),
+		)
+		expect(report.failures.map((f) => [f.original, f.value])).toEqual([[9, 9]])
+		const reversed = await run(
+			check(Gen.map(Gen.int(0, 1), (i) => values[1 - i]!), () => false, {
+				runs: 10,
+				seed: 1,
+				maxShrinks: 0,
+				search: (r) => Effect.gen(function* () {
+					yield* r.execute({ prefix: [1] })
+					yield* r.execute({ prefix: [0] })
+				}),
+			}),
+		)
+		// First seen as 9 (choice 1), then as the simpler 5 (choice 0).
+		expect(reversed.failures.map((f) => [f.original, f.value])).toEqual([[9, 5]])
+	})
+
+	it("observes an input the same way each time the effect runs", async () => {
+		const seen: Array<boolean> = []
+		await run(
+			check(Gen.boolean, (b) => { seen.push(b) }, {
+				runs: 1,
+				search: (r) => Effect.gen(function* () {
+					const tested = yield* r.execute({ prefix: [1] })
+					const again = r.observe(tested)
+					yield* again
+					yield* again
+				}),
+			}),
+		)
+		expect(seen).toEqual([true, true, true])
+	})
+
+	it("counts a label named like an Object.prototype key", async () => {
+		const report = await run(check(Gen.int(), () => Prop.label("constructor"), { runs: 7 }))
+		expect(report.labels.constructor).toBe(7)
+		expect(Prop.formatReport(report)).toContain("100.0% constructor")
+	})
+
+	it("keeps a failure whose value cannot be formatted for the regression store", async () => {
+		const report = await run(
+			check(Gen.int(), () => false, { name: "unformattable", runs: 5, seed: 1, format: () => { throw new Error("no format") } }).pipe(Effect.provide(Regressions.layerMemory)),
+		)
+		expect(report.failures).toHaveLength(1)
 	})
 
 	it("runs pinned examples first, whatever the generator produces", async () => {

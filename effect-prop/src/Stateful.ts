@@ -27,7 +27,7 @@ export interface CommandsOptions<Model, C> {
 
 /** A sequence of commands, each generated for the model state the earlier ones lead to. */
 export const commands = <Model, C extends Command<Model, any, any, any>>(options: CommandsOptions<Model, C>): Gen.Gen<Array<C>> => {
-	const maxLength = options.maxLength ?? 50
+	const { max: maxLength } = Gen.lengthRange("Stateful.commands", { maxLength: options.maxLength ?? 50 })
 	return Gen.make((source) => {
 		let model = options.initial
 		return Gen.repeat(source, "command", 0, maxLength, () => {
@@ -60,7 +60,8 @@ export const run = <Model, System, E, R>(
 		for (const [step, command] of sequence.entries()) {
 			yield* Prop.label(command.name)
 			const named = Prop.signature(`command ${command.name}`)
-			const held = yield* Effect.tapCause(command.run(system, model), () => named)
+			// Suspended, so a command that throws before it returns an Effect is named too.
+			const held = yield* Effect.tapCause(Effect.suspend(() => command.run(system, model)), () => named)
 			if (held === false) {
 				yield* named
 				const message = `command ${step + 1} (${command.name}) returned false: the system and the model disagree`

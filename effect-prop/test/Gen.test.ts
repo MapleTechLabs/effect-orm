@@ -70,7 +70,12 @@ describe("Gen", () => {
 			[Gen.number({ min: 0.1, max: 0.2 }), (n) => n >= 0.1 && n <= 0.2],
 			[Gen.number(), (n) => Number.isFinite(n)],
 		]
-		for (const [gen, valid] of cases) for (const value of Gen.sample(gen, { count: 500, seed: 3 })) expect(valid(value), String(value)).toBe(true)
+		for (const [gen, valid] of cases) {
+			const values = Gen.sample(gen, { count: 500, seed: 3 })
+			// A generator that discards everything would otherwise pass on nothing.
+			expect(values).toHaveLength(500)
+			for (const value of values) expect(valid(value), String(value)).toBe(true)
+		}
 	})
 
 	it("reaches both ends of an integer range and the special doubles", () => {
@@ -173,7 +178,45 @@ describe("Gen", () => {
 		expect(Gen.sample(Gen.fromArbitrary(dry), { count: 3 })).toEqual([])
 	})
 
+	it("struct makes a field of every key, and weights near the top of the range still choose", () => {
+		const made = Gen.sample(Gen.struct({ ["__proto__"]: Gen.constant(1), a: Gen.constant(2) }), { count: 1 })[0]!
+		expect(Object.keys(made)).toEqual(["__proto__", "a"])
+		expect(Object.getPrototypeOf(made)).toBe(Object.prototype)
+		const chosen = new Set(Gen.sample(Gen.weighted([1e308, Gen.constant("a")], [1e308, Gen.constant("b")]), { count: 200 }))
+		expect(chosen).toEqual(new Set(["a", "b"]))
+	})
+
+	it("gen() runs the body's finally blocks when a yielded generator discards", () => {
+		let closed = 0
+		const gen = Gen.gen(function* () {
+			try {
+				return yield* Gen.int().pipe(Gen.filter(() => false))
+			} finally {
+				closed++
+			}
+		})
+		expect(Gen.generate(gen, new Source.Source({ rng: new Source.Rng(1) }))).toBeInstanceOf(Source.Discard)
+		expect(closed).toBe(1)
+	})
+
+	it("two recursive generators sharing a label each count their own depth", () => {
+		type Tree = number | readonly [Tree]
+		const depth = (t: Tree): number => (typeof t === "number" ? 0 : 1 + depth(t[0]))
+		const inner = Gen.recursive<Tree>(Gen.constant(0), (self) => Gen.tuple(self), { maxDepth: 3, label: "node" })
+		// The outer one is one level deep whenever it reaches `inner`, which must still get its own three.
+		const outer = Gen.recursive<Tree>(Gen.constant(0), () => inner, { maxDepth: 1, label: "node" })
+		expect(Math.max(...Gen.sample(outer, { count: 400, seed: 1 }).map(depth))).toBe(3)
+	})
+
+	it("unicodeChar reaches U+007F, and a size is a whole number", () => {
+		expect(Gen.sample(Gen.unicodeChar, { count: 20_000, seed: 1 })).toContain("\u007f")
+		expect(new Source.Source({ size: 1.5 }).size).toBe(2)
+	})
+
 	it("rejects ranges it cannot honour", () => {
+		expect(() => Gen.array(Gen.constant(0), { minLength: Number.POSITIVE_INFINITY })).toThrow(RangeError)
+		expect(() => Gen.array(Gen.boolean, { maxLength: 1.5 })).toThrow(RangeError)
+		expect(Gen.sample(Gen.array(Gen.boolean, { maxLength: Number.POSITIVE_INFINITY }), { count: 3 })).toHaveLength(3)
 		expect(() => Gen.uniqueArray(Gen.int(), { minLength: 5, maxLength: 2 })).toThrow(RangeError)
 		expect(() => Gen.int(3, 1)).toThrow(RangeError)
 		expect(() => Gen.int(0.5, 1)).toThrow(RangeError)

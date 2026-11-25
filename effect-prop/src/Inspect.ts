@@ -39,10 +39,12 @@ const MAX_DISCARD_RATE = 0.2
 
 export const inspect = <A>(gen: Gen.Gen<A>, options: InspectOptions<A> = {}): Inspection<A> => {
 	const tries = options.samples ?? 2000
+	if (!Number.isSafeInteger(tries) || tries < 1) throw new RangeError(`Inspect.inspect: samples must be a positive integer, got ${tries}`)
 	const key = options.key ?? ((value: A): string => Formatter.format(value))
 	const rng = new Rng(options.seed ?? 0)
 	const seen = new Set<string>()
-	const labels: Record<string, number> = {}
+	// No prototype: a label may be named `constructor`.
+	const labels: Record<string, number> = Object.create(null)
 	const invalid: Array<A> = []
 	const lengths: Array<number> = []
 	let invalidCount = 0

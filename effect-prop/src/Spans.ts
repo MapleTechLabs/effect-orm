@@ -29,7 +29,11 @@ export const layer: Layer.Layer<never> = Layer.effectContext(
 			context: inner.context,
 		})
 		const service: FeedbackService = {
-			begin: Effect.sync(() => pending.clear()),
+			begin: Effect.sync(() => {
+				seen.clear()
+				pending.clear()
+				peeked = []
+			}),
 			novelty: Effect.sync(() => {
 				const count = pending.size
 				for (const edge of pending) seen.add(edge)

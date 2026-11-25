@@ -99,6 +99,17 @@ export class Tracker {
 		return fresh
 	}
 
+	/** Forgets what was reached, keeping what is known to exist: the next check starts from nothing. */
+	reset(): void {
+		this.suspects = []
+		for (const script of this.scripts.values()) {
+			for (const fn of script.functions.values()) {
+				fn.reached = false
+				for (const key of fn.branches.keys()) fn.branches.set(key, false)
+			}
+		}
+	}
+
 	/**
 	 * Makes the functions that had not run when collection started known, so the
 	 * summary can name the ones no input reaches. A function that had already run
@@ -259,7 +270,7 @@ export const layer = (options: CoverageOptions): Layer.Layer<never> =>
 				}
 			})
 
-			const begin = Effect.asVoid(Effect.promise(() => session.post("Profiler.takePreciseCoverage")))
+			const begin = Effect.promise(() => session.post("Profiler.takePreciseCoverage")).pipe(Effect.map(() => tracker.reset()))
 			const service: FeedbackService = { begin, novelty: take(true), peek: take(false), summary }
 			return service
 		}),

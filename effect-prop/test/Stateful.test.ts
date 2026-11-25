@@ -96,9 +96,32 @@ describe("Stateful", () => {
 	})
 
 	it("reports each command once per sequence it appears in", async () => {
-		const report = await Effect.runPromise(Prop.check(sequences, (sequence) => Stateful.run<Model, RingQueue, never, never>([], new RingQueue(1000), sequence), { runs: 300, seed: 2 }))
+		/** A bounded queue that is right: a push onto a full one drops the oldest. */
+		class BoundedQueue extends RingQueue {
+			private readonly kept: Array<number> = []
+			override push(value: number): void {
+				this.kept.push(value)
+				if (this.kept.length > CAPACITY) this.kept.shift()
+			}
+			override pop(): number | undefined {
+				return this.kept.shift()
+			}
+			override get size(): number {
+				return this.kept.length
+			}
+		}
+		const report = await Effect.runPromise(Prop.check(sequences, (sequence) => Stateful.run<Model, RingQueue, never, never>([], new BoundedQueue(CAPACITY), sequence), { runs: 300, seed: 2 }))
+		expect(Prop.passed(report)).toBe(true)
+		expect(report.runs).toBe(300)
 		for (const count of Object.values(report.labels)) expect(count).toBeLessThanOrEqual(300)
 		expect(Object.keys(report.labels).sort()).toEqual(["pop", "push", "size"])
+	})
+
+	it("names a command that throws before it returns an Effect, and refuses a fractional length", async () => {
+		const thrower: QueueCommand = { name: "explode", show: "explode", next: (m) => m, run: () => { throw new Error("thrown, not failed") } }
+		const report = await Effect.runPromise(Prop.check(Gen.constant([thrower]), (sequence) => Stateful.run<Model, RingQueue, never, never>([], new RingQueue(CAPACITY), sequence), { runs: 1 }))
+		expect(report.failures.map((f) => f.signature)).toEqual(["command explode"])
+		expect(() => Stateful.commands<Model, QueueCommand>({ initial: [], command: () => Gen.constant(size), maxLength: 1.5 })).toThrow(RangeError)
 	})
 })
 
@@ -121,6 +144,9 @@ describe("Inspect", () => {
 		expect(narrow.distinct).toBe(2)
 		expect(Inspect.inspect(Gen.int().pipe(Gen.filter(() => false)), { samples: 50 }).problems).toEqual(["every one of 50 tries was discarded"])
 		expect(Inspect.inspect(Gen.boolean).problems).toEqual([])
+		// A label named like an Object.prototype key is a label; one never produced is reported missing.
+		expect(Inspect.inspect(Gen.boolean, { label: () => "toString", expect: ["toString", "constructor"] }).problems).toEqual(["never produced: constructor"])
+		expect(() => Inspect.inspect(Gen.boolean, { samples: 1.5 })).toThrow(RangeError)
 		expect(Inspect.inspect(Gen.map(Gen.int(), () => "x"), { samples: 10 }).problems).toEqual(['all 10 values are the same: "x"'])
 	})
 })

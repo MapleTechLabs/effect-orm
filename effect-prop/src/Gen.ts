@@ -51,7 +51,17 @@ export const gen = <A>(body: () => Generator<Gen<any>, A>): Gen<A> =>
 	make((source) => {
 		const iterator = body()
 		let step = iterator.next()
-		while (!step.done) step = iterator.next(step.value.run(source))
+		while (!step.done) {
+			let value: unknown
+			try {
+				value = step.value.run(source)
+			} catch (error) {
+				// A discard, or a bug in the yielded generator: let the body's `finally` blocks run.
+				iterator.return?.(undefined as never)
+				throw error
+			}
+			step = iterator.next(value)
+		}
 		return step.value
 	})
 
@@ -222,13 +232,16 @@ export const oneOf = <const G extends ReadonlyArray<Gen<any>>>(...gens: G): Gen<
 export const weighted = <const G extends ReadonlyArray<readonly [weight: number, gen: Gen<any>]>>(...entries: G): Gen<Type<G[number][1]>> => {
 	const usable = entries.filter(([weight]) => weight > 0)
 	if (usable.length === 0) throw new RangeError("Gen.weighted: needs at least one entry with a positive weight")
-	const total = usable.reduce((sum, [weight]) => sum + weight, 0)
+	// As shares of the largest, so that weights near the top of the number range do not sum to Infinity.
+	const largest = usable.reduce((max, [weight]) => Math.max(max, weight), 0)
+	const shares = usable.map(([weight]) => weight / largest)
+	const total = shares.reduce((sum, share) => sum + share, 0)
 	return make((source) => {
 		// Only the index is recorded, so replay does not depend on the weights.
 		const index = source.drawWith(usable.length - 1, (rng) => {
 			let at = rng.float() * total
 			for (let i = 0; i < usable.length; i++) {
-				at -= usable[i]![0]
+				at -= shares[i]!
 				if (at < 0) return i
 			}
 			return usable.length - 1
@@ -259,10 +272,12 @@ export const array = <A>(item: Gen<A>, options: ArrayOptions = {}): Gen<Array<A>
 	return make((source) => repeat(source, "item", min, max, () => item.run(source)))
 }
 
-const lengthRange = (name: string, options: ArrayOptions): { readonly min: number; readonly max: number } => {
+export const lengthRange = (name: string, options: ArrayOptions): { readonly min: number; readonly max: number } => {
 	const min = options.minLength ?? 0
 	const max = options.maxLength ?? Number.POSITIVE_INFINITY
-	if (min < 0 || min > max) throw new RangeError(`${name}: invalid length range ${min}..${max}`)
+	// A minimum of Infinity would never stop; a fraction would let one element past the maximum.
+	const whole = Number.isSafeInteger(min) && (Number.isSafeInteger(max) || max === Number.POSITIVE_INFINITY)
+	if (!whole || min < 0 || min > max) throw new RangeError(`${name}: invalid length range ${min}..${max}`)
 	return { min, max }
 }
 
@@ -332,11 +347,8 @@ export const tuple = <const G extends ReadonlyArray<Gen<any>>>(...gens: G): Gen<
 
 export const struct = <const F extends Record<string, Gen<any>>>(fields: F): Gen<{ -readonly [K in keyof F]: Type<F[K]> }> => {
 	const entries = Object.entries(fields)
-	return make((source) => {
-		const out: Record<string, unknown> = {}
-		for (const [name, g] of entries) out[name] = g.run(source)
-		return out as any
-	})
+	// As entries, so a field named `__proto__` is a field and not the result's prototype.
+	return make((source) => Object.fromEntries(entries.map(([name, g]) => [name, g.run(source)])) as any)
 }
 
 // Text
@@ -355,7 +367,7 @@ const codePoint = (min: number, max: number): Gen<string> => map(int(min, max), 
 /** Any Unicode scalar value (never a lone surrogate), mostly ASCII. Shrinks toward `a`. */
 export const unicodeChar: Gen<string> = weighted(
 	[6, asciiChar],
-	[1, codePoint(0x00, 0x1f)],
+	[1, oneOf(codePoint(0x00, 0x1f), constant("\u007f"))],
 	[2, codePoint(0x80, 0x24f)],
 	[2, oneOf(codePoint(0x250, 0xd7ff), codePoint(0xe000, 0xffff))],
 	[1, codePoint(0x1_0000, 0x10_ffff)],
@@ -372,7 +384,8 @@ export const string = (options: StringOptions = {}): Gen<string> => map(array(op
 // Recursion
 
 let recursiveIds = 0
-const depths = new WeakMap<Source, Map<string, number>>()
+/** How deep each recursive generator is on a source, by the generator: two may share a span label. */
+const depths = new WeakMap<Source, Map<object, number>>()
 
 export interface RecursiveOptions {
 	/** How deep `step` may nest. Default 5. */
@@ -392,16 +405,16 @@ export const recursive = <A>(base: Gen<A>, step: (self: Gen<A>) => Gen<A>, optio
 	const self: Gen<A> = make((source) => {
 		let perSource = depths.get(source)
 		if (perSource === undefined) depths.set(source, (perSource = new Map()))
-		const depth = perSource.get(label) ?? 0
+		const depth = perSource.get(self) ?? 0
 		const levels = perSource
 		return source.span(label, () => {
 			// Deeper nodes recurse less, so sizes stay finite.
 			if (depth >= maxDepth || !source.bool(0.7 / (1 + depth / 2))) return base.run(source)
-			levels.set(label, depth + 1)
+			levels.set(self, depth + 1)
 			try {
 				return stepped.run(source)
 			} finally {
-				levels.set(label, depth)
+				levels.set(self, depth)
 			}
 		})
 	})
