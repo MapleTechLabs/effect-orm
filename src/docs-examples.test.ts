@@ -1270,8 +1270,8 @@ describe("docs/updates-and-deletes.md", () => {
 			.orderBy(["id", "asc"])
 			.limit(20000)
 		const compiled = MySQL.compileUnsafe(chunk, { runId: "r" })
-		expect(oneLine(compiled.sql)).toBe("DELETE FROM `steps` WHERE `runId` = ? ORDER BY `id` ASC LIMIT ?")
-		expect(compiled.parameters).toEqual(["r", 20000])
+		expect(oneLine(compiled.sql)).toBe("DELETE FROM `steps` WHERE `runId` = ? ORDER BY `id` ASC LIMIT 20000")
+		expect(compiled.parameters).toEqual(["r"])
 		// @ts-expect-error -- Postgres has no DELETE ... LIMIT
 		expect(() => PG.compileUnsafe(chunk, { runId: "r" })).toThrow(/orderBy\(\) and limit\(\) have no meaning for the postgres dialect/)
 	})
