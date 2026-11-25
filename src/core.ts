@@ -137,6 +137,7 @@ export {
 	type InsertValue,
 	type OnConflictDoNothing,
 	type OnConflictDoUpdate,
+	type OnDuplicateKeyUpdate,
 	excluded,
 	excludedAll,
 	insertInto,

@@ -176,6 +176,81 @@ client's `withTransaction`. `isolationLevel` (`read committed`, `repeatable read
 several statements in one; `@effect/sql-mysql2` does (it sets `multipleStatements`). An access
 mode alone is one statement. `deferrable` is refused.
 
+## Upsert with `onDuplicateKeyUpdate`
+
+MySQL has no `ON CONFLICT`; its upsert is `INSERT ... ON DUPLICATE KEY UPDATE`, which
+`onDuplicateKeyUpdate({ set })` writes. `set` is a record, a callback of the existing row and the
+proposed one, `excluded(columns)` or `excludedAll(except?)`, as for `onConflictDoUpdate`:
+
+```ts title="mysql-upsert.ts"
+import * as MySQL from "@maple-dev/effect-orm/mysql"
+
+export const Counters = MySQL.table("counters", {
+	columns: { id: MySQL.bigint, key: MySQL.varchar(32), count: MySQL.int, note: MySQL.text },
+	primaryKey: ["id"],
+})
+
+export const bump = MySQL.insertInto(Counters)
+	.values({ id: 1, key: "a", count: MySQL.param.int("n"), note: "x" })
+	.onDuplicateKeyUpdate({ set: ($, excluded) => ({ count: $.count.add(excluded.count) }) })
+
+export const mysql = MySQL.compileUnsafe(bump, { n: 1 })
+// INSERT INTO `counters` (`id`, `key`, `count`, `note`)
+// VALUES (?, ?, ?, ?) AS `excluded`
+// ON DUPLICATE KEY UPDATE `count` = `counters`.`count` + `excluded`.`count`
+
+export const mariadb = MySQL.compileUnsafe(bump, { n: 1 }, { dialect: MySQL.mariadbDialect })
+// ... ON DUPLICATE KEY UPDATE `count` = `counters`.`count` + VALUES(`count`)
+
+// MySQL before 8.0.19 has no row alias: read the proposed row as MariaDB does.
+export const mysql57Dialect = { ...MySQL.mysqlDialect, clauses: { ...MySQL.mysqlDialect.clauses, onDuplicateKey: "valuesFunction" as const } }
+export const mysql57 = MySQL.compileUnsafe(bump, { n: 1 }, { dialect: mysql57Dialect })
+// ... ON DUPLICATE KEY UPDATE `count` = `counters`.`count` + VALUES(`count`)
+```
+
+- It fires on a conflict with **any** unique key, the primary key or a UNIQUE index, and has no
+  target and no `where`.
+- **Upserts on `mysqlDialect` need MySQL 8.0.19 or later**, for the row alias
+  `VALUES (...) AS excluded`. The rest of the dialect targets 8.0.17. On an older server, spread
+  `mysqlDialect` with `clauses.onDuplicateKey: "valuesFunction"`, as above: it reads `VALUES(col)`
+  as MariaDB does, which MySQL 8.0.20+ deprecates. MariaDB always reads `VALUES(col)`.
+- `excludedAll` leaves out the declared `primaryKey` and the `tenantColumn`, since the conflict
+  may be on another key, whose row may be another tenant's. On a table that declares no key (an
+  `external` one), a bare `excludedAll()` is refused: put the key in `except`. A row that leaves
+  a column out writes `DEFAULT` there, and `excludedAll` copies that default over the existing
+  value.
+- A proposed-row column the SET reads but no row writes joins the insert with `DEFAULT` cells.
+- Assignments run left to right; a later one reads the values the earlier ones wrote.
+- An inserted row counts as 1 affected row and an updated one as 2. An unchanged one counts 0,
+  or 1 with `CLIENT_FOUND_ROWS`, which mysql2 sets by default.
+- In raw SQL inside a `set`, qualify columns (`` `counters`.`count` ``): the row alias has the
+  same column names, so an unqualified one is ambiguous on MySQL.
+- VALUES rows only: with `select`, compiling is a defect. On a table with a `tenantColumn` it is
+  `"cross-tenant"`, since another tenant's row can hold the duplicate key.
+
+`onDuplicateKeyDoNothing()` skips a duplicate instead: it writes
+`ON DUPLICATE KEY UPDATE col = table.col` on the first written column, an update that changes
+nothing.
+
+**It is not `INSERT IGNORE`, and code moving from Drizzle's `.ignore()` should know why.**
+`IGNORE` downgrades every error it can to a warning, not only the duplicate key: a string too
+long for its column is truncated and stored, a NULL in a NOT NULL column is stored as `0` or
+`''`, a value out of range is clamped, and a row whose foreign key has no parent is silently
+dropped. `onDuplicateKeyDoNothing` skips only the duplicate; those still fail the statement
+(`Data too long for column`, and so on).
+
+- `affectedRows` for a skipped row is 1 when the connection sets `CLIENT_FOUND_ROWS`, which
+  mysql2 (and so `@effect/sql-mysql2`) does by default, and 0 without it (mysql2's
+  `flags: ["-FOUND_ROWS"]`). An inserted row is 1 either way. Checked on MySQL 8.4 and
+  MariaDB 11.4.
+- It is still an UPDATE of the matched row: a `BEFORE UPDATE` trigger on the table runs and
+  writes what it sets, even on another tenant's row. Then `affectedRows` is 2 and `insertId` is
+  the matched row's id.
+- It keeps the rows' tenant scope: the statement itself writes no existing row (a trigger
+  aside).
+
+See [On duplicate key update](./inserts.md#on-duplicate-key-update).
+
 ## Types
 
 | Type | SQL | Decodes to |
@@ -245,7 +320,8 @@ another dialect is refused in the type and at compile time.
   or `CAST`.
 - **Not supported, and refused at compile time:** `RETURNING` (read an `AUTO_INCREMENT` key and
   the affected rows with `Db.runWrite`, [Write results](./database.md#write-results)), `ON CONFLICT` (MySQL's
-  `ON DUPLICATE KEY UPDATE` reacts to every unique key, not one target), `DISTINCT ON`, `ILIKE`,
+  `ON DUPLICATE KEY UPDATE` reacts to every unique key, not one target: use
+  [`onDuplicateKeyUpdate`](#upsert-with-onduplicatekeyupdate)), `DISTINCT ON`, `ILIKE`,
   `FOR NO KEY UPDATE` and `FOR KEY SHARE`. MariaDB has no lock `OF` at all.
 - **Row locks:** `forUpdate` and `forShare` with `skipLocked`, `noWait` and, on MySQL, `of`.
   MariaDB writes a shared lock as `LOCK IN SHARE MODE`.

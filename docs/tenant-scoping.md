@@ -169,6 +169,16 @@ Unions, inserts, updates and deletes have `.crossTenant()` too. Only the stateme
 counts: a `.crossTenant()` subquery or CTE makes the outer query `"cross-tenant"`, and the outer
 query declares it again.
 
+A MySQL `onDuplicateKeyUpdate` into a table with a tenant column is always `"cross-tenant"`, even
+when every row pins one tenant: it fires on any unique key and has no `where`, so a key that
+does not hold the tenant column can match, and update, another tenant's row. Where every unique
+key of the table includes the tenant column, a conflict can only be with the same tenant's row;
+declare that with `.crossTenant()`. Its `excludedAll` never copies the tenant column, so a match
+on another tenant's row does not move that row into yours. `onDuplicateKeyDoNothing` keeps the
+rows' scope, since the statement writes no existing row; a `BEFORE UPDATE` trigger on the table
+still runs on the matched row, whoever's it is. See
+[On duplicate key update](./inserts.md#on-duplicate-key-update).
+
 _(Backed by `docs/tenant-scoping.md > crossTenant() is the explicit opt-out`.)_
 
 ## `route(tag)`

@@ -336,7 +336,9 @@ console.log(compiled.sql)
 
 Run it with `Db.run(save, params)` to get the written row back, decoded. SQLite and D1 accept the
 same clause and `returning`. MySQL and ClickHouse have no `ON CONFLICT`, and compiling one for
-them is a defect: on ClickHouse, deduplicate with a `ReplacingMergeTree`. `PG.excluded([...])`
+them is a defect: on MySQL and MariaDB, use `onDuplicateKeyUpdate({ set })`
+([On duplicate key update](./inserts.md#on-duplicate-key-update)); on ClickHouse, deduplicate
+with a `ReplacingMergeTree`. `PG.excluded([...])`
 and `PG.excludedAll()` copy columns from the proposed row without listing each one; see
 [On conflict](./inserts.md#on-conflict).
 <!-- /dialect -->

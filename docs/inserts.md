@@ -276,8 +276,9 @@ RETURNING "key" AS "key", "count" AS "count"
   with `returning`, returns nothing; the same goes for a row `onConflictDoNothing` skips.
 - Calling either again replaces the clause. ClickHouse has no `ON CONFLICT` (deduplicate with a
   `ReplacingMergeTree` instead), and MySQL's `ON DUPLICATE KEY UPDATE` reacts to every unique key
-  rather than one target, so compiling one for either is a `QueryBuilderDefect`. SQLite does not
-  take `{ constraint: "name" }` as a target.
+  rather than one target, so compiling one for either is a `QueryBuilderDefect`; on MySQL and
+  MariaDB, use [`onDuplicateKeyUpdate`](#on-duplicate-key-update). SQLite does not take
+  `{ constraint: "name" }` as a target.
 
 ### Set from the proposed row
 
@@ -317,7 +318,104 @@ ON CONFLICT ("key") DO UPDATE SET "count" = "excluded"."count"
 - To mix copied columns with other values (`updatedAt: now()`), use the callback form:
   `set: ($, excluded) => ({ name: excluded.name, updatedAt: PG.now() })`.
 - The dialect writes the SQL that reads the proposed row, so the same `set` value works on any
-  dialect with an upsert: Postgres, SQLite and D1 all write `"excluded"."col"`.
+  dialect with an upsert: Postgres, SQLite and D1 all write `"excluded"."col"`, MySQL
+  `` `excluded`.`col` `` and MariaDB `` VALUES(`col`) ``.
+
+### On duplicate key update
+
+MySQL and MariaDB have `INSERT ... ON DUPLICATE KEY UPDATE` instead of `ON CONFLICT`.
+`onDuplicateKeyUpdate({ set })` writes it. `set` takes the same forms as `onConflictDoUpdate`'s:
+a record, a callback of the existing row and the proposed one, `excluded(columns)` or
+`excludedAll(except?)`.
+
+```ts
+const Counters = MySQL.table("counters", {
+	columns: { id: MySQL.bigint, key: MySQL.varchar(32), count: MySQL.int, note: MySQL.text },
+	primaryKey: ["id"],
+})
+
+// Add to the existing count.
+MySQL.insertInto(Counters)
+	.values({ id: 1, key: "a", count: 1, note: "x" })
+	.onDuplicateKeyUpdate({ set: ($, excluded) => ({ count: $.count.add(excluded.count) }) })
+
+// Copy every column the rows write, but not the primary key.
+MySQL.insertInto(Counters)
+	.values([
+		{ id: 1, key: "a", count: 1, note: "x" },
+		{ id: 2, key: "b", count: 1, note: "y" },
+	])
+	.onDuplicateKeyUpdate({ set: MySQL.excludedAll() })
+```
+
+```sql
+-- MySQL
+INSERT INTO `counters` (`id`, `key`, `count`, `note`)
+VALUES (?, ?, ?, ?) AS `excluded`
+ON DUPLICATE KEY UPDATE `count` = `counters`.`count` + `excluded`.`count`
+
+-- MariaDB
+INSERT INTO `counters` (`id`, `key`, `count`, `note`)
+VALUES (?, ?, ?, ?)
+ON DUPLICATE KEY UPDATE `count` = `counters`.`count` + VALUES(`count`)
+```
+
+- It fires when a row conflicts on **any** unique key: the primary key or any UNIQUE index.
+  There is no target to name one, and no `where`. A row that conflicts on a key you did not
+  expect updates that row, which may be another tenant's.
+- MySQL reads the proposed row through a row alias, `VALUES (...) AS excluded`, which needs
+  MySQL 8.0.19 or later (it deprecates `VALUES(col)`). MariaDB has no row alias and reads
+  `VALUES(col)`. A table named `excluded` cannot take it on MySQL: compiling is a
+  `QueryBuilderDefect`. For an older MySQL, see [MySQL](./mysql.md#upsert-with-onduplicatekeyupdate).
+- `excludedAll` copies the columns the insert writes, except the table's declared
+  `primaryKey` and its `tenantColumn`. When the conflict is on another unique key, copying the
+  proposed row's key would change the existing row's key, and copying its tenant would move
+  another tenant's row into yours. A table that declares no key (an `external` one) must name
+  it: a bare `excludedAll()` there is a `QueryBuilderDefect`; write `excludedAll(["id"])`.
+- A row that leaves a column out writes `DEFAULT` in that cell, and `excludedAll` copies that
+  default over the existing row's value. Leave such a column out of the SET (`except`), or
+  write it in every row.
+- When the SET reads a column of the proposed row that no row writes, the insert adds that
+  column with a `DEFAULT` cell in every row, so the proposed row holds the column's default,
+  as Postgres's `excluded` does. (MySQL's row alias would have no such column, and MariaDB's
+  `VALUES(col)` of one is NULL.) A name that is not a column is `undefined` on both dialects.
+- The assignments run left to right, and a later one reads the existing row as the earlier ones
+  left it: in `{ a: $.a.add(1), b: $.a }`, `b` gets the new `a`.
+- MySQL counts an inserted row as 1 affected row and an updated one as 2. A row the update left
+  unchanged counts 0, or 1 with `CLIENT_FOUND_ROWS`, which mysql2 sets by default.
+- Inside raw SQL in a `set` (`rawExpr`, `sql`), qualify columns: on MySQL the row alias has the
+  same column names as the table, so an unqualified `count` is ambiguous. `$` and `excluded`
+  qualify for you.
+- It takes `values` rows only; with `select` compiling is a `QueryBuilderDefect`. Calling it
+  again replaces the clause, as `onConflict*` does. Other dialects refuse it with a
+  `QueryBuilderDefect`.
+- It is always `"cross-tenant"` on a table with a `tenantColumn`; see [Tenant scope](#tenant-scope).
+
+`onDuplicateKeyDoNothing()` skips a row that conflicts on any unique key. It writes
+`ON DUPLICATE KEY UPDATE col = table.col` on the first column the insert writes: an update that
+changes nothing, so the existing row and its `ON UPDATE` columns stay as they are.
+
+```sql
+INSERT INTO `counters` (`id`, `key`, `count`, `note`)
+VALUES (?, ?, ?, ?)
+ON DUPLICATE KEY UPDATE `id` = `counters`.`id`
+```
+
+- It is not `INSERT IGNORE` (Drizzle's `.ignore()`). `IGNORE` skips a duplicate too, but it also
+  turns other errors into warnings and writes the row anyway: a value too long for its column
+  is cut short, a NULL in a NOT NULL column becomes the type's zero value, and a row with no
+  parent for a foreign key is dropped. With `onDuplicateKeyDoNothing` those still fail.
+- It is still an UPDATE of the matched row. The statement writes nothing to it, but a
+  `BEFORE UPDATE` trigger on the table runs and writes what it sets, even on another tenant's
+  row; then `affectedRows` is 2 and `insertId` is the matched row's id.
+- Without such a trigger, a skipped row counts as 1 affected row when the connection sets
+  `CLIENT_FOUND_ROWS`, which mysql2 does by default, and as 0 without it. An inserted row
+  counts as 1 either way, so with mysql2's default `affectedRows` cannot tell a skipped row
+  from an inserted one.
+- Like any duplicate check, it locks the existing row it matched until the transaction ends.
+- VALUES rows only, on MySQL and MariaDB; otherwise compiling is a `QueryBuilderDefect`. It keeps
+  the rows' tenant scope: the statement writes no existing row (a trigger aside, above), and
+  learns of another tenant's key no more than a plain INSERT's duplicate-key error does.
 
 ## Settings
 
@@ -345,6 +443,11 @@ target, or pin it in the update's `where`, for example
 `where: (existing, excluded) => existing.orgId.eq(excluded.orgId)`. A constraint name alone
 does not prove its columns. Without this evidence the upsert is `"cross-tenant"`, even if
 the inserted values name one tenant. OR conditions do not supply tenant evidence.
+`onDuplicateKeyUpdate` has neither a target nor a `where`, and fires on any unique key, so it
+is always `"cross-tenant"`: declare it with `.crossTenant()` where every unique key of the
+table holds the tenant column. `onDuplicateKeyDoNothing` writes no existing row, so it keeps the
+rows' scope; a `BEFORE UPDATE` trigger on the table still runs on the matched row, which may be
+another tenant's.
 
 An `INSERT ... SELECT` into a tenant table is `"single-tenant"` when the SELECT is, and each row
 takes its tenant from a tenant column of the source or from the same param that pins the SELECT.
@@ -370,10 +473,11 @@ A batch that mixes tenants on purpose, such as an ingest flush, declares it with
 | `onConflictDoUpdate` setting no or unknown columns | `QueryBuilderError` `InvalidArguments`  |
 | `excluded` / `excludedAll` naming an unknown column | `QueryBuilderError` `InvalidArguments` |
 | `onConflict*` without ON CONFLICT, a bad target   | `QueryBuilderDefect`                     |
+| `onDuplicateKeyUpdate` / `onDuplicateKeyDoNothing` on another dialect or with `select`; `onDuplicateKeyUpdate` into a table named `excluded` on MySQL, or a bare `excludedAll()` without a declared `primaryKey` | `QueryBuilderDefect` |
 | `settings` without insert settings, a bad name    | `QueryBuilderDefect`                     |
 
-_(Backed by `src/ch/insert.test.ts`, `src/database/database.test.ts` and
-`tests/database.clickhouse.test.ts`.)_
+_(Backed by `src/ch/insert.test.ts`, `src/mysql/upsert.test.ts`, `src/database/database.test.ts`
+and `tests/database.clickhouse.test.ts`.)_
 
 ## Large batches on ClickHouse
 

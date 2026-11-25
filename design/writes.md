@@ -174,8 +174,19 @@ Maple: 25 `DO UPDATE`, 43 `DO NOTHING`, 66 `excluded.` references, 6 `setWhere`.
 - `set: excluded(cols)` / `excludedAll(except)` are values, not callbacks: the compiler expands
   them through the same proposed-row accessor the callback gets. That accessor is the one place a
   dialect decides how to read the proposed row. SQLite writes `excluded."col"` as Postgres does.
-  MySQL writes `VALUES(col)` (or a row alias, 8.0.19+) and has no conflict target, so its
-  dialect will swap the accessor and refuse `target`; the helpers need no change.
+  MySQL has no conflict target, so it has its own method, `onDuplicateKeyUpdate({ set })` (no
+  `target`, no `where`), behind `Dialect.clauses.onDuplicateKey`: `"rowAlias"` writes
+  `VALUES (...) AS excluded` and reads `excluded.col` (MySQL 8.0.19+), `"valuesFunction"` reads
+  `VALUES(col)` (MariaDB). The same `set` forms go through the same accessor. Its `excludedAll`
+  skips the declared primary key and the tenant column instead of a target, and is refused bare
+  on a table with no declared key. A proposed-row column the SET reads but no row writes joins
+  the column list with DEFAULT cells (the clause compiles before the VALUES tuples; positional
+  params follow the text, so the order is free). It is always cross-tenant on a tenant table,
+  since any unique key can match another tenant's row. `onDuplicateKeyDoNothing()` writes
+  `col = table.col` on the first written column rather than `INSERT IGNORE`, which would also
+  downgrade truncation, NOT NULL and foreign key errors; it writes no existing row, so it keeps
+  the rows' tenant scope. It is still an UPDATE of the matched row, so a BEFORE UPDATE trigger
+  runs (and can write it).
 
 ## 7. ClickHouse specifics
 

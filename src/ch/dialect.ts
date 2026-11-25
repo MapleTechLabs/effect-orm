@@ -93,6 +93,14 @@ export interface DialectClauses {
 	readonly onConflict?: boolean
 	/** Whether ON CONFLICT can name a constraint rather than columns. */
 	readonly onConflictConstraint?: boolean
+	/**
+	 * `ON DUPLICATE KEY UPDATE` after an INSERT ... VALUES, and how its SET reads
+	 * the row proposed for insertion: `"rowAlias"` names the VALUES rows
+	 * (`VALUES (...) AS excluded ... excluded.col`, MySQL 8.0.19+),
+	 * `"valuesFunction"` reads `VALUES(col)` (MariaDB). Absent means no: an
+	 * insert with `onDuplicateKeyUpdate` fails to compile for the dialect.
+	 */
+	readonly onDuplicateKey?: "rowAlias" | "valuesFunction"
 	/** SQLite disambiguates INSERT SELECT ... ON CONFLICT with a WHERE. */
 	readonly insertSelectNeedsWhere?: boolean
 	/** Whether a VALUES tuple can contain DEFAULT for a missing cell. */
