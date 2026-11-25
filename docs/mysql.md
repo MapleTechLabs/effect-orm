@@ -93,13 +93,19 @@ export const statements = S.mysqlEntitiesOf([Tours]).pipe(Effect.map(S.renderMys
 - `generated: { as, stored? }` declares a generated column,
   `GENERATED ALWAYS AS (<as>) STORED` or `VIRTUAL` (the default). `as` is SQL as written, without
   the parentheses, or a DSL callback, which may read the row's columns: any base column, and a
-  generated one only when it is declared before. The database computes the column, so it is
+  generated one only when it is declared before. Those checks, and the NULL check below, apply to
+  a callback only: SQL written as a string is not read, so a mistake in it surfaces when MySQL
+  runs the DDL. The database computes the column, so it is
   `computed` on the table: an insert row or an update SET that writes it is a type error (and a
   `QueryBuilderError` when the row comes from data), `excludedAll` never copies it, and
   `tableSchemas(table).insert` / `.update` leave it out. It is selected like any column. It takes
   no `default`, `defaultExpr`, `defaultFn` or `onUpdate`, and is written without `NOT NULL`, which
-  MariaDB refuses on a generated column (the column type still decides how a read decodes). It
-  cannot be in the primary key; an index or `unique` on it works on both servers.
+  MariaDB refuses on a generated column. So a NULL the expression computes is stored, and the
+  column type decides whether a read can decode it: declare `MySQL.nullable(...)` unless the
+  expression cannot be NULL. A callback that reads a nullable column into a column of a
+  non-nullable type is a definition problem; with a string `as`, that is yours to get right. It
+  cannot be in the primary key or be the `tenantColumn`; an index or `unique` on it works on both
+  servers.
 - `unique: true` writes `CONSTRAINT <table>_<column>_unique UNIQUE (...)`; a string names it.
 - An index takes column names. MariaDB has no index on an expression, so there is no callback form.
 - A `TEXT`, `BLOB` or `JSON` column cannot be in the primary key, an index or a UNIQUE constraint:

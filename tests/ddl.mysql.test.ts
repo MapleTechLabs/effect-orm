@@ -5,7 +5,7 @@
 import { afterAll, describe, expect, it } from "vitest"
 import { DateTime, Effect, Schema } from "effect"
 import * as MySQL from "@maple-dev/effect-orm/mysql"
-import { diffMysqlSchemas, mysqlEntitiesOf, renderMysqlOp, renderMysqlSchema } from "@maple-dev/effect-orm/schema"
+import { diffMysqlSchemas, mysqlEntitiesOf, renderMysqlOp, renderMysqlSchema, type MysqlSchemaTable } from "@maple-dev/effect-orm/schema"
 import { mariadbServer, mysqlServer, scratchDatabase, type ScratchDatabase } from "./mysql-support"
 
 const Tours = MySQL.table("tours", {
@@ -184,6 +184,96 @@ for (const [server, dialect] of [[mysqlServer, MySQL.mysqlDialect], [mariadbServ
 			expect(await db.query("SELECT `total`, `label` FROM `items`", [])).toEqual([{ total: 15, label: "#5" }])
 			// Nothing is left to change.
 			expect(diffMysqlSchemas(to, to).ops).toEqual([])
+		})
+
+		describe("migrates generated columns", () => {
+			type Hints = Parameters<typeof diffMysqlSchemas>[2]
+			const T = (columns: Record<string, MySQL.ColumnInput>, indexes: ReadonlyArray<MySQL.IndexSpec<any>> = []) =>
+				MySQL.table("t", { columns: { id: MySQL.int, ...columns }, primaryKey: ["id"], indexes })
+			const gen = (as: MySQL.GeneratedColumn["as"], stored = false) => MySQL.column(MySQL.int, { generated: { as, stored } })
+			/** Create `before`, run `seed`, apply the diff to `after` (with the hints it asks for), and read every row. */
+			const migrate = async (before: MysqlSchemaTable<"t", any>, after: MysqlSchemaTable<"t", any>, seed: ReadonlyArray<string>, hints: Hints = []) => {
+				const db = await scratchDatabase(server, "gen")
+				opened.push(db)
+				const from = await Effect.runPromise(mysqlEntitiesOf([before]))
+				const to = await Effect.runPromise(mysqlEntitiesOf([after]))
+				for (const sql of renderMysqlSchema(from)) await db.query(sql, [])
+				for (const sql of seed) await db.query(sql, [])
+				const pending = diffMysqlSchemas(from, to, hints)
+				const diff = diffMysqlSchemas(from, to, [...(hints ?? []), ...pending.missingHints])
+				expect(diff.unsupported).toEqual([])
+				for (const sql of diff.ops.flatMap(renderMysqlOp)) await db.query(sql, [])
+				// The table now reads as `after` says, in its order, and nothing is left to change.
+				const columns = await db.query(`SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 't' ORDER BY ORDINAL_POSITION`, [db.name])
+				const select = MySQL.compileUnsafe(MySQL.from(after).select().orderBy(["id", "asc"]), undefined, { dialect })
+				const rows = await Effect.runPromise(select.decodeRows(await db.query(select.sql, select.parameters)))
+				return { rows, columns: columns.map((c) => c.COLUMN_NAME), missing: pending.missingHints }
+			}
+
+			it("drops a generated column before the base column it reads", async () => {
+				const { rows } = await migrate(T({ a: MySQL.int, g: gen(($) => $.a!.add(1)), s: gen(($) => $.a!.add(2), true) }), T({}), ["INSERT INTO t (id, a) VALUES (1, 1)"])
+				expect(rows).toEqual([{ id: 1 }])
+			})
+
+			it("adds a base column before the generated column declared ahead of it that reads it", async () => {
+				const { rows, columns } = await migrate(T({}), T({ g: gen(($) => $.a!.add(1), true), a: MySQL.column(MySQL.int, { default: 4 }) }), ["INSERT INTO t (id) VALUES (1)"])
+				expect(rows).toEqual([{ id: 1, g: 5, a: 4 }])
+				expect(columns).toEqual(["id", "g", "a"])
+			})
+
+			it("renames a column generated columns read, dropping and adding them back around it", async () => {
+				const version = (qty: string) =>
+					T({ [qty]: MySQL.int, g: gen(($) => $[qty]!.mul(2), true), h: gen(($) => $.g!.add(1)), s: gen(`${qty} + 100`) }, [MySQL.uniqueIndex("t_g", ["g"])])
+				const renamed = await migrate(version("qty"), version("quantity"), ["INSERT INTO t (id, qty) VALUES (1, 4), (2, 5)"], [{ type: "confirm_rename", kind: "column", entity: "t.qty", to: "quantity" }])
+				expect(renamed.rows).toEqual([{ id: 1, quantity: 4, g: 8, h: 9, s: 104 }, { id: 2, quantity: 5, g: 10, h: 11, s: 105 }])
+				expect(renamed.columns).toEqual(["id", "quantity", "g", "h", "s"])
+				// By case only: no hint.
+				const cased = await migrate(version("qty"), version("QTY"), ["INSERT INTO t (id, qty) VALUES (1, 4)"])
+				expect(cased.rows).toEqual([{ id: 1, QTY: 4, g: 8, h: 9, s: 104 }])
+			})
+
+			it("makes a STORED column VIRTUAL and back under a UNIQUE key, with a generated column reading it", async () => {
+				const version = (stored: boolean) => T({ n: MySQL.int, total: MySQL.column(MySQL.int, { generated: { as: "n * 2", stored }, unique: true }), doubled: gen(($) => $.total!.mul(2)), z: MySQL.int })
+				for (const [from, to] of [[true, false], [false, true]] as const) {
+					const { rows, columns, missing } = await migrate(version(from), version(to), ["INSERT INTO t (id, n, z) VALUES (1, 4, 0), (2, 5, 0)"])
+					expect(missing).toEqual([])
+					expect(rows).toEqual([{ id: 1, n: 4, total: 8, doubled: 16, z: 0 }, { id: 2, n: 5, total: 10, doubled: 20, z: 0 }])
+					expect(columns).toEqual(["id", "n", "total", "doubled", "z"])
+				}
+			})
+
+			it("makes a STORED column base, keeping its values and its UNIQUE key, and a base column STORED", async () => {
+				const stored = T({ n: MySQL.int, total: MySQL.column(MySQL.int, { generated: { as: "n * 2", stored: true }, unique: true }) })
+				const base = T({ n: MySQL.int, total: MySQL.column(MySQL.int, { unique: true }) })
+				const made = await migrate(stored, base, ["INSERT INTO t (id, n) VALUES (1, 4), (2, 5)"])
+				expect(made.missing).toEqual([])
+				expect(made.rows).toEqual([{ id: 1, n: 4, total: 8 }, { id: 2, n: 5, total: 10 }])
+				const back = await migrate(base, stored, ["INSERT INTO t (id, n, total) VALUES (1, 4, 0), (2, 5, 1)"])
+				expect(back.missing).toEqual([{ type: "confirm_data_loss", kind: "column", entity: "t.total" }])
+				expect(back.rows).toEqual([{ id: 1, n: 4, total: 8 }, { id: 2, n: 5, total: 10 }])
+			})
+
+			it("makes a VIRTUAL column base, confirmed: it takes the default", async () => {
+				const { rows, missing } = await migrate(T({ n: MySQL.int, total: gen("n * 2") }), T({ n: MySQL.int, total: MySQL.column(MySQL.int, { default: 7 }) }), ["INSERT INTO t (id, n) VALUES (1, 4)"])
+				expect(missing).toEqual([{ type: "confirm_data_loss", kind: "column", entity: "t.total" }])
+				expect(rows).toEqual([{ id: 1, n: 4, total: 7 }])
+			})
+
+			it("stores the NULL a nullable generated column computes", async () => {
+				const Notes = MySQL.table("t", {
+					columns: { id: MySQL.int, a: MySQL.nullable(MySQL.int), next: MySQL.column(MySQL.nullable(MySQL.int), { generated: { as: ($) => $.a!.add(1), stored: true } }) },
+					primaryKey: ["id"],
+				})
+				const { rows } = await migrate(T({}), Notes, [])
+				expect(rows).toEqual([])
+				const db = await scratchDatabase(server, "gen")
+				opened.push(db)
+				for (const sql of renderMysqlSchema(await Effect.runPromise(mysqlEntitiesOf([Notes])))) await db.query(sql, [])
+				const insert = MySQL.compileUnsafe(MySQL.insertInto(Notes).values([{ id: 1, a: null }, { id: 2, a: 1 }]), undefined, { dialect })
+				await db.query(insert.sql, insert.parameters)
+				const select = MySQL.compileUnsafe(MySQL.from(Notes).select().orderBy(["id", "asc"]), undefined, { dialect })
+				expect(await Effect.runPromise(select.decodeRows(await db.query(select.sql, select.parameters)))).toEqual([{ id: 1, a: null, next: null }, { id: 2, a: 1, next: 2 }])
+			})
 		})
 
 		// MariaDB 11.4 sizes an integer literal a digit short where a union branch is a

@@ -758,8 +758,17 @@ MySQL alters tables in place, so every change is an `ALTER TABLE` of its own:
 | The primary key | `ALTER TABLE ... DROP PRIMARY KEY` before the column changes, `ADD PRIMARY KEY (...)` after |
 | New or changed UNIQUE column, index | `DROP INDEX ... ON`, then `ADD CONSTRAINT ... UNIQUE` or `CREATE [UNIQUE] INDEX` after the column changes |
 | Renamed table or column | `RENAME TABLE`, or `CHANGE COLUMN <old> <new definition>`, only with a `confirm_rename` hint |
-| A generated column's expression | `ALTER TABLE ... MODIFY COLUMN` with the new `GENERATED ALWAYS AS (...)` |
-| A column made generated or base, or STORED made VIRTUAL (or back) | `ALTER TABLE ... DROP COLUMN ..., ADD COLUMN ...` in one statement, since MySQL cannot `MODIFY` the STORED status; its indexes and UNIQUE constraints are dropped before and added after. A base column's values are lost either way, so that needs `confirm_data_loss` for the column; between STORED and VIRTUAL the values are computed again |
+| A generated column's expression or type | `ALTER TABLE ... MODIFY COLUMN` with the new `GENERATED ALWAYS AS (...)`. No hint for a new type: the values are computed |
+| A base column made STORED, or a STORED one made base | `ALTER TABLE ... MODIFY COLUMN`. Base to STORED replaces the values with computed ones, so it needs `confirm_data_loss`; STORED to base keeps the stored values |
+| A column made VIRTUAL, or a VIRTUAL one made STORED or base | `ALTER TABLE ... DROP COLUMN ..., ADD COLUMN ... AFTER <previous column>` in one statement, since MySQL cannot `MODIFY` a column into or out of VIRTUAL. Its indexes and UNIQUE constraints are dropped before and added after. Between STORED and VIRTUAL the values are computed again; to or from base they are lost (a base column takes its default), so that needs `confirm_data_loss`. A VIRTUAL column made base under a UNIQUE key is refused as unsupported, since every row would take the same default: make it STORED in one migration, then base in the next |
+
+A generated column is ordered around what it reads: base columns are added before generated ones
+(a new generated column goes in its declared place, `AFTER` the column before it), and generated
+columns are dropped before base ones, the last declared first. MySQL refuses to rename a column,
+or to drop and add it back, while a generated column reads it, so the generated columns that read
+one (and those that read them) are dropped before the change and added back after, with their
+indexes. Which columns a DSL callback reads is recorded in the snapshot (`generated.reads`); a
+string `as` is assumed to read every column its text names.
 
 A column is renamed with `CHANGE COLUMN` rather than `RENAME COLUMN`: MariaDB names a JSON
 column's automatic `CHECK (json_valid(...))` after the column, and keeps the old name through a

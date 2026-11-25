@@ -248,15 +248,24 @@ const generatedColumn = (
 	isGenerated: (column: string) => boolean,
 ): NonNullable<MysqlColumnEntity["generated"]> => {
 	const object = `${table}.${name}`
-	if (generated.as === undefined) problems.push({ object, message: "generated takes an expression in as" })
-	if (typeof generated.as !== "function") return { expr: generated.as ?? "", stored: generated.stored === true }
+	const stored = generated.stored === true
+	if (typeof generated.as !== "function") {
+		if (typeof generated.as !== "string" || generated.as.trim() === "") problems.push({ object, message: "generated takes an expression in as" })
+		return { expr: typeof generated.as === "string" ? generated.as : "", stored }
+	}
 	const { sql, read } = renderReading(generated.as, columns)
 	if (read.includes(name)) problems.push({ object, message: "a generated column cannot read itself" })
 	const later = read.filter((column) => column !== name && isGenerated(column) && !earlier.has(column))
 	if (later.length > 0) {
 		problems.push({ object, message: `generated reads ${later.join(", ")}, generated after it; a generated column reads only generated columns declared before it` })
 	}
-	return { expr: sql, stored: generated.stored === true }
+	// No NOT NULL is written on a generated column, so a NULL it computes is stored, and a read of a non-nullable type fails.
+	const nullable = read.filter((column) => columns[column]!._tag === "Nullable")
+	if (nullable.length > 0 && columns[name]!._tag !== "Nullable") {
+		problems.push({ object, message: `generated reads ${nullable.join(", ")}, which can be NULL; declare the column MySQL.nullable(...)` })
+	}
+	if (sql.trim() === "") problems.push({ object, message: "generated takes an expression in as" })
+	return { expr: sql, stored, reads: read.map((column) => columnSqlName(columns, column)) }
 }
 
 const columnDefault = (
@@ -454,6 +463,10 @@ function buildTable<const Name extends string, const Columns extends Record<stri
 
 	// MySQL compares column names without case, so `Id` and `id` are one column.
 	checkDistinctNames(problems, name, inputs.map(([column]) => [column, sqlName(column)] as const), { ignoreCase: true })
+
+	if (definition.tenantColumn !== undefined && generatedKeys.includes(definition.tenantColumn)) {
+		problems.push({ object: `${name}.${definition.tenantColumn}`, message: "the tenant column cannot be generated: an insert must write it" })
+	}
 
 	const pkColumns = definition.primaryKey ?? []
 	checkNoRepeats(problems, `${name} primary key`, pkColumns)

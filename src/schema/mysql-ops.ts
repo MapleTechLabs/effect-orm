@@ -18,18 +18,28 @@ export const MysqlMigrationOp = Schema.Union([
 	}),
 	Schema.Struct({ op: Schema.Literal("drop_table"), name: Schema.String }),
 	Schema.Struct({ op: Schema.Literal("rename_table"), from: Schema.String, to: Schema.String }),
-	Schema.Struct({ op: Schema.Literal("add_column"), column: MysqlColumnEntity }),
+	/**
+	 * `after` places the column: after that column, or `FIRST` for `null`. Absent, it goes
+	 * last. A generated column is placed, since it may read only generated columns before it.
+	 */
+	Schema.Struct({ op: Schema.Literal("add_column"), column: MysqlColumnEntity, after: Schema.optionalKey(Schema.NullOr(Schema.String)) }),
 	Schema.Struct({ op: Schema.Literal("drop_column"), table: Schema.String, name: Schema.String }),
 	/** `column` under its new name, with the definition it had: a definition change is a `modify_column` of its own. */
 	Schema.Struct({ op: Schema.Literal("rename_column"), from: Schema.String, column: MysqlColumnEntity }),
 	/** The column as it will be: a new type, nullability or default. `fill` sets existing NULLs to the default first. */
 	Schema.Struct({ op: Schema.Literal("modify_column"), column: MysqlColumnEntity, fill: Schema.Boolean }),
 	/**
-	 * The column dropped and added again as it will be, in one ALTER TABLE: a
-	 * column that becomes or stops being generated, or changes between STORED
-	 * and VIRTUAL, which MySQL cannot MODIFY in every direction.
+	 * The column dropped and added again as it will be, in one ALTER TABLE, at
+	 * its place (`after`, as for `add_column`): a column that becomes or stops
+	 * being VIRTUAL, which MySQL cannot MODIFY. `was` is what it was: a base
+	 * column's values are lost, a generated one's computed again.
 	 */
-	Schema.Struct({ op: Schema.Literal("replace_column"), column: MysqlColumnEntity }),
+	Schema.Struct({
+		op: Schema.Literal("replace_column"),
+		column: MysqlColumnEntity,
+		was: Schema.Literals(["base", "stored", "virtual"]),
+		after: Schema.NullOr(Schema.String),
+	}),
 	Schema.Struct({ op: Schema.Literal("drop_primary_key"), table: Schema.String }),
 	Schema.Struct({ op: Schema.Literal("add_primary_key"), table: Schema.String, columns: Schema.Array(Schema.String) }),
 	Schema.Struct({ op: Schema.Literal("add_unique"), unique: MysqlUniqueEntity }),
@@ -46,8 +56,9 @@ export const labelOfMysql = (op: MysqlMigrationOp): MysqlOpLabel => {
 	switch (op.op) {
 		case "drop_table":
 		case "drop_column":
-		case "replace_column":
 			return "destructive"
+		case "replace_column":
+			return op.was === "base" || op.column.generated === undefined ? "destructive" : "rewrite"
 		case "modify_column":
 		case "add_primary_key":
 		case "drop_primary_key":
@@ -56,6 +67,9 @@ export const labelOfMysql = (op: MysqlMigrationOp): MysqlOpLabel => {
 			return "metadata"
 	}
 }
+
+/** ` AFTER <column>`, ` FIRST`, or nothing: last. */
+const placement = (after: string | null | undefined): string => (after === undefined ? "" : after === null ? " FIRST" : ` AFTER ${mysqlIdent(after)}`)
 
 /** The statements one op runs, in order. */
 export const renderMysqlOp = (op: MysqlMigrationOp): ReadonlyArray<string> => {
@@ -67,11 +81,13 @@ export const renderMysqlOp = (op: MysqlMigrationOp): ReadonlyArray<string> => {
 		case "rename_table":
 			return [`RENAME TABLE ${mysqlIdent(op.from)} TO ${mysqlIdent(op.to)}`]
 		case "add_column":
-			return [`ALTER TABLE ${mysqlIdent(op.column.table)} ADD COLUMN ${renderMysqlColumnDefinition(op.column)}`]
+			return [`ALTER TABLE ${mysqlIdent(op.column.table)} ADD COLUMN ${renderMysqlColumnDefinition(op.column)}${placement(op.after)}`]
 		case "drop_column":
 			return [`ALTER TABLE ${mysqlIdent(op.table)} DROP COLUMN ${mysqlIdent(op.name)}`]
 		case "replace_column":
-			return [`ALTER TABLE ${mysqlIdent(op.column.table)} DROP COLUMN ${mysqlIdent(op.column.name)}, ADD COLUMN ${renderMysqlColumnDefinition(op.column)}`]
+			return [
+				`ALTER TABLE ${mysqlIdent(op.column.table)} DROP COLUMN ${mysqlIdent(op.column.name)}, ADD COLUMN ${renderMysqlColumnDefinition(op.column)}${placement(op.after)}`,
+			]
 		case "rename_column":
 			// CHANGE, not RENAME COLUMN: MariaDB names a JSON column's CHECK (json_valid(...)) after the
 			// column and keeps the old name through a RENAME COLUMN, but not through a CHANGE.

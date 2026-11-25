@@ -1,6 +1,6 @@
 import { Effect, Exit, Schema } from "effect"
 import { describe, expect, it } from "vitest"
-import { diffMysqlSchemas, mysqlEntitiesOf, renderMysqlOp, renderMysqlSchema, sqliteEntitiesOf, type MysqlSchemaTable } from "../schema"
+import { diffMysqlSchemas, labelOfMysql, mysqlEntitiesOf, renderMysqlOp, renderMysqlSchema, sqliteEntitiesOf, type MysqlSchemaTable } from "../schema"
 import * as Db from "../database"
 import * as MySQL from "../mysql"
 import * as SQLite from "../sqlite"
@@ -162,6 +162,13 @@ describe("MySQL.table DDL", () => {
 				}),
 				/generated reads c, generated after it/,
 			],
+			["an empty expression", MySQL.table("t", { columns: { a: MySQL.int, b: MySQL.column(MySQL.int, { generated: { as: " " } }) } }), /generated takes an expression in as/],
+			["a generated tenant column", MySQL.table("t", { columns: { a: MySQL.int, b: MySQL.column(MySQL.int, { generated: { as: "a" } }) }, tenantColumn: "b" }), /the tenant column cannot be generated/],
+			[
+				"a non-nullable column computed from a nullable one",
+				MySQL.table("t", { columns: { a: MySQL.nullable(MySQL.int), b: MySQL.column(MySQL.int, { generated: { as: ($) => $.a!.add(1) } }) } }),
+				/generated reads a, which can be NULL; declare the column MySQL.nullable/,
+			],
 			["a generated primary key column", MySQL.table("t", { columns: { a: MySQL.int, id: MySQL.column(MySQL.int, { generated: { as: "a", stored: true } }) }, primaryKey: ["id"] }), /cannot be in the primary key/],
 		]
 		for (const [name, table, message] of cases) it(`refuses ${name}`, () => expect(problemsOf([table])).toMatch(message))
@@ -281,32 +288,118 @@ describe("diffMysqlSchemas", () => {
 		expect(sqlOf(diffMysqlSchemas(before, cased).ops)).toEqual(["ALTER TABLE `links` CHANGE COLUMN `url` `URL` varchar(200) NOT NULL"])
 	})
 
-	it("changes a generated column's expression in place, and replaces one that changes kind", () => {
+	describe("generated columns", () => {
 		const total = (as: string, stored?: boolean) => MySQL.column(MySQL.int, { generated: { as, stored } })
-		const created = diffMysqlSchemas([], v({ n: MySQL.int, total: total("n * 2", true) }))
-		expect(sqlOf(created.ops)[0]).toContain("`total` int GENERATED ALWAYS AS (n * 2) STORED")
-		expect(sqlOf(diffMysqlSchemas(v({ n: MySQL.int, total: total("n * 2", true) }), v({ n: MySQL.int, total: total("n * 3", true) })).ops)).toEqual([
-			"ALTER TABLE `links` MODIFY COLUMN `total` int GENERATED ALWAYS AS (n * 3) STORED",
-		])
-		expect(sqlOf(diffMysqlSchemas(v({ n: MySQL.int }), v({ n: MySQL.int, total: total("n * 2") })).ops)).toEqual([
-			"ALTER TABLE `links` ADD COLUMN `total` int GENERATED ALWAYS AS (n * 2) VIRTUAL",
-		])
-		// STORED to VIRTUAL: computed again, nothing lost; its index goes first and comes back after.
-		const indexed = (stored: boolean) => v({ n: MySQL.int, total: total("n * 2", stored) }, [MySQL.index("links_total", ["total"])])
-		expect(sqlOf(diffMysqlSchemas(indexed(true), indexed(false)).ops)).toEqual([
-			"DROP INDEX `links_total` ON `links`",
-			"ALTER TABLE `links` DROP COLUMN `total`, ADD COLUMN `total` int GENERATED ALWAYS AS (n * 2) VIRTUAL",
-			"CREATE INDEX `links_total` ON `links` (`total`)",
-		])
-		// A base column's values are lost to a generated one, and the other way round: confirm it.
-		const base = v({ n: MySQL.int, total: MySQL.int })
-		const generated = v({ n: MySQL.int, total: total("n * 2", true) })
-		for (const [from, to] of [[base, generated], [generated, base]] as const) {
-			const pending = diffMysqlSchemas(from, to)
-			expect(pending.ops).toEqual([])
-			expect(pending.missingHints).toEqual([{ type: "confirm_data_loss", kind: "column", entity: "links.total" }])
-			expect(diffMysqlSchemas(from, to, pending.missingHints).ops.map((op) => op.op)).toEqual(["replace_column"])
-		}
+		const missing = (entity: string) => [{ type: "confirm_data_loss", kind: "column", entity: `links.${entity}` }] as const
+
+		it("creates one, adds one in its place, and changes its expression or type in place", () => {
+			const created = diffMysqlSchemas([], v({ n: MySQL.int, total: total("n * 2", true) }))
+			expect(sqlOf(created.ops)[0]).toContain("`total` int GENERATED ALWAYS AS (n * 2) STORED")
+			const before = v({ n: MySQL.int, total: total("n * 2", true) })
+			expect(sqlOf(diffMysqlSchemas(before, v({ n: MySQL.int, total: total("n * 3", true) })).ops)).toEqual([
+				"ALTER TABLE `links` MODIFY COLUMN `total` int GENERATED ALWAYS AS (n * 3) STORED",
+			])
+			// A generated column's values are computed, so a new type loses nothing: no hint.
+			const retyped = diffMysqlSchemas(before, v({ n: MySQL.int, total: MySQL.column(MySQL.bigint, { generated: { as: "n * 2", stored: true } }) }))
+			expect(retyped.missingHints).toEqual([])
+			expect(sqlOf(retyped.ops)).toEqual(["ALTER TABLE `links` MODIFY COLUMN `total` bigint GENERATED ALWAYS AS (n * 2) STORED"])
+			expect(sqlOf(diffMysqlSchemas(v({ n: MySQL.int }), v({ n: MySQL.int, total: total("n * 2") })).ops)).toEqual([
+				"ALTER TABLE `links` ADD COLUMN `total` int GENERATED ALWAYS AS (n * 2) VIRTUAL AFTER `n`",
+			])
+		})
+
+		it("turns a base column STORED and back with MODIFY, confirming only the values a base column loses", () => {
+			const base = v({ n: MySQL.int, total: MySQL.column(MySQL.int, { unique: true }) })
+			const stored = v({ n: MySQL.int, total: MySQL.column(MySQL.int, { generated: { as: "n * 2", stored: true }, unique: true }) })
+			expect(diffMysqlSchemas(base, stored).missingHints).toEqual(missing("total"))
+			expect(sqlOf(diffMysqlSchemas(base, stored, missing("total")).ops)).toEqual([
+				"ALTER TABLE `links` MODIFY COLUMN `total` int GENERATED ALWAYS AS (n * 2) STORED",
+			])
+			// STORED to base keeps the stored values, and the UNIQUE constraint stays where it is.
+			const made = diffMysqlSchemas(stored, base)
+			expect(made.missingHints).toEqual([])
+			expect(sqlOf(made.ops)).toEqual(["ALTER TABLE `links` MODIFY COLUMN `total` int NOT NULL"])
+		})
+
+		it("drops and adds a column back, at its place and around its keys, when it becomes or stops being VIRTUAL", () => {
+			const indexed = (stored: boolean) => v({ n: MySQL.int, total: total("n * 2", stored), z: MySQL.int }, [MySQL.index("links_total", ["total"])])
+			const toVirtual = diffMysqlSchemas(indexed(true), indexed(false))
+			expect(toVirtual.missingHints).toEqual([])
+			expect(sqlOf(toVirtual.ops)).toEqual([
+				"DROP INDEX `links_total` ON `links`",
+				"ALTER TABLE `links` DROP COLUMN `total`, ADD COLUMN `total` int GENERATED ALWAYS AS (n * 2) VIRTUAL AFTER `n`",
+				"CREATE INDEX `links_total` ON `links` (`total`)",
+			])
+			// Computed again: a rewrite, not a loss. A base column made VIRTUAL loses its values.
+			expect(toVirtual.ops.map(labelOfMysql)).toEqual(["metadata", "rewrite", "metadata"])
+			const base = v({ n: MySQL.int, total: MySQL.int })
+			const virtual = v({ n: MySQL.int, total: total("n * 2") })
+			expect(diffMysqlSchemas(base, virtual).missingHints).toEqual(missing("total"))
+			const made = diffMysqlSchemas(base, virtual, missing("total")).ops
+			expect(made.map(labelOfMysql)).toEqual(["destructive"])
+			expect(diffMysqlSchemas(virtual, base, missing("total")).ops.map((op) => op.op)).toEqual(["replace_column"])
+		})
+
+		it("refuses to make a VIRTUAL column base under a UNIQUE key: every row would take its default", () => {
+			const unique = (column: MySQL.ColumnInput) => v({ n: MySQL.int, total: column }, [MySQL.uniqueIndex("links_total", ["total"])])
+			const result = diffMysqlSchemas(unique(total("n * 2")), unique(MySQL.int), missing("total"))
+			expect(result.unsupported).toEqual([{ entity: "links.total", message: expect.stringMatching(/make it STORED in one migration, then base in the next/) }])
+		})
+
+		it("drops a generated column before the base column it reads", () => {
+			const before = v({ a: MySQL.int, g: MySQL.column(MySQL.int, { generated: { as: ($) => $.a!.add(1) } }), h: total("a + 2", true) })
+			const hints = [...missing("a"), ...missing("g"), ...missing("h")]
+			expect(sqlOf(diffMysqlSchemas(before, v({}), hints).ops)).toEqual([
+				"ALTER TABLE `links` DROP COLUMN `h`",
+				"ALTER TABLE `links` DROP COLUMN `g`",
+				"ALTER TABLE `links` DROP COLUMN `a`",
+			])
+		})
+
+		it("adds the base columns a generated column reads before it", () => {
+			const after = v({ g: MySQL.column(MySQL.int, { generated: { as: ($) => $.a!.add(1) } }), a: MySQL.int })
+			expect(sqlOf(diffMysqlSchemas(v({}), after).ops)).toEqual([
+				"ALTER TABLE `links` ADD COLUMN `a` int NOT NULL",
+				"ALTER TABLE `links` ADD COLUMN `g` int GENERATED ALWAYS AS (`a` + 1) VIRTUAL AFTER `id`",
+			])
+		})
+
+		it("drops the generated columns reading a renamed column before the rename, and adds them back after", () => {
+			const version = (qty: string) =>
+				v({
+					[qty]: MySQL.int,
+					g: MySQL.column(MySQL.int, { generated: { as: ($) => $[qty]!.mul(2), stored: true } }),
+					// Read through g, and by a string expression naming the column: both come back.
+					h: MySQL.column(MySQL.int, { generated: { as: ($) => $.g!.add(1) } }),
+					s: total(`${qty} + 1`),
+					other: total("id + 1"),
+				}, [MySQL.index("links_g", ["g"])])
+			const renamed = diffMysqlSchemas(version("qty"), version("quantity"), [{ type: "confirm_rename", kind: "column", entity: "links.qty", to: "quantity" }])
+			expect(renamed.missingHints).toEqual([])
+			expect(sqlOf(renamed.ops)).toEqual([
+				"DROP INDEX `links_g` ON `links`",
+				"ALTER TABLE `links` DROP COLUMN `s`",
+				"ALTER TABLE `links` DROP COLUMN `h`",
+				"ALTER TABLE `links` DROP COLUMN `g`",
+				"ALTER TABLE `links` CHANGE COLUMN `qty` `quantity` int NOT NULL",
+				"ALTER TABLE `links` ADD COLUMN `g` int GENERATED ALWAYS AS (`quantity` * 2) STORED AFTER `quantity`",
+				"ALTER TABLE `links` ADD COLUMN `h` int GENERATED ALWAYS AS (`g` + 1) VIRTUAL AFTER `g`",
+				"ALTER TABLE `links` ADD COLUMN `s` int GENERATED ALWAYS AS (quantity + 1) VIRTUAL AFTER `h`",
+				"CREATE INDEX `links_g` ON `links` (`g`)",
+			])
+			// A rename by case needs no hint, and rebuilds the same way.
+			expect(sqlOf(diffMysqlSchemas(version("qty"), version("QTY")).ops)).toContain("ALTER TABLE `links` CHANGE COLUMN `qty` `QTY` int NOT NULL")
+			expect(sqlOf(diffMysqlSchemas(version("qty"), version("QTY")).ops)[3]).toBe("ALTER TABLE `links` DROP COLUMN `g`")
+		})
+
+		it("drops the generated columns reading a column that becomes or stops being VIRTUAL, and adds them back after", () => {
+			const version = (stored: boolean) => v({ n: MySQL.int, total: total("n * 2", stored), doubled: MySQL.column(MySQL.int, { generated: { as: ($) => $.total!.mul(2) } }) })
+			expect(sqlOf(diffMysqlSchemas(version(true), version(false)).ops)).toEqual([
+				"ALTER TABLE `links` DROP COLUMN `doubled`",
+				"ALTER TABLE `links` DROP COLUMN `total`, ADD COLUMN `total` int GENERATED ALWAYS AS (n * 2) VIRTUAL AFTER `n`",
+				"ALTER TABLE `links` ADD COLUMN `doubled` int GENERATED ALWAYS AS (`total` * 2) VIRTUAL AFTER `total`",
+			])
+		})
 	})
 
 	it("creates a new table with its UNIQUE constraints inside, and drops a table only once confirmed", () => {
