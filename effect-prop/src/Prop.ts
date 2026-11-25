@@ -110,6 +110,8 @@ export interface Report<A, E = never> {
 	readonly failures: ReadonlyArray<Failure<A, E>>
 	/** Why the run counts as failed although no input failed: nothing was judged. */
 	readonly exhausted: string | undefined
+	/** The time budget ended the search before it had judged the `runs` it was asked for. Not a failure by itself. */
+	readonly budgetSpent: boolean
 	readonly labels: Readonly<Record<string, number>>
 	readonly feedback: FeedbackSummary | undefined
 	readonly format: (value: A) => string
@@ -301,6 +303,7 @@ const checkScoped = <A, E, R>(gen: Gen.Gen<A>, property: Property<A, E, R | Scop
 		let discards = 0
 		let attempts = 0
 		let kept = 0
+		let budgetSpent = false
 
 		/** Runs the property on one value, in its own scope. */
 		const judge = Effect.fnUntraced(function* (value: A) {
@@ -403,9 +406,11 @@ const checkScoped = <A, E, R>(gen: Gen.Gen<A>, property: Property<A, E, R | Scop
 
 		const run: Run<A, E, R> = {
 			rng,
-			wantsMore: Effect.sync(
-				() => searched < maxRuns && found.size < wanted && discards <= maxDiscards && (budgetMs === undefined || performance.now() - started < budgetMs),
-			),
+			wantsMore: Effect.sync(() => {
+				if (searched >= maxRuns || found.size >= wanted || discards > maxDiscards) return false
+				budgetSpent = budgetMs !== undefined && performance.now() - started >= budgetMs
+				return !budgetSpent
+			}),
 			execute,
 			observe: (tested) => Effect.map(probe(new Source({ prefix: tested.choices, size: tested.size }), true), (result) => result.tested),
 			peek: feedback.peek,
@@ -495,6 +500,7 @@ const checkScoped = <A, E, R>(gen: Gen.Gen<A>, property: Property<A, E, R | Scop
 			durationMs: performance.now() - started,
 			failures,
 			exhausted,
+			budgetSpent,
 			labels,
 			feedback: yield* feedback.summary.pipe(Effect.catchCause((cause) => Effect.as(Effect.logWarning("effect-prop: no feedback summary", cause), undefined))),
 			format,
@@ -516,7 +522,7 @@ const MAX_UNREACHED = 8
  */
 export const formatReport = <A, E>(report: Report<A, E>, options: { readonly coverage?: boolean | undefined } = {}): string => {
 	const lines: Array<string> = []
-	const counts = `${report.runs} runs, ${report.discards} discarded, seed ${report.seed}, ${Math.round(report.durationMs)} ms`
+	const counts = `${report.runs} runs${report.budgetSpent ? ", stopped by its time budget" : ""}, ${report.discards} discarded, seed ${report.seed}, ${Math.round(report.durationMs)} ms`
 	if (passed(report)) lines.push(`${report.name}: passed (${counts})`)
 	else if (report.exhausted !== undefined) lines.push(`${report.name}: ${report.exhausted} (${counts})`)
 	else lines.push(`${report.name}: ${report.failures.length} distinct failure${report.failures.length === 1 ? "" : "s"} (${counts})`)

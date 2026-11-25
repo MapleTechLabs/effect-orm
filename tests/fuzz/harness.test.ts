@@ -117,6 +117,12 @@ describe("fuzz harness coverage guarantees", () => {
 		await expect(property("guided budget", Gen.int(), async () => {
 			await new Promise((resolve) => setTimeout(resolve, 10))
 		}, { runs: 100, timeoutMs: 30 })).rejects.toThrow("interrupted by its 30 ms budget")
+		// Every input judged, the last one past the budget: the property held.
+		let calls = 0
+		await property("guided whole budget", Gen.int(), async () => {
+			if (++calls === 2) await new Promise((resolve) => setTimeout(resolve, 80))
+		}, { runs: 2, timeoutMs: 40 })
+		expect(calls).toBe(2)
 		config.path = "0:1"
 		await expect(property("guided path", Gen.int(), () => {}, { runs: 1 })).rejects.toThrow("replays with PROP_REPLAY")
 	})

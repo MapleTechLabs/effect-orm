@@ -256,8 +256,8 @@ const guidedProperty = async <T>(name: string, gen: Gen.Gen<T>, predicate: (inpu
 		throw new Error(`[fuzz] ${name}: ${result.runs === 0 ? "every input was skipped" : result.exhausted} (${[...skips.keys()].join(", ")})`)
 	}
 	if (result.failures.length === 0) {
-		// Reaching the time budget is not a pass: the inputs the run was asked for were not all judged.
-		if (options.timeoutMs !== undefined && result.durationMs >= options.timeoutMs) throw new Error(`[fuzz] ${name}: interrupted by its ${options.timeoutMs} ms budget after ${result.runs} runs`)
+		// Stopped by the time budget is not a pass: the inputs the run was asked for were not all judged.
+		if (result.budgetSpent) throw new Error(`[fuzz] ${name}: interrupted by its ${options.timeoutMs} ms budget after ${result.runs} runs`)
 		return
 	}
 	const pattern = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")

@@ -264,6 +264,13 @@ describe("check", () => {
 		expect(Prop.passed(report)).toBe(true)
 		expect(report.runs).toBeGreaterThan(3)
 		expect(report.runs).toBeLessThan(200)
+		expect(report.budgetSpent).toBe(true)
+		expect(Prop.formatReport(report)).toContain("stopped by its time budget")
+		// Judging every input it was asked for is not being stopped, however long it took.
+		let calls = 0
+		const whole = await run(check(Gen.int(), () => (++calls === 2 ? Effect.sleep("80 millis") : Effect.void), { runs: 2, budget: "40 millis" }))
+		expect([whole.runs, whole.budgetSpent]).toEqual([2, false])
+		expect(whole.durationMs).toBeGreaterThan(40)
 	})
 
 	it("is deterministic in its seed", async () => {
