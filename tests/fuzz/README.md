@@ -1,7 +1,8 @@
 # The fuzzer
 
-Property-based tests for the query builder and codecs, run with Effect Arbitrary
-and fast-check, and one suite on effect-prop (see below). Database properties run on real engines. They catch
+Property-based tests for the query builder and codecs. Query plans and the
+statement splitter run on effect-prop (see below); the other suites on Effect
+Arbitrary and fast-check. Database properties run on real engines. They catch
 what hand-written cases miss: SQL that runs but returns the wrong rows, escaping
 bugs, and values the builder throws on instead of refusing.
 
@@ -19,7 +20,7 @@ are (the migration fuzzer creates its databases as `root`, with the URL's passwo
 
 | File | Property | Oracle |
 | --- | --- | --- |
-| `queries.fuzz.test.ts` | random plans and `unionAll`s, over both the core fixture and generated empty/duplicate/nullable/multi-tenant data, return the rows `model.ts` computes | a JS model of SQL, per target |
+| `queries.fuzz.test.ts` | random plans (comparisons, LIKE, `contains`/`startsWith`/`endsWith`, IN, BETWEEN, joins, aggregates, paging) and `unionAll`s, over both the core fixture and generated empty/duplicate/nullable/multi-tenant data, return the rows `model.ts` computes | a JS model of SQL, per target |
 | `writes.fuzz.test.ts` | random sequences of inserts (multi-row, defaulted cells, INSERT … SELECT, ON CONFLICT), updates and deletes, with RETURNING, leave a scratch table as the model says; unsupported writes are refused | a JS model of the table's rows |
 | `literals.fuzz.test.ts` | every column type's values survive as a literal and as a param | the database's own JSON parser |
 | `compile.fuzz.test.ts` | plans compile deterministically, with no leaked JS or misaligned placeholders; hostile values are refused with a typed error | invariants |
@@ -44,8 +45,10 @@ schema checks). Effect's checker has no predicate-level discard result: throwing
 oracle limitations in native generator filters; rejected candidates do not consume
 the run budget, and exhausting generation fails instead of passing with no checks.
 
-Keep fast-check's constrained generators for SQL domains, adversarial strings and
-well-typed query/migration plans. A descriptor's wire codec can be broader than
+Use effect-prop's `Gen` for inputs with structure worth shrinking and steering:
+query plans, grammars, sequences of operations. Keep fast-check's constrained
+generators where a suite already has them: literal values, adversarial strings
+and migration plans. A descriptor's wire codec can be broader than
 its storage type: `UInt8.schema` accepts finite numbers, while valid SQL inputs
 must be integers from 0 to 255. Schema-derived tests complement the independent
 database/model oracles rather than replacing them.
@@ -64,21 +67,32 @@ configured time budget also fails rather than reporting partial coverage as succ
 
 ## Properties on effect-prop
 
-`terminal-clauses.fuzz.test.ts` runs on [effect-prop](../../effect-prop/README.md),
-the property-testing library in this repository, not on fast-check. Its
-generators are native (`Gen`), so a failure shrinks by structure, and its search
-is guided by V8 coverage of `dist/`. It follows `FUZZ_SCALE`, `FUZZ_RUNS` and
-`FUZZ_SEED` like every other suite, with effect-prop's own variables for the rest:
+The plan properties (`queries.fuzz.test.ts`, and "plans compile cleanly" in
+`compile.fuzz.test.ts`) and `terminal-clauses.fuzz.test.ts` run on
+[effect-prop](../../effect-prop/README.md), the property-testing library in
+this repository. Their generators are native (`Gen`, in `plan.ts` and
+`fixtures.ts`), which buys three things:
+
+- a failing plan shrinks by structure: a condition is dropped, or replaced by one of its own sub-conditions;
+- the search is guided by V8 coverage of `dist/`: a plan that reaches new code in the builder is kept and varied;
+- one run reports every distinct failure, grouped by what the database or the builder said.
+
+They go through the same `property()` and follow `FUZZ_SCALE`, `FUZZ_RUNS`,
+`FUZZ_SEED`, `FUZZ_VERBOSE` and `FUZZ_STRICT` like every other suite, with
+pinned inputs in `regressions.ts` and skips in `known-issues.ts`. Two
+variables are their own:
 
 ```sh
-PROP_REPLAY='p1.…' bun run fuzz -t 'a statement splits'   # rerun one failing input
-PROP_FAILURES=10 bun run fuzz -t 'a statement splits'    # every distinct failure, not the first
-PROP_VERBOSE=1 bun run fuzz -t 'terminal clauses'        # what the inputs reached, and what they did not
+PROP_REPLAY='p1.…' bun run fuzz -t 'plans match the model \(postgres, plain strings\)'   # rerun one failing input
+PROP_FAILURES=10 FUZZ_SCALE=20 bun run fuzz -t '\(clickhouse'                            # every distinct failure, not the first
 ```
 
-A fixed bug is pinned in the property's `examples`. Write new suites this way
-when the input is a grammar or a sequence of operations; [GUIDE.md](../../effect-prop/GUIDE.md)
-says how.
+`FUZZ_VERBOSE=1` also prints what the inputs reached in `dist/`. A replay token
+belongs to the generator that made it: after `plan.ts` changes it builds a
+different plan, so pin the printed input, not the token.
+
+Write new suites this way when the input is a grammar or a sequence of
+operations; [GUIDE.md](../../effect-prop/GUIDE.md) says how.
 
 ## Adding a dialect
 
@@ -132,10 +146,12 @@ make the dialects agree, the difference is a bug: record it in
 
 ## When a property fails
 
-The report prints the shrunk input, the SQL, the outcome, and a replay command:
+The report prints the shrunk input, the SQL, the outcome, and a replay command.
+A fast-check property replays by seed and path, an effect-prop one by token:
 
 ```sh
-FUZZ_SEED=… FUZZ_PATH=… bun run fuzz -t 'plans match the model \(postgres, plain strings\)'
+FUZZ_SEED=… FUZZ_PATH=… bun run fuzz -t 'literals survive \(postgres'
+PROP_REPLAY='p1.…' bun run fuzz -t 'plans match the model \(postgres, plain strings\)'
 ```
 
 1. Decide whose bug it is: the builder, the model, or the database.

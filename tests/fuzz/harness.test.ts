@@ -1,12 +1,13 @@
 import { Arbitrary, Schema } from "effect"
 import fc from "fast-check"
 import { afterEach, describe, expect, it } from "vitest"
+import { Gen } from "../../effect-prop/src/index"
 import { config, FuzzFailure, property, skip, skipKnown } from "./harness"
 
 const original = { ...config }
 afterEach(() => Object.assign(config, original))
 // Infrastructure checks use fixed budgets regardless of a soak's environment.
-const reset = () => Object.assign(config, { runs: undefined, scale: 1, seed: 1, path: undefined, replay: undefined, verbose: false })
+const reset = () => Object.assign(config, { runs: undefined, scale: 1, seed: 1, path: undefined, replay: undefined, propReplay: undefined, failures: undefined, verbose: false })
 
 describe("fuzz harness coverage guarantees", () => {
 	it("refuses zero-run and invalid budgets for both generators", async () => {
@@ -65,5 +66,49 @@ describe("fuzz harness coverage guarantees", () => {
 		config.replay = token
 		await expect(property("native replay", arb, () => { throw new FuzzFailure("deliberate", {}) }, { runs: 5 })).rejects.toThrow("Property falsified")
 		await expect(property("native replay", arb, () => {}, { runs: 5 })).rejects.toThrow("PropertyPassed")
+	})
+	it("effect-prop: skips are discards, counted by reason, and a run of nothing but skips fails", async () => {
+		reset()
+		let checked = 0
+		await property("guided mixed", Gen.int(0, 9), (n) => { if (n % 2 === 0) skip("even"); checked++ }, { runs: 20 })
+		expect(checked).toBe(20)
+		await expect(property("guided all known", Gen.constant(1), () => skipKnown("open-bug"), { runs: 1 })).rejects.toThrow("every input was skipped (open-bug)")
+		config.runs = 0
+		await expect(property("guided zero", Gen.constant(1), () => {}, { runs: 1 })).rejects.toThrow("FUZZ_RUNS")
+		config.runs = undefined
+		// A value that is no number used to stop the search before its first input, and pass.
+		config.failures = Number.NaN
+		await expect(property("guided bad failures", Gen.constant(1), () => {}, { runs: 1 })).rejects.toThrow("PROP_FAILURES")
+	})
+	it("effect-prop: reports each distinct failure once, shrunk, with its context and a replay command", async () => {
+		reset()
+		const predicate = (n: number) => {
+			if (n > 700) throw new FuzzFailure("a valid plan was not compiled (Refused)", { error: `value ${n} is too large`, sql: "SELECT big" })
+			if (n < -700) throw new FuzzFailure("expected [ 1 ] to deeply equal [ 2 ]", { outcome: { _tag: "DatabaseError", message: `Code: 62. near "${n}": doesn't parse at 14` }, sql: "SELECT bad" })
+		}
+		config.failures = 2
+		let failure = ""
+		try {
+			await property("guided failures", Gen.int(-1000, 1000), predicate, { runs: 2000 })
+		} catch (error) {
+			failure = String(error)
+		}
+		expect(failure).toContain("2 distinct failures")
+		// Grouped by what was said, with what varies per input taken out; each shrunk to its boundary.
+		expect(failure).toMatch(/=== \d\. a valid plan was not compiled \(Refused\): value N is too large[^\n]*\nreplay: PROP_REPLAY='p1\.[0-9a-z.]+' bun run fuzz -t 'guided failures'\n--- input \(shrunk\)\n701\n/)
+		expect(failure).toMatch(/=== \d\. DatabaseError: Code: 62\. near …[^\n]*\nreplay: [^\n]*\n--- input \(shrunk\)\n-701\n/)
+		expect(failure).toContain("SELECT big")
+		expect(failure).toContain("SELECT bad")
+		const token = /=== \d\. a valid plan[^\n]*\nreplay: PROP_REPLAY='([^']+)'/.exec(failure)![1]!
+		config.propReplay = token
+		await expect(property("guided failures", Gen.int(-1000, 1000), predicate, { runs: 2000 })).rejects.toThrow(/found by replay[^]*--- input \(shrunk\)\n701\n/)
+	})
+	it("effect-prop: fails rather than passing a partially interrupted budget, and refuses the other engines' replay settings", async () => {
+		reset()
+		await expect(property("guided budget", Gen.int(), async () => {
+			await new Promise((resolve) => setTimeout(resolve, 10))
+		}, { runs: 100, timeoutMs: 30 })).rejects.toThrow("interrupted by its 30 ms budget")
+		config.path = "0:1"
+		await expect(property("guided path", Gen.int(), () => {}, { runs: 1 })).rejects.toThrow("replays with PROP_REPLAY")
 	})
 })

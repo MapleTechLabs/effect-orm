@@ -10,9 +10,9 @@
 //
 // Every target in the registry (dialects/index.ts) runs; one whose database is
 // not reachable here is skipped, not dropped, so the run says so.
-import fc from "fast-check"
 import { afterAll, describe, expect, it } from "vitest"
 import { compilePlan, compileUnionPlan, scopeContext, type Compiled } from "./build"
+import { Gen } from "../../effect-prop/src/index"
 import { closeAll, targets, type FuzzDialect, type FuzzTarget } from "./dialects"
 import { FuzzFailure, property, Skip, skipKnown, withContext } from "./harness"
 import { knownPlanIssue, knownUnionIssue } from "./known-issues"
@@ -140,10 +140,10 @@ describe("generated fixture queries", () => {
 		}))
 		const options = { ...plainOptions(dialect), depth: 3 }
 		const plansName = `generated fixtures: query results agree (${target.name})`
-		it.skipIf(!target.available)(plansName, () => property(plansName, fc.record({ fixture, plan: plan(options) }),
+		it.skipIf(!target.available)(plansName, () => property(plansName, Gen.struct({ fixture, plan: plan(options) }),
 			(input) => matchesModel(dialect, target, input.plan, input.fixture), { runs: 100 }), 300_000)
 		const unionsName = `generated fixtures: union results agree (${target.name})`
-		it.skipIf(!target.available)(unionsName, () => property(unionsName, fc.record({ fixture, plan: unionPlan(options) }),
+		it.skipIf(!target.available)(unionsName, () => property(unionsName, Gen.struct({ fixture, plan: unionPlan(options) }),
 			(input) => unionMatchesModel(dialect, target, input.plan, input.fixture), { runs: 60 }), 300_000)
 	}
 })

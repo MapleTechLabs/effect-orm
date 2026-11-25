@@ -60,6 +60,43 @@ export const pinned: Record<string, ReadonlyArray<unknown>> = {
 			wrap: false,
 			crossTenant: false,
 		},
+		// mysql-prepared-fraction-after-parameter-constant-column: `OrgId = ? AND Id = ?` with ['org_1', 0.75] matched Id 1 on MySQL 8.4.
+		{
+			...rows({ k: "rows", select: [["id", { k: "col", col: "Id" }]], distinct: false, orderBy: [] }),
+			where: [{ k: "tenant", side: "orders" }, { k: "between", neg: false, e: { k: "col", col: "Id" }, lo: { k: "value", v: 0.25 }, hi: { k: "value", v: 0.75 } }],
+		},
+		{
+			...rows({ k: "rows", select: [["id", { k: "col", col: "Id" }]], distinct: false, orderBy: [] }),
+			where: [{ k: "tenant", side: "orders" }, { k: "cmp", op: "eq", l: { k: "col", col: "Id" }, r: { k: "value", v: 0.75 } }],
+		},
+		// clickhouse-26.2-empty-like-match-all, over a pattern computed per row: an unmatched LEFT JOIN row's `''` contains itself.
+		{
+			orgId: "org_3",
+			join: "left",
+			where: [],
+			shape: { k: "agg", keys: [], aggs: [["a0", { k: "countIf", c: { k: "match", op: "contains", l: { k: "jcol", col: "OrgId" }, needle: { k: "expr", e: { k: "jcol", col: "OrgId" } }, insensitive: false } }]], having: [], orderBy: [] },
+			wrap: false,
+			crossTenant: true,
+		},
+		// A literal on the left of a pattern read from a column: 26.2 refused it until the builder wrote `materialize('a')`.
+		{
+			...rows({ k: "rows", select: [["id", { k: "col", col: "Id" }]], distinct: false, orderBy: [] }),
+			where: [{ k: "match", op: "contains", l: { k: "str", v: "a" }, needle: { k: "expr", e: { k: "col", col: "OrgId" } }, insensitive: false }],
+		},
+		// The same with an empty literal and an empty param: `'' LIKE '%%'` as a constant, false on 26.2.
+		{
+			...rows({ k: "rows", select: [["id", { k: "col", col: "Id" }]], distinct: false, orderBy: [] }),
+			where: [{ k: "match", op: "contains", l: { k: "str", v: "" }, needle: { k: "param", kind: "string", v: "" }, insensitive: false }],
+		},
+		// clickhouse-26.2-empty-like-match-all: `'' LIKE '%%'` is false on 26.2.19.43, so the count was 0.
+		{
+			orgId: "org_1",
+			join: "inner",
+			where: [{ k: "like", op: "like", l: { k: "str", v: "" }, pattern: "%%" }],
+			shape: { k: "agg", keys: [], aggs: [["a0", { k: "count" }]], having: [], orderBy: [] },
+			wrap: false,
+			crossTenant: false,
+		},
 		// `OrgId IN ('org_2')` pins the query to org_2, not to the orgId param: single-tenant, and right to read org_2.
 		{
 			...rows({ k: "rows", select: [["id", { k: "col", col: "Id" }]], distinct: false, orderBy: [] }),
@@ -96,6 +133,18 @@ export const pinned: Record<string, ReadonlyArray<unknown>> = {
 		},
 	] satisfies ReadonlyArray<Plan>,
 
+	// Only where a string literal may hold a NUL: Postgres and SQLite text cannot.
+	"plans match the model (clickhouse": [
+		// clickhouse-26.2-like-suffix-nul: `'org_1' LIKE '%\0'` is true on 26.2.19.43.
+		{
+			orgId: "org_1",
+			join: "inner",
+			where: [{ k: "tenant", side: "orders" }, { k: "match", op: "endsWith", l: { k: "str", v: "org_1" }, needle: { k: "value", v: "\0" }, insensitive: false }],
+			shape: { k: "agg", keys: [], aggs: [["a0", { k: "count" }]], having: [], orderBy: [] },
+			wrap: false,
+			crossTenant: false,
+		},
+	],
 	// ClickHouse 26.2 must page a DISTINCT query over generated rows correctly.
 	"generated fixtures: query results agree": [{
 		// MySQL truncates a quotient at whole 9-digit words: `99 % ((94 / 44) / -2)` is 0.72727274, not …73.
@@ -202,6 +251,16 @@ export const pinned: Record<string, ReadonlyArray<unknown>> = {
 		} satisfies UnionPlan,
 	}],
 	"unions match the model": [
+		// MySQL computes a DISTINCT branch first, at its own scale: `Id / (Id + 1)` is 0.66670000 beside the scale-8 `Id / 1 / 1`.
+		{
+			orgId: "org_1",
+			branches: [
+				rows({ k: "rows", select: [["id", { k: "col", col: "Id" }], ["e0", { k: "arith", op: "div", l: { k: "col", col: "Id" }, r: { k: "arith", op: "add", l: { k: "col", col: "Id" }, r: 1 } }]], distinct: true, orderBy: [] }),
+				rows({ k: "rows", select: [["id", { k: "col", col: "Id" }], ["e0", { k: "arith", op: "div", l: { k: "arith", op: "div", l: { k: "col", col: "Id" }, r: 1 }, r: 1 }]], distinct: false, orderBy: [] }),
+			],
+			orderBy: [],
+			crossTenant: true,
+		},
 		// clickhouse-union-variant-order-by: `Id + 1` (UInt64) under `Id + -1` (Int64), ordered by that column.
 		{
 			orgId: "org_1",

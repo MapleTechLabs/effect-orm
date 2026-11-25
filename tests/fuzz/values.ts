@@ -4,6 +4,7 @@
 import fc from "fast-check"
 import { Arbitrary, DateTime, Schema } from "effect"
 import type * as CH from "@maple-dev/effect-orm/clickhouse"
+import { Gen } from "../../effect-prop/src/index"
 import type { StringRules } from "./dialects/types"
 
 // Strings
@@ -38,6 +39,20 @@ export const nastyString = (rules: StringRules): fc.Arbitrary<string> => {
 		// e.g. Postgres `text` cannot hold U+0000, and PGlite's TextDecoder drops a leading BOM:
 		// the database's and the driver's limits, not the builder's.
 		.filter((s) => (rules.nul || !s.includes("\0")) && (rules.leadingBom || !s.startsWith("\ufeff")))
+}
+
+/** `nastyString` as an effect-prop generator, for the suites that run on it. Shrinks toward the empty string. */
+export const nastyText = (rules: StringRules): Gen.Gen<string> => {
+	const unit = Gen.weighted(
+		[2, Gen.string({ char: Gen.charOf("abcxyz019 "), maxLength: 4 })],
+		[3, Gen.elements(NASTY)],
+		// Any code point, lone surrogates included.
+		[2, Gen.string({ char: Gen.map(Gen.int(0, 0x10_ffff), (cp) => String.fromCodePoint(cp)), maxLength: 3 })],
+		...(rules.nul ? [[1, Gen.constant("\0")] as const] : []),
+	)
+	return Gen.map(Gen.array(unit, { maxLength: 6 }), (parts) => parts.join("")).pipe(
+		Gen.filter((s) => (rules.nul || !s.includes("\0")) && (rules.leadingBom || !s.startsWith("\ufeff"))),
+	)
 }
 
 /** Strings whose byte order every target agrees on: lowercase ASCII and a few symbols. */
