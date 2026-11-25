@@ -636,10 +636,11 @@ const likePattern = (pattern: string | Expr<string, any>): string => {
  */
 const likeSubject = (fragment: SqlFragment, pattern: string | Expr<string, any>): string => {
 	const sql = compile(fragment)
-	// Outside a compile, ClickHouse is the default dialect.
-	const clickhouse = (activeSqlSyntax()?.dialect ?? "clickhouse") === "clickhouse"
-	return clickhouse && fragment._tag === "Str" && typeof pattern !== "string" ? `materialize(${sql})` : sql
+	return isClickHouse() && fragment._tag === "Str" && typeof pattern !== "string" ? `materialize(${sql})` : sql
 }
+
+/** Outside a compile, ClickHouse is the default dialect. */
+const isClickHouse = (): boolean => (activeSqlSyntax()?.dialect ?? "clickhouse") === "clickhouse"
 
 /** `ESCAPE '\'` where LIKE has no default escape, so `\%` means a literal `%` on every dialect. */
 const likeEscape = (): string => (activeSqlSyntax()?.likeEscape === true ? " ESCAPE '\\'" : "")
@@ -703,6 +704,10 @@ const textPattern = (value: string | Expr<string, any>, match: TextMatch, glob: 
 const textMatch = (fragment: SqlFragment, value: string | Expr<string, any>, match: TextMatch, options?: TextMatchOptions): Condition<any> =>
 	makeCond(
 		known(() => {
+			// The empty string contains, starts with and ends with only itself. Written as
+			// that on ClickHouse, where 26.2 does not match an empty subject against the
+			// `'%%'` an empty value makes, row by row.
+			if (isClickHouse() && fragment._tag === "Str" && fragment.value === "" && isExprLike(value)) return `${compile(value.toFragment())} = ''`
 			const insensitive = options?.insensitive === true
 			const likeCase = activeSqlSyntax()?.likeCase ?? "sensitive"
 			if (likeCase === "sensitive") {

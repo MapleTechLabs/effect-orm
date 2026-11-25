@@ -78,6 +78,15 @@ export const pinned: Record<string, ReadonlyArray<unknown>> = {
 			wrap: false,
 			crossTenant: true,
 		},
+		// An empty literal against a column that is empty on the unmatched LEFT JOIN rows: `'' LIKE '%%'` row by row, until the builder wrote `c.Tier = ''`.
+		{
+			orgId: "org_1",
+			join: "left",
+			where: [{ k: "match", op: "contains", l: { k: "str", v: "" }, needle: { k: "expr", e: { k: "jcol", col: "Tier" } }, insensitive: false }],
+			shape: { k: "rows", select: [["id", { k: "col", col: "Id" }]], distinct: false, orderBy: [] },
+			wrap: false,
+			crossTenant: true,
+		},
 		// A literal on the left of a pattern read from a column: 26.2 refused it until the builder wrote `materialize('a')`.
 		{
 			...rows({ k: "rows", select: [["id", { k: "col", col: "Id" }]], distinct: false, orderBy: [] }),

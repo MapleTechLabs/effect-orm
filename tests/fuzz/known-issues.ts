@@ -87,7 +87,8 @@ const canBeEmpty = (e: Expr): boolean => {
 		case "jcol":
 			return true
 		case "coalesce":
-			return canBeEmpty(e.fallback)
+			// `coalesce('', x)` is `''`: only NULL falls through.
+			return canBeEmpty(e.e) || canBeEmpty(e.fallback)
 		default:
 			return false
 	}
@@ -117,7 +118,8 @@ const matchAllOverJoin = (value: unknown): boolean =>
 const emptyAgainstMatchAll = (value: unknown): boolean =>
 	nodes(value).some((node) => {
 		if (node.k === "like") return node.pattern === "%%" && (node.l as Expr).k === "str" && canBeEmpty(node.l as Expr)
-		return isContains(node) && node.needle.k === "expr" && node.needle.e.k !== "str" && canBeEmpty(node.needle.e) && canBeEmpty(node.l)
+		// A literal haystack is written `materialize('…')`, or as an equality when it is empty: right either way.
+		return isContains(node) && node.l.k !== "str" && node.needle.k === "expr" && node.needle.e.k !== "str" && canBeEmpty(node.needle.e) && canBeEmpty(node.l)
 	})
 
 /** `endsWith` of text that holds a NUL byte, written in the plan as a value, a param or a literal. */

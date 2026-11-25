@@ -48,6 +48,21 @@ describe("text match", () => {
 		expect(sqlite.sql).not.toContain("materialize")
 	})
 
+	// Materialized, ClickHouse 26.2 would answer false where the value is empty too: `'' LIKE '%%'`, row by row.
+	it("an empty literal matched against an expression is an equality on ClickHouse", () => {
+		for (const match of ["contains", "startsWith", "endsWith"] as const) {
+			for (const options of [undefined, { insensitive: true }]) {
+				const compiled = CH.compileUnsafe(CH.from(Events).select("Id").where(($) => [CH.lit("")[match]($.Name, options)]))
+				expect(compiled.sql, match).toContain("WHERE events.Name = ''")
+				expect(compiled.sql, match).not.toContain("LIKE")
+			}
+		}
+		// A string value, a non-empty literal and the other dialects are written as before.
+		expect(CH.compileUnsafe(CH.from(Events).select("Id").where(($) => [CH.lit("").contains("x")])).sql).toContain("'' LIKE '%x%'")
+		expect(CH.compileUnsafe(CH.from(Events).select("Id").where(($) => [CH.lit("a").contains($.Name)])).sql).toContain("materialize('a') LIKE")
+		expect(PG.compileUnsafe(PG.from(Users).select("id").where(($) => [PG.lit("").contains($.name)])).sql).toContain("LIKE")
+	})
+
 	it("startsWith and endsWith put the wildcard on one side, also on a nullable column", () => {
 		const compiled = CH.compileUnsafe(
 			CH.from(Events).select("Id").where(($) => [$.Name.startsWith("a_"), $.Note.endsWith("%z")]),
