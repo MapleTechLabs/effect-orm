@@ -201,16 +201,30 @@ export const mysql = MySQL.compileUnsafe(bump, { n: 1 })
 
 export const mariadb = MySQL.compileUnsafe(bump, { n: 1 }, { dialect: MySQL.mariadbDialect })
 // ... ON DUPLICATE KEY UPDATE `count` = `counters`.`count` + VALUES(`count`)
+
+// MySQL before 8.0.19 has no row alias: read the proposed row as MariaDB does.
+export const mysql57Dialect = { ...MySQL.mysqlDialect, clauses: { ...MySQL.mysqlDialect.clauses, onDuplicateKey: "valuesFunction" as const } }
+export const mysql57 = MySQL.compileUnsafe(bump, { n: 1 }, { dialect: mysql57Dialect })
+// ... ON DUPLICATE KEY UPDATE `count` = `counters`.`count` + VALUES(`count`)
 ```
 
 - It fires on a conflict with **any** unique key, the primary key or a UNIQUE index, and has no
   target and no `where`.
-- MySQL reads the proposed row through the row alias `VALUES (...) AS excluded`, which needs
-  MySQL 8.0.19 or later; MariaDB reads `VALUES(col)`.
-- `excludedAll` leaves out the declared `primaryKey`, since the conflict may be on another key.
-  On an `external` table, which declares none, put the key in `except`.
+- **Upserts on `mysqlDialect` need MySQL 8.0.19 or later**, for the row alias
+  `VALUES (...) AS excluded`. The rest of the dialect targets 8.0.17. On an older server, spread
+  `mysqlDialect` with `clauses.onDuplicateKey: "valuesFunction"`, as above: it reads `VALUES(col)`
+  as MariaDB does, which MySQL 8.0.20+ deprecates. MariaDB always reads `VALUES(col)`.
+- `excludedAll` leaves out the declared `primaryKey` and the `tenantColumn`, since the conflict
+  may be on another key, whose row may be another tenant's. On a table that declares no key (an
+  `external` one), a bare `excludedAll()` is refused: put the key in `except`. A row that leaves
+  a column out writes `DEFAULT` there, and `excludedAll` copies that default over the existing
+  value.
+- A proposed-row column the SET reads but no row writes joins the insert with `DEFAULT` cells.
 - Assignments run left to right; a later one reads the values the earlier ones wrote.
-- An inserted row counts as 1 affected row, an updated one as 2, an unchanged one as 0.
+- An inserted row counts as 1 affected row and an updated one as 2. An unchanged one counts 0,
+  or 1 with `CLIENT_FOUND_ROWS`, which mysql2 sets by default.
+- In raw SQL inside a `set`, qualify columns (`` `counters`.`count` ``): the row alias has the
+  same column names, so an unqualified one is ambiguous on MySQL.
 - VALUES rows only: with `select`, compiling is a defect. On a table with a `tenantColumn` it is
   `"cross-tenant"`, since another tenant's row can hold the duplicate key.
 
@@ -229,7 +243,11 @@ dropped. `onDuplicateKeyDoNothing` skips only the duplicate; those still fail th
   mysql2 (and so `@effect/sql-mysql2`) does by default, and 0 without it (mysql2's
   `flags: ["-FOUND_ROWS"]`). An inserted row is 1 either way. Checked on MySQL 8.4 and
   MariaDB 11.4.
-- It keeps the rows' tenant scope: it writes no existing row.
+- It is still an UPDATE of the matched row: a `BEFORE UPDATE` trigger on the table runs and
+  writes what it sets, even on another tenant's row. Then `affectedRows` is 2 and `insertId` is
+  the matched row's id.
+- It keeps the rows' tenant scope: the statement itself writes no existing row (a trigger
+  aside).
 
 See [On duplicate key update](./inserts.md#on-duplicate-key-update).
 

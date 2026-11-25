@@ -51,12 +51,63 @@ describe("onDuplicateKeyUpdate", () => {
 			"ON DUPLICATE KEY UPDATE `key` = `excluded`.`key`, `count` = `excluded`.`count`, `note` = `excluded`.`note`",
 		)
 		expect(sql(MySQL.excludedAll(["count"]), mariadb)).toBe("ON DUPLICATE KEY UPDATE `key` = VALUES(`key`), `note` = VALUES(`note`)")
-		// An external table declares no key: excludedAll copies every written column but those excepted.
+		// An external table declares no key: excludedAll needs it named, and copies every written column but those.
 		const External = MySQL.table("counters", { external: true, columns: Counters.columns })
 		const external = MySQL.insertInto(External).values({ id: 1, key: "a", count: 1, note: "x" })
 		expect(MySQL.compileUnsafe(external.onDuplicateKeyUpdate({ set: MySQL.excludedAll(["id"]) })).sql).toMatch(
 			/UPDATE `key` = `excluded`\.`key`, `count` = `excluded`\.`count`, `note` = `excluded`\.`note`$/,
 		)
+		expect(() => MySQL.compileUnsafe(external.onDuplicateKeyUpdate({ set: MySQL.excludedAll() }))).toThrow(/declares no primaryKey.*except/)
+	})
+
+	it("leaves the key out of excludedAll by its SQL name, and the tenant column too", () => {
+		// The key's SQL name differs from its key: `userId` is stored as `user_id`.
+		const Renamed = MySQL.table("profiles", {
+			casing: "snake_case",
+			columns: { userId: MySQL.bigint, displayName: MySQL.text, orgId: MySQL.varchar(36) },
+			primaryKey: ["userId"],
+		})
+		const renamed = MySQL.insertInto(Renamed).values({ userId: 1, displayName: "a", orgId: "o" }).onDuplicateKeyUpdate({ set: MySQL.excludedAll() })
+		expect(MySQL.compileUnsafe(renamed).sql).toMatch(/UPDATE `display_name` = `excluded`\.`display_name`, `org_id` = `excluded`\.`org_id`$/)
+		// Copying the tenant over the matched row would move another tenant's row into this one.
+		const Tenanted = MySQL.table("rows", {
+			columns: { org: MySQL.varchar(36), id: MySQL.int, email: MySQL.varchar(64), note: MySQL.text },
+			primaryKey: ["org", "id"],
+			tenantColumn: "org",
+		})
+		const insert = MySQL.insertInto(Tenanted).values({ org: "b", id: 1, email: "x", note: "b" })
+		for (const options of [{}, mariadb]) {
+			expect(MySQL.compileUnsafe(insert.onDuplicateKeyUpdate({ set: MySQL.excludedAll() }).crossTenant(), {}, options).sql.split("\n").at(-1)).toBe(
+				options === mariadb
+					? "ON DUPLICATE KEY UPDATE `email` = VALUES(`email`), `note` = VALUES(`note`)"
+					: "ON DUPLICATE KEY UPDATE `email` = `excluded`.`email`, `note` = `excluded`.`note`",
+			)
+		}
+		// Without a declared key, the tenant column is still left out.
+		const External = MySQL.table("rows", { external: true, columns: Tenanted.columns, tenantColumn: "org" })
+		const external = MySQL.insertInto(External).values({ org: "b", id: 1, email: "x", note: "b" }).onDuplicateKeyUpdate({ set: MySQL.excludedAll(["id"]) })
+		expect(MySQL.compileUnsafe(external).sql).toMatch(/UPDATE `email` = `excluded`\.`email`, `note` = `excluded`\.`note`$/)
+	})
+
+	it("adds a proposed-row column no row writes, with DEFAULT cells, as Postgres's excluded has it", () => {
+		const T = MySQL.table("t", { id: MySQL.int, a: MySQL.nullable(MySQL.int), note: MySQL.nullable(MySQL.text) })
+		const two = MySQL.insertInto(T).values([{ id: 1, a: 1 }, { id: 2 }])
+		for (const set of [MySQL.excluded(["note"]), (_: unknown, excluded: { readonly note: unknown }) => ({ note: excluded.note })] as const) {
+			const compiled = MySQL.compileUnsafe(two.onDuplicateKeyUpdate({ set: set as never }))
+			expect(compiled.sql).toBe(
+				"INSERT INTO `t` (`id`, `a`, `note`)\nVALUES (?, ?, DEFAULT), (?, DEFAULT, DEFAULT) AS `excluded`\nON DUPLICATE KEY UPDATE `note` = `excluded`.`note`",
+			)
+			expect(compiled.parameters).toEqual([1, 1, 2])
+		}
+		expect(MySQL.compileUnsafe(two.onDuplicateKeyUpdate({ set: MySQL.excluded(["note"]) }), {}, mariadb).sql).toBe(
+			"INSERT INTO `t` (`id`, `a`, `note`)\nVALUES (?, ?, DEFAULT), (?, DEFAULT, DEFAULT)\nON DUPLICATE KEY UPDATE `note` = VALUES(`note`)",
+		)
+		// A name that is not a column is undefined on both dialects, so the key is left out of SET.
+		for (const options of [{}, mariadb]) {
+			const read = (excluded: Record<string, unknown>) => ({ a: excluded.a, note: excluded.nope })
+			const compiled = MySQL.compileUnsafe(two.onDuplicateKeyUpdate({ set: (_, excluded) => read(excluded) as never }), {}, options)
+			expect(compiled.sql).toMatch(/UPDATE `a` = (`excluded`\.`a`|VALUES\(`a`\))$/)
+		}
 	})
 
 	it("writes a record of values and params, and the last call wins", () => {
@@ -71,13 +122,7 @@ describe("onDuplicateKeyUpdate", () => {
 	})
 
 	it("refuses what MySQL cannot write, before sending SQL", () => {
-		// A column the insert does not write is not in the row alias, and VALUES() of it is NULL on MariaDB.
 		const partial = MySQL.insertInto(Counters).values({ id: 1, key: "a", count: 1, note: "x" })
-		const noNote = MySQL.insertInto(MySQL.table("t", { id: MySQL.int, note: MySQL.nullable(MySQL.text) })).values({ id: 1 })
-		expect(() => MySQL.compileUnsafe(noNote.onDuplicateKeyUpdate({ set: MySQL.excluded(["note"]) }))).toThrow(/does not write/)
-		expect(() => MySQL.compileUnsafe(noNote.onDuplicateKeyUpdate({ set: (_, excluded) => ({ note: excluded.note }) }), {}, mariadb)).toThrow(
-			/does not write/,
-		)
 		expect(() => MySQL.compileUnsafe(partial.onDuplicateKeyUpdate({ set: {} }))).toThrow(/sets no columns/)
 		// INSERT ... SELECT has no row alias.
 		const fromSelect = MySQL.insertInto(Counters).select(MySQL.from(Counters).select("id", "key", "count", "note"))
@@ -89,6 +134,7 @@ describe("onDuplicateKeyUpdate", () => {
 		expect(MySQL.compileUnsafe(named, {}, mariadb).sql).toMatch(/`n` = VALUES\(`n`\)$/)
 		// ON CONFLICT stays refused, and points at the MySQL form.
 		expect(() => MySQL.compileUnsafe(partial.onConflictDoUpdate({ target: ["id"], set: { count: 0 } }))).toThrow(/use onDuplicateKeyUpdate/)
+		expect(() => MySQL.compileUnsafe(partial.onConflictDoNothing())).toThrow(/use onDuplicateKeyDoNothing/)
 	})
 
 	it("skips a duplicate with an update that changes nothing, not INSERT IGNORE", () => {
@@ -108,7 +154,7 @@ describe("onDuplicateKeyUpdate", () => {
 		expect(() => MySQL.compileUnsafe(fromSelect.onDuplicateKeyDoNothing())).toThrow(/onDuplicateKeyDoNothing takes values\(\) rows/)
 		const P = PG.table("counters", { columns: { id: PG.int8 } })
 		expect(() => PG.compileUnsafe(PG.insertInto(P).values({ id: 1 }).onDuplicateKeyDoNothing())).toThrow(
-			/onDuplicateKeyDoNothing has no meaning for the postgres dialect/,
+			/onDuplicateKeyDoNothing has no meaning for the postgres dialect.*use onConflictDoNothing/,
 		)
 	})
 
@@ -208,6 +254,102 @@ for (const [name, url, dialect] of servers) {
 				])
 			})
 		}
+
+		// A raw mysql2 connection, to read the result header. Root where the test creates a trigger,
+		// which a non-SUPER user cannot while binary logging is on.
+		const withTable = async <A>(
+			table: string,
+			ddl: ReadonlyArray<string>,
+			body: (write: (compiled: { readonly sql: string; readonly parameters: ReadonlyArray<unknown> }) => Promise<mysql.ResultSetHeader>, select: () => Promise<unknown>) => Promise<A>,
+			options: { readonly root?: boolean } = {},
+		): Promise<A> => {
+			const uri = new URL(url!)
+			if (options.root === true) uri.username = "root"
+			const connection = await mysql.createConnection({ uri: uri.toString(), timezone: "Z" })
+			try {
+				await connection.query(`DROP TABLE IF EXISTS \`${table}\``)
+				for (const statement of ddl) await connection.query(statement)
+				return await body(
+					async (compiled) => (await connection.execute(compiled.sql, compiled.parameters as Array<any>))[0] as mysql.ResultSetHeader,
+					async () => (await connection.query(`SELECT * FROM \`${table}\` ORDER BY 1, 2`))[0],
+				)
+			} finally {
+				await connection.query(`DROP TABLE IF EXISTS \`${table}\``)
+				await connection.end()
+			}
+		}
+		const options = { dialect }
+
+		it("adds the columns the SET reads but no row writes, as DEFAULT, and a DEFAULT cell overwrites under excludedAll", async () => {
+			const table = `upsert_defaults_${name}_${process.pid}`
+			const T = MySQL.table(table, {
+				columns: { id: MySQL.int, a: MySQL.column(MySQL.int, { default: 7 }), note: MySQL.column(MySQL.varchar(8), { default: "dflt" }) },
+				primaryKey: ["id"],
+			})
+			const seen = await withTable(
+				table,
+				[`CREATE TABLE \`${table}\` (id INT PRIMARY KEY, a INT NOT NULL DEFAULT 7, note VARCHAR(8) NOT NULL DEFAULT 'dflt')`, `INSERT INTO \`${table}\` VALUES (1, 1, 'old'), (2, 2, 'old2')`],
+				async (write, select) => {
+					// Row 2 leaves out `a`: its DEFAULT cell is what excludedAll copies, over the existing 2.
+					await write(MySQL.compileUnsafe(MySQL.insertInto(T).values([{ id: 1, a: 3, note: "n" }, { id: 2, note: "m" }]).onDuplicateKeyUpdate({ set: MySQL.excludedAll() }), {}, options))
+					const afterAll = await select()
+					// No row writes `note`: it joins the insert as DEFAULT, so the proposed row holds the default.
+					await write(MySQL.compileUnsafe(MySQL.insertInto(T).values([{ id: 1, a: 10 }, { id: 2 }]).onDuplicateKeyUpdate({ set: (_, excluded) => ({ a: excluded.a, note: excluded.note }) }), {}, options))
+					return { afterAll, final: await select() }
+				},
+			)
+			expect(seen).toEqual({
+				afterAll: [{ id: 1, a: 3, note: "n" }, { id: 2, a: 7, note: "m" }],
+				final: [{ id: 1, a: 10, note: "dflt" }, { id: 2, a: 7, note: "dflt" }],
+			})
+		})
+
+		it("updates another tenant's row through a unique key without the tenant column", async () => {
+			const table = `upsert_tenants_${name}_${process.pid}`
+			const T = MySQL.table(table, {
+				columns: { org: MySQL.varchar(8), id: MySQL.int, email: MySQL.varchar(32), note: MySQL.varchar(8) },
+				primaryKey: ["org", "id"],
+				tenantColumn: "org",
+			})
+			const seen = await withTable(
+				table,
+				[`CREATE TABLE \`${table}\` (org VARCHAR(8) NOT NULL, id INT NOT NULL, email VARCHAR(32) NOT NULL UNIQUE, note VARCHAR(8) NOT NULL, PRIMARY KEY (org, id))`, `INSERT INTO \`${table}\` VALUES ('a', 1, 'x', 'mine')`],
+				async (write, select) => {
+					// Tenant b's insert pins org = 'b', and its (org, id) key is new; the email is tenant a's.
+					const insert = MySQL.insertInto(T).values({ org: MySQL.param.string("org"), id: 2, email: "x", note: "theirs" })
+					const upsert = insert.onDuplicateKeyUpdate({ set: MySQL.excludedAll() })
+					const scope = MySQL.compileUnsafe(upsert, { org: "b" }, options).tenantScope
+					await write(MySQL.compileUnsafe(upsert.crossTenant(), { org: "b" }, options))
+					return { scope, rows: await select() }
+				},
+			)
+			// The scope rule refuses this without .crossTenant(). excludedAll left org and the key alone, so the row is still a's.
+			expect(seen).toEqual({ scope: "cross-tenant", rows: [{ org: "a", id: 1, email: "x", note: "theirs" }] })
+		})
+
+		it("runs a BEFORE UPDATE trigger on the row a do-nothing matches", async () => {
+			const table = `upsert_trigger_${name}_${process.pid}`
+			const T = MySQL.table(table, {
+				columns: { id: MySQL.int, org: MySQL.varchar(8), slug: MySQL.varchar(8), touched: MySQL.column(MySQL.int, { default: 0 }) },
+				primaryKey: ["id"],
+				tenantColumn: "org",
+			})
+			const seen = await withTable(
+				table,
+				[
+					`CREATE TABLE \`${table}\` (id INT AUTO_INCREMENT PRIMARY KEY, org VARCHAR(8) NOT NULL, slug VARCHAR(8) NOT NULL UNIQUE, touched INT NOT NULL DEFAULT 0)`,
+					`CREATE TRIGGER \`${table}_bu\` BEFORE UPDATE ON \`${table}\` FOR EACH ROW SET NEW.touched = OLD.touched + 1`,
+					`INSERT INTO \`${table}\` (id, org, slug) VALUES (500, 'b', 's')`,
+				],
+				async (write, select) => {
+					// Tenant a's insert collides with tenant b's slug.
+					const header = await write(MySQL.compileUnsafe(MySQL.insertInto(T).values({ id: 1, org: "a", slug: "s" }).onDuplicateKeyDoNothing(), {}, options))
+					return { affectedRows: header.affectedRows, insertId: header.insertId, rows: await select() }
+				},
+				{ root: true },
+			)
+			expect(seen).toEqual({ affectedRows: 2, insertId: 500, rows: [{ id: 500, org: "b", slug: "s", touched: 1 }] })
+		})
 
 		// mysql2 connects with CLIENT_FOUND_ROWS by default: a row matched but not changed then counts.
 		for (const foundRows of [true, false]) {

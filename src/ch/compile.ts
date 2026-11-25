@@ -1940,18 +1940,20 @@ const onConflictClause = (
 	checked: (predicates: ReadonlyArray<TenantPredicate>) => void,
 	/** The columns the INSERT writes, which `excludedAll` sets. */
 	columns: ReadonlyArray<string>,
+	/** A proposed-row column no row writes, read by `onDuplicateKeyUpdate`: the insert adds it with DEFAULT cells. */
+	unwritten: (column: string) => void = () => {},
 ): string => {
 	const { table, conflict } = insert._state
 	if (conflict === undefined) return ""
 	const where = `insertInto(${table.name})`
 	if (conflict.action === "duplicateKeyUpdate" || conflict.action === "duplicateKeyNothing") {
-		return onDuplicateKeyClause(insert, conflict, cell, wrote, columns)
+		return onDuplicateKeyClause(insert, conflict, cell, wrote, columns, unwritten)
 	}
 	const dialect = currentDialect()
 	if (dialect.clauses.onConflict !== true) {
 		return fail(new QueryBuilderDefect({
 			message: `${where}: onConflict has no meaning for the ${dialect.name} dialect, which has no ON CONFLICT clause${
-				dialect.clauses.onDuplicateKey === undefined ? "" : "; use onDuplicateKeyUpdate"
+				dialect.clauses.onDuplicateKey === undefined ? "" : conflict.action === "nothing" ? "; use onDuplicateKeyDoNothing" : "; use onDuplicateKeyUpdate"
 			}`,
 		}), "")
 	}
@@ -2052,26 +2054,25 @@ const primaryKeyColumnsOf = (table: Table<string, ColumnDefs>): ReadonlyArray<st
 }
 
 /**
- * The proposed row, refusing a column the insert does not write: MySQL's row
- * alias has no such column (a server error), and MariaDB's `VALUES(col)` of
- * one is NULL, silently.
+ * The proposed row, reporting each column it is read for that no row writes.
+ * The insert adds those to its column list with a DEFAULT cell in every row,
+ * so the proposed row holds the column's default, as Postgres's `excluded`
+ * does: MySQL's row alias would have no such column (a server error), and
+ * MariaDB's `VALUES(col)` of one is NULL. A name that is not a column is
+ * `undefined` on both dialects.
  */
-const writtenOnly = (
+const proposedRowReads = (
 	accessor: ColumnAccessor<any, any>,
 	table: Table<string, ColumnDefs>,
 	written: ReadonlyArray<string>,
-	where: string,
+	unwritten: (column: string) => void,
 ): ColumnAccessor<any, any> =>
 	new Proxy(accessor, {
 		get: (target, prop, receiver) => {
-			const value: unknown = Reflect.get(target, prop, receiver)
-			if (typeof prop === "string" && Object.hasOwn(table.columns, prop) && !written.includes(prop)) {
-				return fail(new QueryBuilderError({
-					code: "InvalidArguments",
-					message: `${where}: onDuplicateKeyUpdate reads ${JSON.stringify(prop)} of the proposed row, which the insert does not write`,
-				}), value)
-			}
-			return value
+			if (typeof prop !== "string") return Reflect.get(target, prop, receiver)
+			if (!Object.hasOwn(table.columns, prop)) return undefined
+			if (!written.includes(prop)) unwritten(prop)
+			return Reflect.get(target, prop, receiver)
 		},
 	})
 
@@ -2079,9 +2080,11 @@ const writtenOnly = (
  * MySQL's and MariaDB's `ON DUPLICATE KEY UPDATE`. MySQL names the VALUES rows
  * with a row alias (8.0.19+; it deprecates `VALUES(col)`); MariaDB has no row
  * alias and reads `VALUES(col)`. `$` is the existing row, qualified with the
- * table name. `excludedAll` leaves out the declared primary key: the conflict
- * may have been on another unique key, where copying the proposed row's key
- * would change the existing row's.
+ * table name. `excludedAll` leaves out the declared primary key and the tenant
+ * column: the conflict may have been on another unique key, where copying the
+ * proposed row's key would change the existing row's key, and its tenant would
+ * move another tenant's row into this one. Without a declared key, a bare
+ * `excludedAll()` is refused rather than copying a key it cannot see.
  */
 const onDuplicateKeyClause = (
 	insert: CHInsert<any, any, any, any>,
@@ -2089,6 +2092,7 @@ const onDuplicateKeyClause = (
 	cell: (column: string, value: unknown, context: string) => string,
 	wrote: (column: string, value: unknown, sql: string) => void,
 	columns: ReadonlyArray<string>,
+	unwritten: (column: string) => void,
 ): string => {
 	const { table } = insert._state
 	const where = `insertInto(${table.name})`
@@ -2098,7 +2102,7 @@ const onDuplicateKeyClause = (
 	if (style === undefined) {
 		return fail(new QueryBuilderDefect({
 			message: `${where}: ${method} has no meaning for the ${dialect.name} dialect, which has no ON DUPLICATE KEY UPDATE clause${
-				dialect.clauses.onConflict === true ? "; use onConflictDoUpdate" : ""
+				dialect.clauses.onConflict !== true ? "" : conflict.action === "duplicateKeyNothing" ? "; use onConflictDoNothing" : "; use onConflictDoUpdate"
 			}`,
 		}), "")
 	}
@@ -2107,7 +2111,9 @@ const onDuplicateKeyClause = (
 	}
 	const existing = createQualifiedColumnAccessor(table.name, table.tenantColumn, table.columns)
 	if (conflict.action === "duplicateKeyNothing") {
-		// An update that changes nothing: MySQL leaves the row, and its ON UPDATE columns, as they are.
+		// An update that changes nothing: MySQL leaves the row, and its ON UPDATE
+		// columns, as they are. It is still an UPDATE of the matched row, so a
+		// BEFORE UPDATE trigger runs, and whatever it sets is written.
 		const first = columns[0]!
 		return `\nON DUPLICATE KEY UPDATE ${quoteIdent(columnSqlName(table.columns, first))} = ${compileSqlFragment(existing[first]!.toFragment())}`
 	}
@@ -2117,12 +2123,19 @@ const onDuplicateKeyClause = (
 			message: `${where}: onDuplicateKeyUpdate names the proposed row ${PROPOSED_ROW}, which is also this table's name`,
 		}), "")
 	}
-	const excluded = writtenOnly(proposedRowAccessor(table, style === "rowAlias" ? "qualified" : "valuesFunction"), table, columns, where)
+	const excluded = proposedRowReads(proposedRowAccessor(table, style === "rowAlias" ? "qualified" : "valuesFunction"), table, columns, unwritten)
+	const primaryKey = primaryKeyColumnsOf(table)
+	if (isExcludedSet(conflict.set) && conflict.set._tag === "ExcludedAll" && conflict.set.except.length === 0 && primaryKey.length === 0) {
+		return fail(new QueryBuilderDefect({
+			message: `${where}: excludedAll() in onDuplicateKeyUpdate would copy the proposed row's key over the existing row's, and this table declares no primaryKey to leave out; name the key in except: excludedAll(["id"])`,
+		}), "")
+	}
+	const skipped = table.tenantColumn === undefined ? primaryKey : [...primaryKey, table.tenantColumn]
 	const set =
 		typeof conflict.set === "function"
 			? conflict.set(existing, excluded)
 			: isExcludedSet(conflict.set)
-				? excludedSetRecord(table, conflict.set, excluded, columns, primaryKeyColumnsOf(table), where)
+				? excludedSetRecord(table, conflict.set, excluded, columns, skipped, where)
 				: conflict.set
 	const assignments = setAssignments(table, set as Record<string, unknown>, cell, wrote, where, "onDuplicateKeyUpdate")
 	return `${style === "rowAlias" ? ` AS ${quoteIdent(PROPOSED_ROW)}` : ""}\nON DUPLICATE KEY UPDATE ${assignments.join(", ")}`
@@ -2400,8 +2413,21 @@ function compileInsert(insert: CHInsert<any, any, any, any>, params: Record<stri
 			// What the statement reads, besides what it writes: an INSERT ... SELECT
 			// into any table reads with the SELECT's scope.
 			let readScope: TenantScope | undefined
+			let conflictSql: string
+			const wroteSet = (column: string, value: unknown, sql: string) => {
+				if (column === tenant) pin(value, sql)
+			}
+			const checkedConflict = (predicates: ReadonlyArray<TenantPredicate>) => {
+				conflictPredicates = predicates
+			}
 			if (rows !== undefined) {
-				columns = valuesColumns(table, rows)
+				const written = valuesColumns(table, rows)
+				// The conflict clause first: its SET may read a proposed-row column no
+				// row writes, which joins the column list with a DEFAULT cell in every
+				// row. Positional params follow the SQL text, so the order is free.
+				const unwritten = new Set<string>()
+				conflictSql = onConflictClause(insert, cell, wroteSet, checkedConflict, written, (column) => unwritten.add(column))
+				columns = unwritten.size === 0 ? written : Object.keys(table.columns).filter((column) => written.includes(column) || unwritten.has(column))
 				if (tenant !== undefined && !columns.includes(tenant)) pinned = false
 				const tuples = rows.map((row, index) => {
 					const cells = columns.map((column) => {
@@ -2435,18 +2461,8 @@ function compileInsert(insert: CHInsert<any, any, any, any>, params: Record<stri
 					if (readScope !== "single-tenant" || bound === undefined || !(fromSource || sameValue)) pinned = false
 					else bounds.add(bound)
 				}
+				conflictSql = onConflictClause(insert, cell, wroteSet, checkedConflict, columns)
 			}
-			const conflictSql = onConflictClause(
-				insert,
-				cell,
-				(column, value, sql) => {
-					if (column === tenant) pin(value, sql)
-				},
-				(predicates) => {
-					conflictPredicates = predicates
-				},
-				columns,
-			)
 			return [columns, source, conflictSql, readScope] as const
 		},
 	)

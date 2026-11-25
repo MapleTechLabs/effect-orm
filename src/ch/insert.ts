@@ -236,7 +236,8 @@ export interface OnDuplicateKeyUpdate<
 	 * existing row and `excluded` the row that was proposed for insertion:
 	 * `(($, excluded) => ({ count: $.count.add(excluded.count) }))`. Or
 	 * `excluded(columns)` / `excludedAll(except)`, to copy columns from the
-	 * proposed row; `excludedAll` leaves out the table's declared primary key.
+	 * proposed row; `excludedAll` leaves out the table's declared primary key
+	 * and its tenant column, and without a declared key needs an `except`.
 	 */
 	readonly set:
 		| ExcludedSet<WritableColumns<Cols, Computed>>
@@ -262,7 +263,7 @@ export interface CHInsertState {
 	readonly settings?: Readonly<Record<string, InsertSettingValue>>
 	/** Set by `returning`: the RETURNING list, as a select callback. */
 	readonly returningFn?: ($: any) => Record<string, Expr<any>>
-	/** Set by `onConflictDoNothing` / `onConflictDoUpdate` / `onDuplicateKeyUpdate`. */
+	/** Set by `onConflictDoNothing` / `onConflictDoUpdate` / `onDuplicateKeyUpdate` / `onDuplicateKeyDoNothing`; the last call wins. */
 	readonly conflict?: ConflictClause
 	/** Set by `crossTenant()`. */
 	readonly crossTenant?: boolean
@@ -334,15 +335,16 @@ export interface CHInsert<
 
 	/**
 	 * `ON CONFLICT DO NOTHING`: skip a row that conflicts. With `returning`, a
-	 * skipped row returns nothing. Postgres and SQLite; replaces any earlier
-	 * `onConflict*` or `onDuplicateKeyUpdate`.
+	 * skipped row returns nothing. Postgres and SQLite (MySQL:
+	 * `onDuplicateKeyDoNothing`); replaces any earlier `onConflict*` or
+	 * `onDuplicateKey*`.
 	 */
 	onConflictDoNothing(options?: OnConflictDoNothing<Cols>): CHInsert<Cols, Defaulted, Computed, Output, Params, Req>
 
 	/**
 	 * `ON CONFLICT (target) DO UPDATE SET ...`: an upsert. Postgres and SQLite
 	 * (MySQL: `onDuplicateKeyUpdate`); replaces any earlier `onConflict*` or
-	 * `onDuplicateKeyUpdate`.
+	 * `onDuplicateKey*`.
 	 */
 	onConflictDoUpdate<S extends ConflictSet<Cols, Computed>, W = never>(
 		options: OnConflictDoUpdate<Cols, Computed, S, W>,
@@ -353,7 +355,10 @@ export interface CHInsert<
 	 * when a row conflicts on any unique key, the primary key or another, so
 	 * there is no target; nor is there a WHERE. The assignments run left to
 	 * right, and a later one reads the existing row as the earlier ones left it.
-	 * VALUES rows only, not `select`. Replaces any earlier `onConflict*`.
+	 * `excludedAll` leaves out the declared primary key and the tenant column.
+	 * A proposed-row column no row writes is added to the insert with DEFAULT
+	 * cells. VALUES rows only, not `select`. Replaces any earlier `onConflict*`
+	 * or `onDuplicateKey*`.
 	 */
 	onDuplicateKeyUpdate<S extends ConflictSet<Cols, Computed>>(
 		options: OnDuplicateKeyUpdate<Cols, Computed, S>,
@@ -363,7 +368,8 @@ export interface CHInsert<
 	 * Skip a row that conflicts on any unique key, on MySQL and MariaDB:
 	 * `ON DUPLICATE KEY UPDATE col = col` on the first written column, an
 	 * update that changes nothing. Not `INSERT IGNORE`, which also turns
-	 * truncation, foreign key and NOT NULL errors into warnings. VALUES rows
+	 * truncation, foreign key and NOT NULL errors into warnings. It is still an
+	 * UPDATE of the matched row, so a BEFORE UPDATE trigger runs. VALUES rows
 	 * only. Replaces any earlier `onConflict*` or `onDuplicateKey*`.
 	 */
 	onDuplicateKeyDoNothing(): CHInsert<Cols, Defaulted, Computed, Output, Params, Req>
