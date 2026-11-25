@@ -55,6 +55,7 @@ export const Tours = MySQL.table("tours", {
 		seats: MySQL.column(MySQL.int, { default: 10 }),
 		code: MySQL.column(MySQL.varchar(16), { unique: true }),
 		startsAt: MySQL.column(MySQL.datetime, { defaultExpr: MySQL.dateTimeNow }),
+		codeLower: MySQL.column(MySQL.varchar(16), { generated: { as: ($) => MySQL.lower($.code), stored: true } }),
 	},
 	primaryKey: ["orgId", "id"],
 	indexes: [MySQL.index("tours_starts", ["orgId", "startsAt"])],
@@ -70,6 +71,7 @@ export const statements = S.mysqlEntitiesOf([Tours]).pipe(Effect.map(S.renderMys
 // 	`seats` int NOT NULL DEFAULT 10,
 // 	`code` varchar(16) NOT NULL,
 // 	`starts_at` datetime(3) NOT NULL DEFAULT (UTC_TIMESTAMP(3)),
+// 	`code_lower` varchar(16) GENERATED ALWAYS AS (LOWER(`code`)) STORED,
 // 	PRIMARY KEY (`org_id`, `id`),
 // 	CONSTRAINT `tours_code_unique` UNIQUE (`code`)
 // ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
@@ -88,6 +90,16 @@ export const statements = S.mysqlEntitiesOf([Tours]).pipe(Effect.map(S.renderMys
   around an expression (`"(UUID())"`), or a DSL callback, which is parenthesized for you; a
   callback may not read another column. `dateTimeNow` is the `defaultExpr` for a `datetime`.
   Either lets an insert leave the column out.
+- `generated: { as, stored? }` declares a generated column,
+  `GENERATED ALWAYS AS (<as>) STORED` or `VIRTUAL` (the default). `as` is SQL as written, without
+  the parentheses, or a DSL callback, which may read the row's columns: any base column, and a
+  generated one only when it is declared before. The database computes the column, so it is
+  `computed` on the table: an insert row or an update SET that writes it is a type error (and a
+  `QueryBuilderError` when the row comes from data), `excludedAll` never copies it, and
+  `tableSchemas(table).insert` / `.update` leave it out. It is selected like any column. It takes
+  no `default`, `defaultExpr`, `defaultFn` or `onUpdate`, and is written without `NOT NULL`, which
+  MariaDB refuses on a generated column (the column type still decides how a read decodes). It
+  cannot be in the primary key; an index or `unique` on it works on both servers.
 - `unique: true` writes `CONSTRAINT <table>_<column>_unique UNIQUE (...)`; a string names it.
 - An index takes column names. MariaDB has no index on an expression, so there is no callback form.
 - A `TEXT`, `BLOB` or `JSON` column cannot be in the primary key, an index or a UNIQUE constraint:
@@ -96,7 +108,12 @@ export const statements = S.mysqlEntitiesOf([Tours]).pipe(Effect.map(S.renderMys
 - Table, column, index and constraint names are plain identifiers of at most 64 characters. A
   table's indexes and UNIQUE constraints share one namespace, and `PRIMARY` is taken. Column names
   compare without case, so `Id` and `id` collide; so do two table names in one schema.
-- `table(name, { external: true, columns })` declares a table another tool owns: no DDL.
+- `table(name, { external: true, columns })` declares a table another tool owns: no DDL. Its
+  column options still say what an insert may do: a `default` or `defaultExpr` lets it leave a
+  column out, and `generated` marks a column the database computes, which an insert or update
+  never writes (MySQL refuses one that does: "The value specified for generated column ... is not
+  allowed"). Nothing reads `as` there; give the expression the other tool declares, or any
+  string.
 
 The tests apply this DDL to MySQL 8.4 and MariaDB 11.4 and read every default back through the
 builder. `effect-orm generate` with `dialect: "mysql"` diffs these tables against the migrations

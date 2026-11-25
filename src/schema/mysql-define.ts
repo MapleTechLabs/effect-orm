@@ -34,6 +34,22 @@ const ddl = ddlRenderer(mysqlDialect)
 
 // Columns
 
+/**
+ * A generated column, `GENERATED ALWAYS AS (<as>) STORED | VIRTUAL`: the
+ * database computes its value from the row, and refuses an insert or update
+ * that writes it.
+ */
+export interface GeneratedColumn {
+	/**
+	 * The expression: SQL as a string, or built with the DSL, which may read
+	 * the row's other columns (a generated column only those declared before
+	 * it). Written in the parentheses `AS` takes.
+	 */
+	readonly as: DdlExpr<ColumnDefs>
+	/** `STORED`: computed when the row is written, and kept. Otherwise `VIRTUAL`, MySQL's default: computed when read. */
+	readonly stored?: boolean
+}
+
 export interface ColumnOptions<T extends CHType<string, any, any>, DefaultR = never, UpdateR = never> {
 	/**
 	 * The column's name in the database, when it differs from its key in
@@ -72,6 +88,14 @@ export interface ColumnOptions<T extends CHType<string, any, any>, DefaultR = ne
 	 * update's. No DDL.
 	 */
 	readonly onUpdate?: Effect.Effect<InsertValue<T>, never, UpdateR>
+	/**
+	 * A generated column: inserts and updates may not write it, and every read
+	 * returns its computed value. It takes no `default`, `defaultExpr`,
+	 * `defaultFn` or `onUpdate`. It is written without `NOT NULL`, which
+	 * MariaDB refuses on a generated column; its type still decides what a
+	 * read decodes. On an `external` table it only marks the column computed.
+	 */
+	readonly generated?: GeneratedColumn
 }
 
 /**
@@ -97,9 +121,16 @@ export const column = <T extends CHType<string, any, any>, Given extends keyof C
 	// A default must be a value: `default: undefined` would make the column optional on insert
 	// while writing no DEFAULT, so the insert would fail on NOT NULL. The same holds for the client defaults.
 	options: ColumnOptions<T, DefaultR, UpdateR> & {
-		readonly [K in Given]: K extends "default" | "defaultExpr" | "defaultFn" | "onUpdate" ? {} : unknown
-	} = {} as never,
+		readonly [K in Given]: K extends "default" | "defaultExpr" | "defaultFn" | "onUpdate" | "generated" ? {} : unknown
+	} & GeneratedTakesNoDefault<Given> = {} as never,
 ): ColumnSpec<T, Given, NoInfer<DefaultR>, NoInfer<UpdateR>> => ({ _tag: "MysqlColumnSpec", type, options })
+
+/** The database computes a generated column, so it takes no default of either kind. */
+type GeneratedTakesNoDefault<Given> = "generated" extends Given
+	? { readonly [K in Extract<Given, DefaultOption>]?: never }
+	: unknown
+
+type DefaultOption = "default" | "defaultExpr" | "defaultFn" | "onUpdate"
 
 export type ColumnInput = CHType<string, any, any> | ColumnSpec<CHType<string, any, any>, any, any, any>
 
@@ -113,8 +144,16 @@ export type DefaultedColumnsOf<I extends Record<string, ColumnInput>> = {
 	[K in keyof I]: I[K] extends ColumnSpec<any, infer Given, any, any>
 		? [Exclude<Given, "name" | "unique">] extends [never]
 			? never
-			: K
+			: "generated" extends Given
+				? never
+				: K
 		: never
+}[keyof I] &
+	string
+
+/** Columns declared `generated`: an insert or update may not write them. */
+export type ComputedColumnsOf<I extends Record<string, ColumnInput>> = {
+	[K in keyof I]: I[K] extends ColumnSpec<any, infer Given, any, any> ? ("generated" extends Given ? K : never) : never
 }[keyof I] &
 	string
 
@@ -180,6 +219,46 @@ const checkName = (problems: ProblemSink, object: string, name: string): void =>
 /** A literal MySQL writes as a DEFAULT as it is: a number, a quoted string, TRUE / FALSE or a hex string. */
 const SIMPLE_LITERAL = /^(-?\d+(\.\d+)?(e[+-]?\d+)?|'(?:[^'\\]|\\[\s\S])*'|TRUE|FALSE|X'[0-9a-f]*')$/i
 
+/** A DSL expression rendered, with the columns (keys) it reads. */
+const renderReading = (expr: Exclude<DdlExpr<ColumnDefs>, string>, columns: ColumnDefs): { readonly sql: string; readonly read: ReadonlyArray<string> } => {
+	const read = new Set<string>()
+	const accessor = createColumnAccessor(columns)
+	const tracked = new Proxy(accessor, {
+		get: (target, key, receiver) => {
+			if (typeof key === "string" && Object.hasOwn(columns, key)) read.add(key)
+			return Reflect.get(target, key, receiver)
+		},
+	})
+	return { sql: ddl.value(expr(tracked as typeof accessor)), read: [...read] }
+}
+
+/**
+ * A generated column's expression as SQL. It may read the row, but MySQL
+ * lets it read a generated column only when that one is declared before it,
+ * and never itself.
+ */
+const generatedColumn = (
+	problems: ProblemSink,
+	table: string,
+	name: string,
+	generated: GeneratedColumn,
+	columns: ColumnDefs,
+	/** The generated columns declared before this one. */
+	earlier: ReadonlySet<string>,
+	isGenerated: (column: string) => boolean,
+): NonNullable<MysqlColumnEntity["generated"]> => {
+	const object = `${table}.${name}`
+	if (generated.as === undefined) problems.push({ object, message: "generated takes an expression in as" })
+	if (typeof generated.as !== "function") return { expr: generated.as ?? "", stored: generated.stored === true }
+	const { sql, read } = renderReading(generated.as, columns)
+	if (read.includes(name)) problems.push({ object, message: "a generated column cannot read itself" })
+	const later = read.filter((column) => column !== name && isGenerated(column) && !earlier.has(column))
+	if (later.length > 0) {
+		problems.push({ object, message: `generated reads ${later.join(", ")}, generated after it; a generated column reads only generated columns declared before it` })
+	}
+	return { expr: sql, stored: generated.stored === true }
+}
+
 const columnDefault = (
 	problems: ProblemSink,
 	table: string,
@@ -188,6 +267,11 @@ const columnDefault = (
 	columns: ColumnDefs,
 ): string | null => {
 	const { options } = spec
+	if (options.generated !== undefined) {
+		const given = (["default", "defaultExpr", "defaultFn", "onUpdate"] as const).filter((key) => options[key] !== undefined)
+		if (given.length > 0) problems.push({ object: `${table}.${name}`, message: `a generated column takes no ${given.join(", ")}; the database computes it` })
+		return null
+	}
 	if (options.default !== undefined && options.defaultExpr !== undefined) {
 		problems.push({ object: `${table}.${name}`, message: "a column takes one of default, defaultExpr" })
 	}
@@ -199,17 +283,9 @@ const columnDefault = (
 	if (options.defaultExpr !== undefined) {
 		if (typeof options.defaultExpr === "string") return options.defaultExpr
 		// A default that reads another column depends on declaration order; keep defaults constant.
-		const read: Array<string> = []
-		const accessor = createColumnAccessor(columns)
-		const tracked = new Proxy(accessor, {
-			get: (target, key, receiver) => {
-				if (typeof key === "string" && Object.hasOwn(columns, key)) read.push(key)
-				return Reflect.get(target, key, receiver)
-			},
-		})
-		const sql = ddl.value(options.defaultExpr(tracked as typeof accessor))
+		const { sql, read } = renderReading(options.defaultExpr, columns)
 		if (read.length > 0) {
-			problems.push({ object: `${table}.${name}`, message: `defaultExpr reads ${[...new Set(read)].join(", ")}; a default must be constant` })
+			problems.push({ object: `${table}.${name}`, message: `defaultExpr reads ${read.join(", ")}; a default must be constant` })
 		}
 		return `(${sql})`
 	}
@@ -285,13 +361,18 @@ export interface TableDdl {
 	readonly uniques: ReadonlyArray<MysqlUniqueEntity>
 }
 
+/**
+ * `Computed` comes last, after the requirements, so a type written before
+ * generated columns existed keeps its meaning.
+ */
 export interface MysqlSchemaTable<
 	Name extends string,
 	Cols extends ColumnDefs,
 	Defaulted extends string = string,
 	InsertR = never,
 	UpdateR = never,
-> extends Table<Name, Cols, Defaulted, never, InsertR, UpdateR> {
+	Computed extends string = string,
+> extends Table<Name, Cols, Defaulted, Computed, InsertR, UpdateR> {
 	readonly ddl: TableDdl
 	/** What is wrong with the definition; `mysqlEntitiesOf` fails when any table has one. */
 	readonly problems: ReadonlyArray<DefinitionProblem>
@@ -308,7 +389,7 @@ export const externalMysqlTable = <const Name extends string>(
 	name: Name,
 	definition: ExternalTableDefinition<Record<string, ColumnInput>>,
 ): Table<Name, any, any, any> => {
-	const external = externalTable(name, definition, isColumnSpec, [])
+	const external = externalTable(name, definition, isColumnSpec, ["generated"])
 	const clientDefaults = clientDefaultsOfColumns(definition.columns)
 	return clientDefaults === undefined ? external : { ...external, clientDefaults }
 }
@@ -317,7 +398,8 @@ export const externalMysqlTable = <const Name extends string>(
 const clientDefaultsOfColumns = (columns: Record<string, ColumnInput>): ClientDefaults | undefined =>
 	clientDefaultsOf(
 		Object.entries(columns).flatMap(([column, input]) => {
-			if (!isColumnSpec(input)) return []
+			// The database computes a generated column; nothing may write it.
+			if (!isColumnSpec(input) || input.options.generated !== undefined) return []
 			const { defaultFn, onUpdate, default: literal, defaultExpr } = input.options
 			return [[column, { defaultFn, onUpdate, databaseDefault: literal !== undefined || defaultExpr !== undefined }] as const]
 		}),
@@ -331,12 +413,13 @@ const clientDefaultsOfColumns = (columns: Record<string, ColumnInput>): ClientDe
 export const mysqlTable = <const Name extends string, const Columns extends Record<string, ColumnInput>>(
 	name: Name,
 	definition: TableDefinition<Columns>,
-): MysqlSchemaTable<Name, ColumnsOf<Columns>, DefaultedColumnsOf<Columns>> => withRenderProblems(name, () => buildTable(name, definition))
+): MysqlSchemaTable<Name, ColumnsOf<Columns>, DefaultedColumnsOf<Columns>, never, never, ComputedColumnsOf<Columns>> =>
+	withRenderProblems(name, () => buildTable(name, definition))
 
 function buildTable<const Name extends string, const Columns extends Record<string, ColumnInput>>(
 	name: Name,
 	definition: TableDefinition<Columns>,
-): MysqlSchemaTable<Name, ColumnsOf<Columns>, DefaultedColumnsOf<Columns>> {
+): MysqlSchemaTable<Name, ColumnsOf<Columns>, DefaultedColumnsOf<Columns>, never, never, ComputedColumnsOf<Columns>> {
 	const problems: ProblemSink = []
 	checkName(problems, name, name)
 	const inputs = Object.entries(definition.columns)
@@ -347,20 +430,25 @@ function buildTable<const Name extends string, const Columns extends Record<stri
 	const sqlName = (column: string) => columnSqlName(types, column)
 	const has = (column: string) => Object.hasOwn(types, column)
 
-	const columnEntities = inputs.map(([column, input], position): MysqlColumnEntity => {
+	const specs = inputs.map(([, input]): ColumnSpec<CHType<string, any, any>, any, any, any> =>
+		isColumnSpec(input) ? input : { _tag: "MysqlColumnSpec", type: input as CHType<string, any, any>, options: {} },
+	)
+	const generatedKeys = inputs.filter((_, position) => specs[position]!.options.generated !== undefined).map(([column]) => column)
+	const columnEntities = inputs.map(([column], position): MysqlColumnEntity => {
 		checkName(problems, `${name}.${column}`, sqlName(column))
-		const spec: ColumnSpec<CHType<string, any, any>, any, any, any> = isColumnSpec(input)
-			? input
-			: { _tag: "MysqlColumnSpec", type: input as CHType<string, any, any>, options: {} }
-		return {
+		const spec = specs[position]!
+		const base = {
 			kind: "column",
 			table: name,
 			name: sqlName(column),
 			position,
 			type: canonicalMysqlType(spec.type.sql),
-			notNull: spec.type._tag !== "Nullable",
 			default: columnDefault(problems, name, column, spec, types),
-		}
+		} as const
+		if (spec.options.generated === undefined) return { ...base, notNull: spec.type._tag !== "Nullable" }
+		const earlier = new Set(generatedKeys.slice(0, generatedKeys.indexOf(column)))
+		// MariaDB refuses NOT NULL on a generated column, so neither server is given one.
+		return { ...base, notNull: false, generated: generatedColumn(problems, name, column, spec.options.generated, types, earlier, (key) => generatedKeys.includes(key)) }
 	})
 	const entityOf = (column: string) => columnEntities.find((c) => c.name === sqlName(column))!
 
@@ -373,7 +461,9 @@ function buildTable<const Name extends string, const Columns extends Record<stri
 		if (pkColumns.length === 0) problems.push({ object: name, message: "a primary key needs columns" })
 		for (const column of pkColumns) {
 			if (!has(column)) problems.push({ object: `${name} primary key`, message: `${column} is not a column` })
-			else if (!entityOf(column).notNull) {
+			else if (generatedKeys.includes(column)) {
+				problems.push({ object: `${name}.${column}`, message: "a generated column cannot be in the primary key; MariaDB refuses it" })
+			} else if (!entityOf(column).notNull) {
 				problems.push({ object: `${name}.${column}`, message: "a primary key column cannot be nullable; MySQL would make it NOT NULL" })
 			}
 		}
@@ -426,6 +516,7 @@ function buildTable<const Name extends string, const Columns extends Record<stri
 		columns: types,
 		...(definition.tenantColumn !== undefined ? { tenantColumn: definition.tenantColumn } : undefined),
 		...(defaults.length > 0 ? { defaults: defaults as unknown as Array<DefaultedColumnsOf<Columns>> } : undefined),
+		...(generatedKeys.length > 0 ? { computed: generatedKeys as unknown as Array<ComputedColumnsOf<Columns>> } : undefined),
 		...(clientDefaults !== undefined ? { clientDefaults } : undefined),
 		ddl: { dialect: "mysql", table: tableEntity, columns: columnEntities, indexes: indexEntities, uniques: uniqueEntities },
 		problems,

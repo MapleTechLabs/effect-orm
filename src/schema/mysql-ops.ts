@@ -24,6 +24,12 @@ export const MysqlMigrationOp = Schema.Union([
 	Schema.Struct({ op: Schema.Literal("rename_column"), from: Schema.String, column: MysqlColumnEntity }),
 	/** The column as it will be: a new type, nullability or default. `fill` sets existing NULLs to the default first. */
 	Schema.Struct({ op: Schema.Literal("modify_column"), column: MysqlColumnEntity, fill: Schema.Boolean }),
+	/**
+	 * The column dropped and added again as it will be, in one ALTER TABLE: a
+	 * column that becomes or stops being generated, or changes between STORED
+	 * and VIRTUAL, which MySQL cannot MODIFY in every direction.
+	 */
+	Schema.Struct({ op: Schema.Literal("replace_column"), column: MysqlColumnEntity }),
 	Schema.Struct({ op: Schema.Literal("drop_primary_key"), table: Schema.String }),
 	Schema.Struct({ op: Schema.Literal("add_primary_key"), table: Schema.String, columns: Schema.Array(Schema.String) }),
 	Schema.Struct({ op: Schema.Literal("add_unique"), unique: MysqlUniqueEntity }),
@@ -40,6 +46,7 @@ export const labelOfMysql = (op: MysqlMigrationOp): MysqlOpLabel => {
 	switch (op.op) {
 		case "drop_table":
 		case "drop_column":
+		case "replace_column":
 			return "destructive"
 		case "modify_column":
 		case "add_primary_key":
@@ -63,6 +70,8 @@ export const renderMysqlOp = (op: MysqlMigrationOp): ReadonlyArray<string> => {
 			return [`ALTER TABLE ${mysqlIdent(op.column.table)} ADD COLUMN ${renderMysqlColumnDefinition(op.column)}`]
 		case "drop_column":
 			return [`ALTER TABLE ${mysqlIdent(op.table)} DROP COLUMN ${mysqlIdent(op.name)}`]
+		case "replace_column":
+			return [`ALTER TABLE ${mysqlIdent(op.column.table)} DROP COLUMN ${mysqlIdent(op.column.name)}, ADD COLUMN ${renderMysqlColumnDefinition(op.column)}`]
 		case "rename_column":
 			// CHANGE, not RENAME COLUMN: MariaDB names a JSON column's CHECK (json_valid(...)) after the
 			// column and keeps the old name through a RENAME COLUMN, but not through a CHANGE.

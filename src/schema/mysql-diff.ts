@@ -31,6 +31,7 @@ const opOrder: Record<MysqlMigrationOp["op"], number> = {
 	drop_primary_key: 4,
 	add_column: 5,
 	modify_column: 6,
+	replace_column: 6,
 	drop_column: 7,
 	drop_table: 8,
 	create_table: 9,
@@ -73,6 +74,8 @@ export const diffMysqlSchemas = (
 		if (!nextTables.has(name)) confirm([{ type: "confirm_data_loss", kind: "table", entity: name }], { op: "drop_table", name })
 	}
 
+	// Columns dropped and added again: the indexes and UNIQUE constraints on them go first and come back after.
+	const replaced = new Set<string>()
 	for (const [name, after] of nextTables) {
 		const before = prevTables.get(name)
 		if (before === undefined) continue
@@ -82,7 +85,14 @@ export const diffMysqlSchemas = (
 		for (const column of columns(next, name)) {
 			const was = old.get(column.name)
 			if (was === undefined) ops.push({ op: "add_column", column })
-			else if (!same(definition(was), definition(column))) {
+			else if (generatedKind(was) !== generatedKind(column)) {
+				// A base column's values are lost either way: replaced by computed ones, or by the
+				// default. A generated column's are computed again.
+				const lossy = generatedKind(was) === "base" || generatedKind(column) === "base"
+				const opCount = ops.length
+				confirm(lossy ? [dropHint(column.name)] : [], { op: "replace_column", column })
+				if (ops.length > opCount) replaced.add(`${name}.${column.name}`)
+			} else if (!same(definition(was), definition(column))) {
 				// A new type converts the column's values (or truncates them): confirm it like a drop.
 				const op: MysqlMigrationOp = { op: "modify_column", column, fill: !was.notNull && column.notNull }
 				confirm(was.type === column.type ? [] : [dropHint(column.name)], op)
@@ -97,6 +107,8 @@ export const diffMysqlSchemas = (
 		}
 	}
 
+	const coversReplaced = (part: MysqlUniqueEntity | Extract<MysqlSchemaEntity, { kind: "index" }>) =>
+		part.columns.some((column) => replaced.has(`${part.table}.${part.kind === "index" ? column.replace(/^`|`$/g, "").replace(/``/g, "`") : column}`))
 	// Indexes and UNIQUE constraints share a table's index namespace: drops run before adds.
 	const diffParts = <E extends MysqlUniqueEntity | Extract<MysqlSchemaEntity, { kind: "index" }>>(
 		before: ReadonlyArray<E>,
@@ -108,7 +120,7 @@ export const diffMysqlSchemas = (
 		const nextParts = new Map(after.map((e) => [entityKey(e), e]))
 		for (const [key, part] of nextParts) {
 			const was = prevParts.get(key)
-			if (was !== undefined && same(was, part)) continue
+			if (was !== undefined && same(was, part) && !coversReplaced(part)) continue
 			if (was !== undefined) ops.push(drop(was))
 			ops.push(add(part))
 		}
@@ -134,7 +146,11 @@ export const diffMysqlSchemas = (
 }
 
 /** What a column is, apart from its place in the table. */
-const definition = (column: MysqlColumnEntity) => ({ type: column.type, notNull: column.notNull, default: column.default })
+const definition = (column: MysqlColumnEntity) => ({ type: column.type, notNull: column.notNull, default: column.default, generated: column.generated ?? null })
+
+/** Whether a column is generated, and how: MySQL cannot MODIFY a column from one of these to another in every direction. */
+const generatedKind = (column: MysqlColumnEntity): "base" | "stored" | "virtual" =>
+	column.generated === undefined ? "base" : column.generated.stored ? "stored" : "virtual"
 
 /**
  * `confirm_rename` hints for column names that differ only in case: a next

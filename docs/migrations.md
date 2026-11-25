@@ -758,6 +758,8 @@ MySQL alters tables in place, so every change is an `ALTER TABLE` of its own:
 | The primary key | `ALTER TABLE ... DROP PRIMARY KEY` before the column changes, `ADD PRIMARY KEY (...)` after |
 | New or changed UNIQUE column, index | `DROP INDEX ... ON`, then `ADD CONSTRAINT ... UNIQUE` or `CREATE [UNIQUE] INDEX` after the column changes |
 | Renamed table or column | `RENAME TABLE`, or `CHANGE COLUMN <old> <new definition>`, only with a `confirm_rename` hint |
+| A generated column's expression | `ALTER TABLE ... MODIFY COLUMN` with the new `GENERATED ALWAYS AS (...)` |
+| A column made generated or base, or STORED made VIRTUAL (or back) | `ALTER TABLE ... DROP COLUMN ..., ADD COLUMN ...` in one statement, since MySQL cannot `MODIFY` the STORED status; its indexes and UNIQUE constraints are dropped before and added after. A base column's values are lost either way, so that needs `confirm_data_loss` for the column; between STORED and VIRTUAL the values are computed again |
 
 A column is renamed with `CHANGE COLUMN` rather than `RENAME COLUMN`: MariaDB names a JSON
 column's automatic `CHECK (json_valid(...))` after the column, and keeps the old name through a

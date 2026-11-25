@@ -5,7 +5,7 @@
 import { afterAll, describe, expect, it } from "vitest"
 import { DateTime, Effect, Schema } from "effect"
 import * as MySQL from "@maple-dev/effect-orm/mysql"
-import { mysqlEntitiesOf, renderMysqlSchema } from "@maple-dev/effect-orm/schema"
+import { diffMysqlSchemas, mysqlEntitiesOf, renderMysqlOp, renderMysqlSchema } from "@maple-dev/effect-orm/schema"
 import { mariadbServer, mysqlServer, scratchDatabase, type ScratchDatabase } from "./mysql-support"
 
 const Tours = MySQL.table("tours", {
@@ -88,6 +88,102 @@ for (const [server, dialect] of [[mysqlServer, MySQL.mysqlDialect], [mariadbServ
 			await db.query("INSERT INTO `tours` (`id`, `org_id`, `code`) VALUES (1, 'o', 'c')", [])
 			await expect(db.query("INSERT INTO `tours` (`id`, `org_id`, `code`) VALUES (2, 'o', 'c')", [])).rejects.toThrow(/Duplicate entry/)
 			await expect(db.query("INSERT INTO `tours` (`id`, `org_id`, `code`) VALUES (3, NULL, 'd')", [])).rejects.toThrow(/cannot be null/)
+		})
+
+		it("computes generated columns, STORED and VIRTUAL, on a table it owns and on an external one", async () => {
+			const db = await scratchDatabase(server, "ddl")
+			opened.push(db)
+			const Orders = MySQL.table("orders", {
+				casing: "snake_case",
+				columns: {
+					id: MySQL.bigint,
+					qty: MySQL.int,
+					unitPrice: MySQL.int,
+					total: MySQL.column(MySQL.int, { generated: { as: ($) => $.qty.mul($.unitPrice), stored: true } }),
+					doubled: MySQL.column(MySQL.int, { generated: { as: ($) => $.total.mul(2) } }),
+					email: MySQL.varchar(200),
+					emailLower: MySQL.column(MySQL.nullable(MySQL.varchar(200)), { generated: { as: "LOWER(`email`)" }, unique: true }),
+				},
+				primaryKey: ["id"],
+				indexes: [MySQL.index("orders_total", ["total"])],
+			})
+			for (const sql of renderMysqlSchema(await Effect.runPromise(mysqlEntitiesOf([Orders])))) await db.query(sql, [])
+			const generated = await db.query(`SELECT COLUMN_NAME, EXTRA FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'orders' AND EXTRA LIKE '%GENERATED%' ORDER BY ORDINAL_POSITION`, [db.name])
+			expect(generated.map((c) => [c.COLUMN_NAME, String(c.EXTRA).replace("PERSISTENT", "STORED")])).toEqual([
+				["total", "STORED GENERATED"],
+				["doubled", "VIRTUAL GENERATED"],
+				["email_lower", "VIRTUAL GENERATED"],
+			])
+
+			const run = async (write: object) => {
+				const compiled = MySQL.compileUnsafe(write as never, undefined, { dialect })
+				await db.query(compiled.sql, compiled.parameters)
+			}
+			const read = async () => {
+				const select = MySQL.compileUnsafe(MySQL.from(Orders).select().orderBy(["id", "asc"]), undefined, { dialect })
+				return Effect.runPromise(select.decodeRows(await db.query(select.sql, select.parameters)))
+			}
+			const insert = MySQL.insertInto(Orders).values([
+				{ id: 1, qty: 2, unitPrice: 3, email: "A@X.io" },
+				{ id: 2, qty: 1, unitPrice: 5, email: "b@x.io" },
+			])
+			await run(insert)
+			expect(await read()).toEqual([
+				{ id: 1, qty: 2, unitPrice: 3, total: 6, doubled: 12, email: "A@X.io", emailLower: "a@x.io" },
+				{ id: 2, qty: 1, unitPrice: 5, total: 5, doubled: 10, email: "b@x.io", emailLower: "b@x.io" },
+			])
+			// excludedAll copies the written columns only; the database computes the rest again.
+			await run(MySQL.insertInto(Orders).values({ id: 1, qty: 4, unitPrice: 3, email: "c@x.io" }).onDuplicateKeyUpdate({ set: MySQL.excludedAll() }))
+			await run(MySQL.update(Orders).set({ qty: 10 }).where(($) => [$.id.eq(2)]))
+			expect(await read()).toEqual([
+				{ id: 1, qty: 4, unitPrice: 3, total: 12, doubled: 24, email: "c@x.io", emailLower: "c@x.io" },
+				{ id: 2, qty: 10, unitPrice: 5, total: 50, doubled: 100, email: "b@x.io", emailLower: "b@x.io" },
+			])
+			// The UNIQUE on the generated column holds.
+			await expect(run(MySQL.insertInto(Orders).values({ id: 3, qty: 1, unitPrice: 1, email: "C@X.IO" }))).rejects.toThrow(/Duplicate entry/)
+
+			// A table another tool owns: its DDL is MySQL's own, and the external declaration only marks the columns computed.
+			await db.query(
+				`CREATE TABLE \`lines\` (\`id\` int NOT NULL PRIMARY KEY, \`a\` int NOT NULL, \`b\` int NOT NULL,
+				\`sum_ab\` int GENERATED ALWAYS AS (\`a\` + \`b\`) STORED, \`product\` int GENERATED ALWAYS AS (\`a\` * \`b\`) VIRTUAL)`,
+				[],
+			)
+			const Lines = MySQL.table("lines", {
+				external: true,
+				columns: {
+					id: MySQL.int,
+					a: MySQL.int,
+					b: MySQL.int,
+					sum: MySQL.column(MySQL.int, { name: "sum_ab", generated: { as: "a + b", stored: true } }),
+					product: MySQL.column(MySQL.int, { generated: { as: "a * b" } }),
+				},
+			})
+			await run(MySQL.insertInto(Lines).values({ id: 1, a: 3, b: 4 }).onDuplicateKeyUpdate({ set: MySQL.excludedAll(["id"]) }))
+			await run(MySQL.insertInto(Lines).values({ id: 1, a: 5, b: 4 }).onDuplicateKeyUpdate({ set: MySQL.excludedAll(["id"]) }))
+			const select = MySQL.compileUnsafe(MySQL.from(Lines).select(), undefined, { dialect })
+			expect(await Effect.runPromise(select.decodeRows(await db.query(select.sql, select.parameters)))).toEqual([{ id: 1, a: 5, b: 4, sum: 9, product: 20 }])
+			// What the database says when a write names a generated column anyway: the builder never sends one.
+			await expect(db.query("INSERT INTO `lines` (`id`, `a`, `b`, `sum_ab`) VALUES (2, 1, 1, 2)", [])).rejects.toThrow(/generated column/)
+		})
+
+		it("migrates a generated column: a new expression, STORED to VIRTUAL under an index, and a base column made generated", async () => {
+			const db = await scratchDatabase(server, "ddl")
+			opened.push(db)
+			const version = (total: MySQL.ColumnInput, label: MySQL.ColumnInput) =>
+				MySQL.table("items", { columns: { id: MySQL.int, n: MySQL.int, total, label }, primaryKey: ["id"], indexes: [MySQL.index("items_total", ["total"])] })
+			const before = version(MySQL.column(MySQL.int, { generated: { as: "n * 2", stored: true } }), MySQL.column(MySQL.varchar(20), { default: "x" }))
+			const after = version(MySQL.column(MySQL.int, { generated: { as: "n * 3" } }), MySQL.column(MySQL.nullable(MySQL.varchar(20)), { generated: { as: "CONCAT('#', n)", stored: true } }))
+			const from = await Effect.runPromise(mysqlEntitiesOf([before]))
+			const to = await Effect.runPromise(mysqlEntitiesOf([after]))
+			for (const sql of renderMysqlSchema(from)) await db.query(sql, [])
+			await db.query("INSERT INTO `items` (`id`, `n`) VALUES (1, 5)", [])
+			const pending = diffMysqlSchemas(from, to)
+			expect(pending.missingHints).toEqual([{ type: "confirm_data_loss", kind: "column", entity: "items.label" }])
+			const diff = diffMysqlSchemas(from, to, pending.missingHints)
+			for (const sql of diff.ops.flatMap(renderMysqlOp)) await db.query(sql, [])
+			expect(await db.query("SELECT `total`, `label` FROM `items`", [])).toEqual([{ total: 15, label: "#5" }])
+			// Nothing is left to change.
+			expect(diffMysqlSchemas(to, to).ops).toEqual([])
 		})
 
 		// MariaDB 11.4 sizes an integer literal a digit short where a union branch is a

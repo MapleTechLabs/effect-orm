@@ -78,6 +78,106 @@ describe("MySQL.table DDL", () => {
 		expect(T.ddl.columns.map((c) => c.default)).toEqual([null, "(X'01ff')", "X'01'", `('{"a":"x\\'y"}')`, "'2024-02-29'"])
 	})
 
+	describe("generated columns", () => {
+		const Orders = MySQL.table("orders", {
+			casing: "snake_case",
+			columns: {
+				id: MySQL.bigint,
+				qty: MySQL.int,
+				unitPrice: MySQL.int,
+				total: MySQL.column(MySQL.int, { generated: { as: ($) => $.qty.mul($.unitPrice), stored: true } }),
+				email: MySQL.varchar(200),
+				emailLower: MySQL.column(MySQL.nullable(MySQL.varchar(200)), { generated: { as: "LOWER(`email`)" }, unique: true }),
+				note: MySQL.column(MySQL.text, { default: "" }),
+			},
+			primaryKey: ["id"],
+		})
+
+		it("writes GENERATED ALWAYS AS (...) STORED or VIRTUAL, with no NOT NULL or DEFAULT", () => {
+			expect(renderMysqlSchema(entities([Orders]))).toEqual([
+				`CREATE TABLE IF NOT EXISTS \`orders\` (
+	\`id\` bigint NOT NULL,
+	\`qty\` int NOT NULL,
+	\`unit_price\` int NOT NULL,
+	\`total\` int GENERATED ALWAYS AS (\`qty\` * \`unit_price\`) STORED,
+	\`email\` varchar(200) NOT NULL,
+	\`email_lower\` varchar(200) GENERATED ALWAYS AS (LOWER(\`email\`)) VIRTUAL,
+	\`note\` text NOT NULL DEFAULT (''),
+	PRIMARY KEY (\`id\`),
+	CONSTRAINT \`orders_email_lower_unique\` UNIQUE (\`email_lower\`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+			])
+			// A column that is not generated carries no generated key, so earlier snapshots keep their ids.
+			expect("generated" in Orders.ddl.columns[0]!).toBe(false)
+		})
+
+		it("are computed: left out of inserts and update SETs, refused there at runtime, and selectable", () => {
+			expect(Orders.computed).toEqual(["total", "emailLower"])
+			expect(Orders.defaults).toEqual(["note"])
+			const insert = MySQL.insertInto(Orders).values({ id: 1, qty: 2, unitPrice: 3, email: "A@x" })
+			expect(MySQL.compileUnsafe(insert).sql).toBe("INSERT INTO `orders` (`id`, `qty`, `unit_price`, `email`)\nVALUES (?, ?, ?, ?)")
+			expect(() => MySQL.compileUnsafe(MySQL.insertInto(Orders).values({ id: 1, qty: 2, unitPrice: 3, email: "a", total: 6 } as never))).toThrow(
+				/row 0 writes total, which the database computes/,
+			)
+			expect(() => MySQL.compileUnsafe(MySQL.update(Orders).set({ total: 1 } as never).allRows())).toThrow(/not an insertable column/)
+			// excludedAll copies the written columns, never a generated one.
+			expect(MySQL.compileUnsafe(insert.onDuplicateKeyUpdate({ set: MySQL.excludedAll() })).sql.split("\n").at(-1)).toBe(
+				"ON DUPLICATE KEY UPDATE `qty` = `excluded`.`qty`, `unit_price` = `excluded`.`unit_price`, `email` = `excluded`.`email`",
+			)
+			expect(MySQL.compileUnsafe(MySQL.from(Orders).select("total", "emailLower")).sql).toMatch(/`orders`\.`total` AS `total`,\s+`orders`\.`email_lower` AS `emailLower`/)
+			const schemas = MySQL.tableSchemas(Orders)
+			expect(Object.keys(schemas.insert.fields)).toEqual(["id", "qty", "unitPrice", "email", "note"])
+			expect(Object.keys(schemas.update.fields)).toEqual(["id", "qty", "unitPrice", "email", "note"])
+			expect(Object.keys(schemas.select.fields)).toContain("total")
+		})
+
+		it("on an external table: computed, with no DDL and no client default", () => {
+			const External = MySQL.table("orders", {
+				external: true,
+				columns: {
+					id: MySQL.bigint,
+					total: MySQL.column(MySQL.int, { name: "total_cents", generated: { as: "qty * price", stored: true } }),
+					at: MySQL.column(MySQL.datetime, { defaultExpr: MySQL.dateTimeNow }),
+				},
+			})
+			expect("ddl" in External).toBe(false)
+			expect(External.computed).toEqual(["total"])
+			expect(External.defaults).toEqual(["at"])
+			expect(External.clientDefaults).toBeUndefined()
+			expect(MySQL.compileUnsafe(MySQL.insertInto(External).values({ id: 1 })).sql).toBe("INSERT INTO `orders` (`id`)\nVALUES (?)")
+		})
+
+		const cases: ReadonlyArray<readonly [string, MysqlSchemaTable<string, any>, RegExp]> = [
+			["a default", MySQL.table("t", { columns: { a: MySQL.int, b: MySQL.column(MySQL.int, { generated: { as: "a + 1" }, default: 1 } as never) } }), /a generated column takes no default; the database computes it/],
+			["a defaultFn and an onUpdate", MySQL.table("t", { columns: { a: MySQL.int, b: MySQL.column(MySQL.int, { generated: { as: "a + 1" }, defaultFn: Effect.succeed(1), onUpdate: Effect.succeed(1) } as never) } }), /takes no defaultFn, onUpdate/],
+			["reading itself", MySQL.table("t", { columns: { a: MySQL.int, b: MySQL.column(MySQL.int, { generated: { as: ($) => $.b!.add(1) } }) } }), /cannot read itself/],
+			[
+				"reading a generated column declared after it",
+				MySQL.table("t", {
+					columns: {
+						a: MySQL.int,
+						b: MySQL.column(MySQL.int, { generated: { as: ($) => $.c!.add(1) } }),
+						c: MySQL.column(MySQL.int, { generated: { as: ($) => $.a!.add(1) } }),
+					},
+				}),
+				/generated reads c, generated after it/,
+			],
+			["a generated primary key column", MySQL.table("t", { columns: { a: MySQL.int, id: MySQL.column(MySQL.int, { generated: { as: "a", stored: true } }) }, primaryKey: ["id"] }), /cannot be in the primary key/],
+		]
+		for (const [name, table, message] of cases) it(`refuses ${name}`, () => expect(problemsOf([table])).toMatch(message))
+
+		it("may read base columns in any order, and generated ones declared before it", () => {
+			const T = MySQL.table("t", {
+				columns: {
+					b: MySQL.column(MySQL.int, { generated: { as: ($) => $.a!.add(1) } }),
+					c: MySQL.column(MySQL.int, { generated: { as: ($) => $.b!.add(1) } }),
+					a: MySQL.int,
+				},
+			})
+			expect(problemsOf([T])).toBe("")
+		})
+	})
+
 	describe("records a problem, and mysqlEntitiesOf fails, for", () => {
 		const cases: ReadonlyArray<readonly [string, MysqlSchemaTable<string, any>, RegExp]> = [
 			["a TEXT primary key", MySQL.table("t", { columns: { id: MySQL.text }, primaryKey: ["id"] }), /id is text, which MySQL cannot index without a prefix length/],
@@ -179,6 +279,34 @@ describe("diffMysqlSchemas", () => {
 		expect(sqlOf(diffMysqlSchemas(before, after, hints).ops)).toEqual(["RENAME TABLE `links` TO `urls`", "ALTER TABLE `urls` CHANGE COLUMN `url` `target` varchar(200) NOT NULL"])
 		const cased = entities([MySQL.table("links", { columns: { id: MySQL.bigint, URL: MySQL.varchar(200) }, primaryKey: ["id"], indexes: [MySQL.index("links_url", ["URL"])] })])
 		expect(sqlOf(diffMysqlSchemas(before, cased).ops)).toEqual(["ALTER TABLE `links` CHANGE COLUMN `url` `URL` varchar(200) NOT NULL"])
+	})
+
+	it("changes a generated column's expression in place, and replaces one that changes kind", () => {
+		const total = (as: string, stored?: boolean) => MySQL.column(MySQL.int, { generated: { as, stored } })
+		const created = diffMysqlSchemas([], v({ n: MySQL.int, total: total("n * 2", true) }))
+		expect(sqlOf(created.ops)[0]).toContain("`total` int GENERATED ALWAYS AS (n * 2) STORED")
+		expect(sqlOf(diffMysqlSchemas(v({ n: MySQL.int, total: total("n * 2", true) }), v({ n: MySQL.int, total: total("n * 3", true) })).ops)).toEqual([
+			"ALTER TABLE `links` MODIFY COLUMN `total` int GENERATED ALWAYS AS (n * 3) STORED",
+		])
+		expect(sqlOf(diffMysqlSchemas(v({ n: MySQL.int }), v({ n: MySQL.int, total: total("n * 2") })).ops)).toEqual([
+			"ALTER TABLE `links` ADD COLUMN `total` int GENERATED ALWAYS AS (n * 2) VIRTUAL",
+		])
+		// STORED to VIRTUAL: computed again, nothing lost; its index goes first and comes back after.
+		const indexed = (stored: boolean) => v({ n: MySQL.int, total: total("n * 2", stored) }, [MySQL.index("links_total", ["total"])])
+		expect(sqlOf(diffMysqlSchemas(indexed(true), indexed(false)).ops)).toEqual([
+			"DROP INDEX `links_total` ON `links`",
+			"ALTER TABLE `links` DROP COLUMN `total`, ADD COLUMN `total` int GENERATED ALWAYS AS (n * 2) VIRTUAL",
+			"CREATE INDEX `links_total` ON `links` (`total`)",
+		])
+		// A base column's values are lost to a generated one, and the other way round: confirm it.
+		const base = v({ n: MySQL.int, total: MySQL.int })
+		const generated = v({ n: MySQL.int, total: total("n * 2", true) })
+		for (const [from, to] of [[base, generated], [generated, base]] as const) {
+			const pending = diffMysqlSchemas(from, to)
+			expect(pending.ops).toEqual([])
+			expect(pending.missingHints).toEqual([{ type: "confirm_data_loss", kind: "column", entity: "links.total" }])
+			expect(diffMysqlSchemas(from, to, pending.missingHints).ops.map((op) => op.op)).toEqual(["replace_column"])
+		}
 	})
 
 	it("creates a new table with its UNIQUE constraints inside, and drops a table only once confirmed", () => {
