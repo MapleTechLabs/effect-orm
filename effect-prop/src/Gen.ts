@@ -55,6 +55,8 @@ export const gen = <A>(body: () => Generator<Gen<any>, A>): Gen<A> =>
 		return step.value
 	})
 
+export const isGen = (u: unknown): u is Gen<unknown> => typeof u === "object" && u !== null && TypeId in u
+
 // Combinators
 
 export const constant = <const A>(value: A): Gen<A> => make(() => value)

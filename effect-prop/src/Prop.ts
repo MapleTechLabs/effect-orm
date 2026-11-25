@@ -277,10 +277,14 @@ const checkScoped = <A, E, R>(gen: Gen.Gen<A>, property: Property<A, E, R | Scop
 		const format = options.format ?? ((value: A): string => Formatter.format(value))
 		const seed = options.seed ?? Math.floor((yield* Random.next) * 0x1_0000_0000)
 		if (!Number.isSafeInteger(seed)) return yield* Effect.die(new Error(`effect-prop: the seed must be an integer, got ${seed}`))
-		const maxRuns = Math.max(1, options.runs ?? DEFAULT_RUNS)
+		const maxRuns = options.runs ?? DEFAULT_RUNS
+		const wanted = options.failures ?? 1
+		// NaN compares false with everything: the search would end before its first input, and pass.
+		for (const [what, value] of [["runs", maxRuns], ["failures", wanted]] as const) {
+			if (!Number.isSafeInteger(value) || value < 1) return yield* Effect.die(new Error(`effect-prop: ${what} must be a positive integer, got ${value}`))
+		}
 		const budgetMs = options.budget === undefined ? undefined : Duration.toMillis(options.budget)
 		const timeoutMs = options.timeout === undefined ? undefined : Duration.toMillis(options.timeout)
-		const wanted = Math.max(1, options.failures ?? 1)
 		const maxDiscards = options.maxDiscards ?? maxRuns * 10
 		const maxShrinks = options.maxShrinks ?? 2000
 		const replay = options.replay

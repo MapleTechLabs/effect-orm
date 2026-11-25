@@ -255,6 +255,8 @@ describe("check", () => {
 		expect(many.failures).toHaveLength(4)
 		await expect(run(check(Gen.int(), () => true, { replay: "nonsense" }))).rejects.toThrow(/not a replay token/)
 		await expect(run(check(Gen.int(), () => true, { seed: Number.NaN }))).rejects.toThrow(/seed must be an integer/)
+		await expect(run(check(Gen.int(), () => false, { failures: Number.NaN }))).rejects.toThrow(/failures must be a positive integer/)
+		await expect(run(check(Gen.int(), () => false, { runs: 0 }))).rejects.toThrow(/runs must be a positive integer/)
 	})
 
 	it("stops at its time budget", async () => {
@@ -282,25 +284,30 @@ describe("check", () => {
 })
 
 describe("searches", () => {
-	it("slow steers toward the input the property takes longest on", async () => {
-		const spin = (ms: number): void => {
-			const until = performance.now() + ms
-			while (performance.now() < until) {
-				// busy
-			}
-		}
+	it("target climbs a score of its own, given as a function of the input", async () => {
 		const kept: Array<number> = []
 		await run(
-			check(Gen.array(Gen.boolean, { maxLength: 40 }), (xs) => { spin(xs.length * 0.15) }, {
-				runs: 200,
+			check(Gen.array(Gen.boolean, { maxLength: 40 }), () => true, {
+				runs: 300,
 				seed: 1,
-				search: (r) => Search.slow({ ...r, keep: (tested) => { kept.push((tested.value as Array<boolean>).length) } }),
+				search: (r) => Search.target<ReadonlyArray<boolean>>((tested) => tested.value?.length)({ ...r, keep: (tested) => { kept.push(tested.value!.length) } }),
 			}),
 		)
-		// Each kept input took longer than every one before it. Time is noisy, so only the trend is asserted.
-		expect(kept.length).toBeGreaterThan(2)
-		expect(kept.at(-1)).toBeGreaterThan(kept[0]!)
-		expect(kept.at(-1)).toBeGreaterThanOrEqual(15)
+		// Each kept input scored higher than every one before it, up to the longest there is.
+		expect(kept).toEqual([...kept].sort((a, b) => a - b))
+		expect(new Set(kept).size).toBe(kept.length)
+		expect(kept.at(-1)).toBe(40)
+	})
+
+	it("slow keeps an input only when it took longer than every one before it", async () => {
+		const durations: Array<number> = []
+		const report = await run(
+			check(Gen.int(), () => Effect.void, { runs: 200, seed: 1, search: (r) => Search.slow({ ...r, keep: (tested) => { durations.push(tested.durationMs) } }) }),
+		)
+		// Time is noisy, so nothing is asserted about which inputs: only that the climb is one.
+		expect(report.runs).toBe(200)
+		expect(durations.length).toBeGreaterThan(0)
+		expect(durations).toEqual([...durations].sort((a, b) => a - b))
 	})
 
 	it("target passes over a score that is not a number", async () => {
