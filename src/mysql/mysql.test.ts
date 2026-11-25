@@ -18,6 +18,19 @@ const Items = MySQL.table("items", {
 })
 
 describe("the MySQL dialect", () => {
+	it("selects a condition as a boolean, NULL (unknown) as false", () => {
+		const compiled = MySQL.compileUnsafe(
+			MySQL.from(Items).select(($) => ({ set: MySQL.asBoolean($.note.isNotNull().and($.note.neq(""))) })),
+		)
+		expect(compiled.sql.replace(/\s+/g, " ").trim()).toBe(
+			"SELECT (((`items`.`note` IS NOT NULL AND `items`.`note` != ?)) IS TRUE) AS `set` FROM `items`",
+		)
+		expect(compiled.parameters).toEqual([""])
+		// The type refuses it for another dialect, and so does the compile.
+		// @ts-expect-error -- asBoolean is MySQL's
+		expect(() => PG.compileUnsafe(PG.from(Items as any).select(($: any) => ({ set: MySQL.asBoolean($.id.eq(1)) })))).toThrow()
+	})
+
 	it("writes backtick identifiers and positional placeholders", () => {
 		const compiled = MySQL.compileUnsafe(
 			MySQL.from(Items).select("id", "note").where(($) => [$.note.eq(MySQL.param.string("note")), $.id.gt(MySQL.param.int("id"))]),

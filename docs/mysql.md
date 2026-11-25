@@ -321,7 +321,10 @@ text.
 ## Functions
 
 `count`, `countDistinct`, `countIf` (`COUNT(CASE WHEN … THEN 1 END)`), `sum`, `avg`, `min`, `max`,
-`lower`, `upper`, `length` (`CHAR_LENGTH`: characters, not bytes) and `coalesce`. `sum` and `avg`
+`lower`, `upper`, `length` (`CHAR_LENGTH`: characters, not bytes), `coalesce`, and `asBoolean(c)`,
+a condition as a boolean value to select or `set` (`((c) IS TRUE)`, so an unknown, NULL, condition
+reads as `false`; in `set`, MySQL assigns left to right, so it reads a column an earlier assignment
+already changed). `sum` and `avg`
 of integers are `DECIMAL`, which mysql2 sends as text; they decode to `number`. A function of
 another dialect is refused in the type and at compile time.
 

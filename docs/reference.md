@@ -815,7 +815,7 @@ for driver wiring, collations and what differs.
 | `dateTimeNow` | A `defaultExpr` for a `datetime` column |
 | `nullable(type)`, `custom`, `brand` | Type composition |
 | `count`, `countDistinct`, `countIf`, `sum`, `avg`, `min`, `max` | MySQL aggregates; the last four can return SQL NULL |
-| `lower`, `upper`, `length`, `coalesce` | MySQL scalar functions |
+| `lower`, `upper`, `length`, `coalesce`, `asBoolean` | MySQL scalar functions; `asBoolean(c)` is a condition as a boolean (`((c) IS TRUE)`) |
 | `table`, `column`, `index`, `uniqueIndex` | Tables with their DDL; see below |
 | `mysqlDialect`, `mariadbDialect` | The dialects |
 | `MysqlInteger` | The integer wire codec: a number, or the numeric string mysql2 sends for a wide one |
