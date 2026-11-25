@@ -2,6 +2,7 @@ import { Cause, ConfigProvider, Context, Data, Effect, Ref } from "effect"
 import { TestClock } from "effect/testing"
 import { describe, expect, it } from "vitest"
 import { Gen, Prop, Regressions, Search, Source } from "../src/index"
+import * as Shrink from "../src/Shrink"
 
 const run = <A, E>(effect: Effect.Effect<A, E>): Promise<A> => Effect.runPromise(effect)
 
@@ -368,6 +369,28 @@ describe("check", () => {
 		expect(text).toContain("[0,0,0]")
 		expect(text).toContain(`replay: PROP_REPLAY='${report.failures[0]!.replay}'`)
 		expect(Source.decodeReplay(report.failures[0]!.replay!)).toBeDefined()
+	})
+})
+
+describe("shrinker span lookup", () => {
+	const span = (start: number, end: number, label = "x") => ({ label, start, end, depth: 0 })
+
+	it("finds the spans inside one, past ancestors that start where it does", () => {
+		const index = Shrink.indexByLabel([span(1, 2), span(0, 3), span(0, 10), span(0, 6), span(7, 9), span(4, 5, "other")])
+		expect(Shrink.within(index, span(0, 6))).toEqual([span(0, 3), span(1, 2)])
+		expect(Shrink.within(index, span(0, 10))).toEqual([span(0, 6), span(0, 3), span(1, 2), span(7, 9)])
+		expect(Shrink.within(index, span(1, 2))).toEqual([])
+		expect(Shrink.within(index, span(4, 5, "other"))).toEqual([])
+	})
+
+	it("keeps one entry for wrappers of the same extent, and stops after a fixed number of candidates", () => {
+		// 100 wrappers around each of 1,000 one-draw values, all under one root.
+		const spans = [span(0, 1000)]
+		for (let at = 0; at < 1000; at++) for (let copy = 0; copy < 100; copy++) spans.push(span(at, at + 1))
+		const index = Shrink.indexByLabel(spans)
+		expect(index.get("x")).toHaveLength(1001)
+		expect(Shrink.within(index, span(0, 1000))).toHaveLength(8)
+		expect(Shrink.within(index, span(500, 501))).toEqual([])
 	})
 })
 

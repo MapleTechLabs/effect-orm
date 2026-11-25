@@ -41,38 +41,44 @@ const bySizeDescending = (spans: ReadonlyArray<Span>): Array<Span> =>
 /** How many same-label descendants of one span the shrinker tries as its replacement. */
 const MAX_REPLACEMENTS = 8
 
-/** Spans of each label, by where they start. */
-const indexByLabel = (spans: ReadonlyArray<Span>): ReadonlyMap<string, ReadonlyArray<Span>> => {
+/**
+ * The distinct extents of each label's spans, by where they start and, at one
+ * start, longest first: an ancestor comes before what it holds. A wrapper of
+ * the same extent as what it wraps is one entry.
+ */
+export const indexByLabel = (spans: ReadonlyArray<Span>): ReadonlyMap<string, ReadonlyArray<Span>> => {
 	const byLabel = new Map<string, Array<Span>>()
 	for (const span of spans) {
 		const same = byLabel.get(span.label)
 		if (same === undefined) byLabel.set(span.label, [span])
 		else same.push(span)
 	}
-	for (const same of byLabel.values()) same.sort((a, b) => a.start - b.start || b.end - a.end)
+	for (const [label, same] of byLabel) {
+		same.sort((x, y) => x.start - y.start || y.end - x.end)
+		byLabel.set(label, same.filter((span, i) => i === 0 || span.start !== same[i - 1]!.start || span.end !== same[i - 1]!.end))
+	}
 	return byLabel
 }
 
 /**
  * Up to `MAX_REPLACEMENTS` spans of `outer`'s label that lie inside it and are
- * shorter. Found by binary search, so a pass over every span does not scan
- * every span for each one.
+ * shorter, nearest its start first. Spans nest, so in the index's order they
+ * are the entries right after `outer` itself: one binary search and at most
+ * `MAX_REPLACEMENTS` steps, however many spans there are.
  */
-const within = (byLabel: ReadonlyMap<string, ReadonlyArray<Span>>, outer: Span): Array<Span> => {
+export const within = (byLabel: ReadonlyMap<string, ReadonlyArray<Span>>, outer: Span): Array<Span> => {
 	const same = byLabel.get(outer.label) ?? []
+	// The first entry after `outer`: one that starts later, or at the same place and ends sooner.
 	let low = 0
 	let high = same.length
 	while (low < high) {
 		const middle = (low + high) >> 1
-		if (same[middle]!.start < outer.start) low = middle + 1
+		const span = same[middle]!
+		if (span.start < outer.start || (span.start === outer.start && span.end >= outer.end)) low = middle + 1
 		else high = middle
 	}
 	const found: Array<Span> = []
-	for (let i = low; i < same.length && same[i]!.start < outer.end && found.length < MAX_REPLACEMENTS; i++) {
-		const span = same[i]!
-		// One of the same extent would replace the span with itself.
-		if (span.end <= outer.end && span.end - span.start < outer.end - outer.start) found.push(span)
-	}
+	for (let i = low; i < same.length && i < low + MAX_REPLACEMENTS && same[i]!.start < outer.end; i++) found.push(same[i]!)
 	return found
 }
 
