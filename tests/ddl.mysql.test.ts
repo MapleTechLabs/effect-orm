@@ -186,7 +186,8 @@ for (const [server, dialect] of [[mysqlServer, MySQL.mysqlDialect], [mariadbServ
 			expect(diffMysqlSchemas(to, to).ops).toEqual([])
 		})
 
-		describe("migrates generated columns", () => {
+		// Each case creates a database and runs DDL on it, often several times: seconds apiece on MySQL.
+		describe("migrates generated columns", { timeout: 30_000 }, () => {
 			type Hints = Parameters<typeof diffMysqlSchemas>[2]
 			const T = (columns: Record<string, MySQL.ColumnInput>, indexes: ReadonlyArray<MySQL.IndexSpec<any>> = []) =>
 				MySQL.table("t", { columns: { id: MySQL.int, ...columns }, primaryKey: ["id"], indexes })
@@ -270,6 +271,32 @@ for (const [server, dialect] of [[mysqlServer, MySQL.mysqlDialect], [mariadbServ
 				])
 				expect(rows).toEqual([{ id: 1, quantity: 4, twice: 8 }])
 				expect(columns).toEqual(["id", "quantity", "twice"])
+			})
+
+			it("changes generated expressions in place, one reading another, under a UNIQUE key", async () => {
+				const version = (factor: number, offset: number) =>
+					T({
+						n: MySQL.int,
+						a: MySQL.column(MySQL.int, { generated: { as: `n * ${factor}`, stored: true }, unique: true }),
+						b: gen(($) => $.a!.add(offset)),
+						c: MySQL.column(MySQL.int, { generated: { as: ($) => $.b!.mul(factor) }, unique: true }),
+					})
+				const { rows, missing } = await migrate(version(2, 1), version(3, 10), ["INSERT INTO t (id, n) VALUES (1, 4), (2, 5)"])
+				expect(missing).toEqual([])
+				expect(rows).toEqual([{ id: 1, n: 4, a: 12, b: 22, c: 66 }, { id: 2, n: 5, a: 15, b: 25, c: 75 }])
+			})
+
+			it("adds a dependent declared before a VIRTUAL column back only after that column is made STORED or base", async () => {
+				// The database has `g` after `x`, as when the table was made; the definition now declares it first.
+				const before = T({ n: MySQL.int, x: gen("n * 2"), g: gen("x + 1") })
+				const stored = await migrate(before, T({ n: MySQL.int, g: gen("x + 1"), x: gen("n * 2", true) }), ["INSERT INTO t (id, n) VALUES (1, 4)"])
+				expect(stored.rows).toEqual([{ id: 1, n: 4, g: 9, x: 8 }])
+				// MySQL requires a generated column after the generated ones it reads.
+				expect(stored.columns).toEqual(["id", "n", "x", "g"])
+				const base = await migrate(before, T({ n: MySQL.int, g: gen("x + 1"), x: MySQL.column(MySQL.int, { default: 7 }) }), ["INSERT INTO t (id, n) VALUES (1, 4)"])
+				expect(base.missing).toEqual([{ type: "confirm_data_loss", kind: "column", entity: "t.x" }])
+				expect(base.rows).toEqual([{ id: 1, n: 4, g: 8, x: 7 }])
+				expect(base.columns).toEqual(["id", "n", "g", "x"])
 			})
 
 			it("makes a STORED column base, keeping its values and its UNIQUE key, and a base column STORED", async () => {
