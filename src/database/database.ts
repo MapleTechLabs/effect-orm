@@ -78,11 +78,12 @@ export interface WriteResult {
 	 */
 	readonly affectedRows: number
 	/**
-	 * The generated key of an insert: MySQL's `AUTO_INCREMENT` of the first row
-	 * inserted (of the existing row, for an `ON DUPLICATE KEY UPDATE` that
-	 * updated one), SQLite's and D1's rowid of the last. `undefined` for an
-	 * update or delete, an insert that generated none, a SQLite or D1
-	 * `onConflictDoUpdate`, and always on Postgres, where `returning` reads it.
+	 * The key of the row an insert wrote: MySQL's `AUTO_INCREMENT` value of the
+	 * first row, generated or given explicitly (of the existing row, for an
+	 * `ON DUPLICATE KEY UPDATE` that updated one), SQLite's and D1's rowid of the
+	 * last. `undefined` for an update or delete, a MySQL insert into a table with
+	 * no `AUTO_INCREMENT` column, a SQLite or D1 `onConflictDoUpdate`, and always
+	 * on Postgres, where `returning` reads it.
 	 */
 	readonly insertId: number | undefined
 }
@@ -780,10 +781,13 @@ export const writeResultOf = (result: unknown, readKey: boolean, sql: string): E
 			})
 		}
 		// node:sqlite's and D1's last rowid outlives the insert that set it, so it is
-		// read only for an insert that wrote a row. MySQL reports 0 for no key.
-		const key = readKey && affectedRows > 0 ? (field(result, "insertId") ?? field(result, "lastInsertRowid") ?? field(meta, "last_row_id")) : undefined
-		const insertId = yield* integerOf(key, "insert id", sql)
-		return { affectedRows, insertId: insertId === 0 ? undefined : insertId }
+		// read only for an insert that wrote a row. mysql2 reports 0 for no key; 0 is
+		// a valid SQLite rowid, so only mysql2's 0 means none.
+		if (!readKey || affectedRows === 0) return { affectedRows, insertId: undefined }
+		const mysqlKey = yield* integerOf(field(result, "insertId"), "insert id", sql)
+		if (mysqlKey !== undefined) return { affectedRows, insertId: mysqlKey === 0 ? undefined : mysqlKey }
+		const insertId = yield* integerOf(field(result, "lastInsertRowid") ?? field(meta, "last_row_id"), "insert id", sql)
+		return { affectedRows, insertId }
 	})
 
 /**

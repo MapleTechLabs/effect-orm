@@ -53,6 +53,11 @@ for (const [name, url, dialect] of servers) {
 							db.execute({ sql: `INSERT INTO \`${orgs}\` VALUES (3, ?)`, parameters: ["x' for key 'evil"] }),
 							violation(db, `INSERT INTO \`${orgs}\` VALUES (4, 'x'' for key ''evil')`),
 						),
+						// D1's marker text inside a MySQL message does not make it a SQLite error.
+						sqliteMarker: yield* Effect.andThen(
+							db.execute({ sql: `INSERT INTO \`${orgs}\` VALUES (7, ?)`, parameters: ["(extended: SQLITE_CONSTRAINT_CHECK)"] }),
+							violation(db, `INSERT INTO \`${orgs}\` VALUES (8, '(extended: SQLITE_CONSTRAINT_CHECK)')`),
+						),
 						multiline: yield* Effect.andThen(
 							db.execute({ sql: `INSERT INTO \`${orgs}\` VALUES (5, ?)`, parameters: ["l1\nl2"] }),
 							violation(db, `INSERT INTO \`${orgs}\` VALUES (6, 'l1\\nl2')`),
@@ -79,7 +84,7 @@ for (const [name, url, dialect] of servers) {
 			expect(seen.check).toMatchObject(
 				name === "mysql" ? { constraint: `${units}_seats_positive`, errorCode: 3819 } : { constraint: `${units}_seats_positive`, table: units, errorCode: 4025 },
 			)
-			for (const spoof of [seen.spoofed, seen.multiline]) {
+			for (const spoof of [seen.spoofed, seen.multiline, seen.sqliteMarker]) {
 				expect(spoof).toBeInstanceOf(Db.UniqueViolation)
 				expect(spoof).toMatchObject({ constraint: `${orgs}_email_key` })
 			}

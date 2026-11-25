@@ -123,8 +123,10 @@ const SQLITE_KINDS: Readonly<Record<SqliteConstraint, Kind>> = {
  */
 export const constraintViolation = (error: unknown): Option.Option<ConstraintViolation> => {
 	if (!(error instanceof DatabaseError || error instanceof TransactionCommitFailed)) return Option.none()
-	const sqlite = sqliteConstraintOf(error.cause)
-	const errno = sqlite === undefined ? mysqlErrnoOf(error.cause) : undefined
+	// A MySQL error is known by its structured fields, so it is read first: its
+	// message can quote a value that spells D1's "(extended: SQLITE_CONSTRAINT_...)".
+	const errno = mysqlErrnoOf(error.cause)
+	const sqlite = errno === undefined ? sqliteConstraintOf(error.cause) : undefined
 	const mysqlKind = errno === undefined ? undefined : MYSQL_KINDS[errno]
 	const Kind = sqlite !== undefined ? SQLITE_KINDS[sqlite] : (mysqlKind ?? (errno === undefined ? kindOf(error) : undefined))
 	if (Kind === undefined) return Option.none()

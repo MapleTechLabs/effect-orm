@@ -410,8 +410,9 @@ or NOT NULL constraints to violate. SQLite names no unique index: a unique or NO
 carries the `table` and, when the key has one column, the `column`. A CHECK violation carries
 the CHECK's name as `constraint`, or its expression when it has no name. A foreign key violation
 names nothing. SQLite's extended code is read from `node:sqlite` and from D1's message; neither
-sets `sqlState` or `errorCode`. MySQL and MariaDB give every integrity failure SQLSTATE
-23000, so the kind is read from the server's error number, which is the violation's
+sets `sqlState` or `errorCode`. MySQL and MariaDB give a duplicate key, a foreign key and a
+NOT NULL failure the same SQLSTATE, 23000, and a CHECK failure `HY000`, the generic one, so the
+kind is read from the server's error number, which is the violation's
 `errorCode`. They name things only in the message: a duplicate key names the key (MySQL 8 as
 `table.key`, which becomes `table` and `constraint`), a foreign key names the constraint and the
 referencing table, NOT NULL the column, and a CHECK its constraint (MariaDB also the table).
@@ -802,9 +803,11 @@ back what the server reported of it, a `WriteResult`:
 | Field | What it is |
 | --- | --- |
 | `affectedRows` | The rows the statement wrote, as the server counts them |
-| `insertId` | The key an insert generated, or `undefined` |
+| `insertId` | The key of the row an insert wrote, or `undefined` |
 
-It is how MySQL and MariaDB, which have no `RETURNING`, read an `AUTO_INCREMENT` key:
+It is how MySQL, which has no `RETURNING`, reads an `AUTO_INCREMENT` key. MariaDB has
+`INSERT ... RETURNING`, but the builder writes none for either; run it with `Db.query` and a
+schema when you need the rows:
 
 ```ts title="database-write-result.ts"
 import { Effect } from "effect"
@@ -828,7 +831,8 @@ export const addNote = (orgId: string, body: string) =>
 The counts are the driver's, and they differ by database:
 
 - **MySQL and MariaDB** (`@effect/sql-mysql2`): `insertId` is the first row's `AUTO_INCREMENT`
-  key. A multi-row insert's keys follow it only when `auto_increment_increment` is 1 and
+  value, whether the server generated it or the insert gave it (an insert of `id: 500` reports
+  500), and `undefined` for a table with no `AUTO_INCREMENT` column. A multi-row insert's keys follow it only when `auto_increment_increment` is 1 and
   `innodb_autoinc_lock_mode` hands out consecutive keys; read them back otherwise. mysql2 connects
   with `CLIENT_FOUND_ROWS`, so an UPDATE counts every row it matched, including those it left as
   they were. An `ON DUPLICATE KEY UPDATE` counts 2 for a row it updated and 1 for a row inserted or
@@ -843,7 +847,8 @@ The counts are the driver's, and they differ by database:
 - **ClickHouse** reports neither, so `runWrite` refuses a ClickHouse write, as a defect, before
   sending it. Use `run`.
 
-`insertId` is `undefined` for an update or delete, and for an insert that generated no key. A
+`insertId` is `undefined` for an update or delete, and for an insert that wrote no row. SQLite's
+rowid can be 0 or negative, and is reported as it is. A
 count or key past 2^53 fails with `DatabaseError` (reason `UnsafeInteger`) rather than being
 rounded, and a client whose result `runWrite` cannot read fails with reason
 `WriteResultUnsupported`. Both happen after the write ran, so outside a transaction it is

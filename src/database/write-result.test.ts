@@ -136,6 +136,8 @@ describe("runWrite", () => {
 			expect(yield* read({ affectedRows: 1, insertId: 0 })).toEqual({ affectedRows: 1, insertId: undefined })
 			expect(yield* read({ rowCount: 3, rows: [] })).toEqual({ affectedRows: 3, insertId: undefined })
 			expect(yield* read({ changes: 1, lastInsertRowid: 5n })).toEqual({ affectedRows: 1, insertId: 5 })
+			// 0 is a valid SQLite rowid (after a row with id -1); only mysql2's 0 means no key.
+			expect(yield* read({ changes: 1, lastInsertRowid: 0 })).toEqual({ affectedRows: 1, insertId: 0 })
 			expect(yield* read({ meta: { changes: 1, last_row_id: 6 } })).toEqual({ affectedRows: 1, insertId: 6 })
 			// node:sqlite's rowid outlives its insert: an update does not report it.
 			expect(yield* read({ changes: 1, lastInsertRowid: 5 }, false)).toEqual({ affectedRows: 1, insertId: undefined })
