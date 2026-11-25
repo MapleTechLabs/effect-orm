@@ -12,6 +12,7 @@ import { Miniflare } from "miniflare"
 import { postgresDialect } from "../pg/dialect"
 import * as Db from "../database"
 import * as SQLite from "../sqlite"
+import { toDatabaseError } from "./sql-error"
 
 const Live = Layer.effect(
 	Db.Database,
@@ -173,4 +174,17 @@ describe("constraint violations on SQLite", () => {
 			await mf.dispose()
 		}
 	}, 30_000)
+})
+
+describe("reading driver errors", () => {
+	it("takes no SQLSTATE from a Node error name, and no MySQL number from another driver's errno", () => {
+		const node = Object.assign(new Error("write EPIPE"), { code: "EPIPE", errno: -32 })
+		expect(toDatabaseError("SELECT 1")(node)).not.toHaveProperty("sqlState")
+		expect(toDatabaseError("SELECT 1")(node)).not.toHaveProperty("errorCode")
+		// bun:sqlite: an extended result code as `errno`, a name as `code`, no `sqlMessage`.
+		const bun = Object.assign(new Error("UNIQUE constraint failed: t.a"), { code: "SQLITE_CONSTRAINT_UNIQUE", errno: 2067 })
+		expect(toDatabaseError("INSERT")(bun)).not.toHaveProperty("errorCode")
+		const mysql = Object.assign(new Error("Duplicate entry"), { code: "ER_DUP_ENTRY", errno: 1062, sqlState: "23000", sqlMessage: "Duplicate entry 'a' for key 't.k'" })
+		expect(toDatabaseError("INSERT")(mysql)).toMatchObject({ sqlState: "23000", errorCode: 1062 })
+	})
 })

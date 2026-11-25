@@ -240,7 +240,8 @@ const error = yield* Effect.flip(insertAccount)  // DatabaseError, reason "Uniqu
 | `layerTest(options)` | A `Database` and a `TestDatabase`, with no requirements |
 | `TestDatabase` | The control side: `statements`, `reply(...replies)`, `reset` |
 | `TestDatabaseOptions` | `dialect` (required), `respond`, `requireTenantScope` |
-| `TestReply` | Rows as the server sends them, or a `SqlError` |
+| `TestReply` | Rows as the server sends them, a `TestWriteReply`, or a `SqlError` |
+| `TestWriteReply` | `{ affectedRows, insertId? }`: what a write reports to `runWrite`. With no reply queued, `runWrite` sees `{ affectedRows: 0 }` |
 | `TestStatement` | `{ sql, parameters }`, as received |
 
 The fake does not run SQL. A test that needs real SQL semantics (constraints, joins over stored

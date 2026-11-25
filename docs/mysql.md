@@ -243,7 +243,8 @@ another dialect is refused in the type and at compile time.
 - **Unsigned arithmetic does not go below zero.** On an `UNSIGNED` column, `id - 5` fails with
   `BIGINT UNSIGNED value is out of range` when the result would be negative. Use a signed type,
   or `CAST`.
-- **Not supported, and refused at compile time:** `RETURNING`, `ON CONFLICT` (MySQL's
+- **Not supported, and refused at compile time:** `RETURNING` (read an `AUTO_INCREMENT` key and
+  the affected rows with `Db.runWrite`, [Write results](./database.md#write-results)), `ON CONFLICT` (MySQL's
   `ON DUPLICATE KEY UPDATE` reacts to every unique key, not one target), `DISTINCT ON`, `ILIKE`,
   `FOR NO KEY UPDATE` and `FOR KEY SHARE`. MariaDB has no lock `OF` at all.
 - **Row locks:** `forUpdate` and `forShare` with `skipLocked`, `noWait` and, on MySQL, `of`.

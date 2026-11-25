@@ -60,6 +60,35 @@ export type Runnable =
 	| CompiledQuery<any, any>
 
 /**
+ * What `runWrite` takes: an insert, update or delete with no `returning`.
+ * A write with RETURNING gives its rows to `run` instead.
+ */
+export type Write = AnyInsert<never> | CHUpdate<any, any, never, "ready", never, any, any> | CHDelete<any, never>
+
+/**
+ * What a write did, as the server counted it. See docs/database.md#write-results.
+ */
+export interface WriteResult {
+	/**
+	 * The rows the statement wrote, as the server counts them. Through mysql2,
+	 * which connects with `CLIENT_FOUND_ROWS`, an UPDATE counts every row it
+	 * matched, including those it left as they were; an
+	 * `ON DUPLICATE KEY UPDATE` counts 2 for a row it updated, and 1 for a row
+	 * inserted or matched and left as it was.
+	 */
+	readonly affectedRows: number
+	/**
+	 * The key of the row an insert wrote: MySQL's `AUTO_INCREMENT` value of the
+	 * first row, generated or given explicitly (of the existing row, for an
+	 * `ON DUPLICATE KEY UPDATE` that updated one), SQLite's and D1's rowid of the
+	 * last. `undefined` for an update or delete, a MySQL insert into a table with
+	 * no `AUTO_INCREMENT` column, a SQLite or D1 `onConflictDoUpdate`, and always
+	 * on Postgres, where `returning` reads it.
+	 */
+	readonly insertId: number | undefined
+}
+
+/**
  * `unknown` when a `Runnable` can run as it is. A query with no SELECT list
  * cannot; a write without `where`/`allRows` is not a `Runnable` at all.
  */
@@ -189,6 +218,19 @@ export interface DatabaseApi<Functions extends string = string> {
 			SourcesSatisfied<QueryParams<Q>>,
 		params?: Given,
 	) => Stream.Stream<RowOf<Q>, DatabaseError | QueryBuilderError | CompiledQueryDecodeError, RequirementsOf<Q>>
+	/**
+	 * Run an insert, update or delete and return what it did: the rows it
+	 * changed and, for an insert, the key it generated. A write first runs its
+	 * table's client defaults, as `run` does. ClickHouse reports neither, so a
+	 * write there is refused before it is sent.
+	 */
+	readonly runWrite: <Q extends Write, const Given extends object = {}>(
+		query: Q &
+			ParamsSatisfied<QueryParams<Q>, Given> &
+			DialectSatisfied<QueryParams<Q>, Functions> &
+			SourcesSatisfied<QueryParams<Q>>,
+		params?: Given,
+	) => Effect.Effect<WriteResult, DatabaseError | QueryBuilderError, RequirementsOf<Q>>
 	/** Run a statement and return its rows, decoded through `schema` when given. */
 	readonly query: {
 		(statement: StatementInput): Effect.Effect<ReadonlyArray<Record<string, unknown>>, DatabaseError>
@@ -443,6 +485,44 @@ export const fromSqlClient = <Functions extends string = string>(
 			),
 		) as Effect.Effect<any, any, any>
 
+	// Whether the driver's insert id is this write's key. Postgres reports none.
+	// SQLite's and D1's last rowid is the connection's, not the statement's: an
+	// upsert that updated, or a WITHOUT ROWID table, leaves an earlier insert's,
+	// so it is not read for an `onConflictDoUpdate`.
+	const readsKey = (write: Runnable, kind: string): boolean =>
+		kind === "insert" &&
+		dialect.name !== "postgres" &&
+		!(dialect.functions === "sqlite" && "_state" in write && (write as AnyInsert)._state.conflict?.action === "update")
+
+	// The driver's own result of a write, which `unsafe(...).raw` returns: mysql2's
+	// ResultSetHeader, @effect/sql-pg's and PGlite's results, node:sqlite's
+	// `{ changes, lastInsertRowid }`, D1's result with its `meta`.
+	const runWrite: DatabaseApi["runWrite"] = (write, params) =>
+		Effect.flatMap(fillDefaults(write as Runnable), (filled) =>
+			Effect.flatMap(Effect.flatMap(compileFor(filled, params ?? {}), checkScope), (compiled) =>
+				dialect.name === "clickhouse"
+					? Effect.die(
+							new DatabaseError({
+								message: "ClickHouse reports no affected rows or generated keys; use run for a ClickHouse write",
+								sql: compiled.sql,
+								reason: "WriteResultUnsupported",
+								cause: undefined,
+							}),
+						)
+					: traceStatement(
+							dialect,
+							compiled,
+							guard(compiled).pipe(
+								Effect.andThen(driver(raw.unsafe(compiled.sql, compiled.parameters ?? []).raw)),
+								Effect.mapError(toDatabaseError(compiled.sql)),
+								Effect.flatMap((result) => writeResultOf(result, readsKey(filled, compiled.kind), compiled.sql)),
+							),
+							undefined,
+							traceOptions,
+						),
+			),
+		) as Effect.Effect<any, any, any>
+
 	// Effect's SQLite drivers (node:sqlite, D1, …) have no streaming read: their
 	// `.stream` dies with "executeStream not implemented". A SQLite-family
 	// dialect reads the whole result as `run` does and emits it row by row.
@@ -659,8 +739,56 @@ export const fromSqlClient = <Functions extends string = string>(
 			? once(body, options)
 			: retryContention(once(body, options), options.retry === "contention" ? undefined : options.retry)
 
-	return { dialect, run, batch, stream, query, execute, transaction, retryContention }
+	return { dialect, run, runWrite, batch, stream, query, execute, transaction, retryContention }
 }
+
+const field = (value: unknown, key: string): unknown =>
+	typeof value === "object" && value !== null && key in value ? (value as Record<string, unknown>)[key] : undefined
+
+// A count or key as a driver sends it: a number, a bigint (node:sqlite), or a
+// string past 2^53 (mysql2 with `supportBigNumbers`). Past 2^53 it is not
+// exact as a number, so it fails rather than being rounded.
+const integerOf = (value: unknown, what: string, sql: string): Effect.Effect<number | undefined, DatabaseError> => {
+	if (value === undefined || value === null) return Effect.succeed(undefined)
+	const n = typeof value === "number" ? value : typeof value === "bigint" || typeof value === "string" ? Number(value) : Number.NaN
+	return Number.isSafeInteger(n) && String(value) === String(n)
+		? Effect.succeed(n)
+		: Effect.fail(
+				new DatabaseError({
+					message: `the driver reported ${what} ${String(value)}, which is not a safe JavaScript integer`,
+					sql,
+					reason: "UnsafeInteger",
+					cause: undefined,
+				}),
+			)
+}
+
+/** @internal — what a driver's raw write result says, whichever driver sent it. */
+export const writeResultOf = (result: unknown, readKey: boolean, sql: string): Effect.Effect<WriteResult, DatabaseError> =>
+	Effect.gen(function* () {
+		const meta = field(result, "meta")
+		const affected = field(result, "affectedRows") ?? field(result, "rowCount") ?? field(result, "changes") ?? field(meta, "changes")
+		const affectedRows = yield* integerOf(affected, "affected rows", sql)
+		// The write has already run, and outside a transaction it is committed, so this
+		// is an error in the channel, not a defect that would read as "nothing happened".
+		if (affectedRows === undefined) {
+			return yield* new DatabaseError({
+				message:
+					"the write ran, but the SQL client returned no affected-row count; runWrite reads @effect/sql-mysql2, @effect/sql-pg, PGlite, node:sqlite and D1 results",
+				sql,
+				reason: "WriteResultUnsupported",
+				cause: undefined,
+			})
+		}
+		// node:sqlite's and D1's last rowid outlives the insert that set it, so it is
+		// read only for an insert that wrote a row. mysql2 reports 0 for no key; 0 is
+		// a valid SQLite rowid, so only mysql2's 0 means none.
+		if (!readKey || affectedRows === 0) return { affectedRows, insertId: undefined }
+		const mysqlKey = yield* integerOf(field(result, "insertId"), "insert id", sql)
+		if (mysqlKey !== undefined) return { affectedRows, insertId: mysqlKey === 0 ? undefined : mysqlKey }
+		const insertId = yield* integerOf(field(result, "lastInsertRowid") ?? field(meta, "last_row_id"), "insert id", sql)
+		return { affectedRows, insertId }
+	})
 
 /**
  * Turn what came out of `withTransaction` back into what the caller should see.
@@ -816,6 +944,16 @@ export const runNonEmpty = <Q extends Runnable, const Given extends object = {}>
 	Effect.flatMap(run(query, params), (rows) =>
 		Arr.isReadonlyArrayNonEmpty(rows) ? Effect.succeed(rows) : Effect.fail(cardinalityError("nonEmpty", 0)),
 	)
+
+/** `runWrite` on the `Database` in context. */
+export const runWrite = <Q extends Write, const Given extends object = {}>(
+	query: Q &
+		ParamsSatisfied<QueryParams<Q>, Given> &
+		DialectSatisfied<QueryParams<Q>, string> &
+		SourcesSatisfied<QueryParams<Q>>,
+	params?: Given,
+): Effect.Effect<WriteResult, DatabaseError | QueryBuilderError, Database | RequirementsOf<Q>> =>
+	Effect.flatMap(Effect.service(Database), (db) => db.runWrite(query, params))
 
 /** `stream` on the `Database` in context. */
 export const stream = <Q extends Runnable, const Given extends object = {}>(

@@ -115,3 +115,18 @@ expectTypeOf(write).toEqualTypeOf<Effect.Effect<void, Db.DatabaseError | Db.Cons
 expectTypeOf(write.pipe(Effect.catchTag("@maple-dev/effect-orm/UniqueViolation", (error) => Effect.succeed(error.constraint)))).toEqualTypeOf<
 	Effect.Effect<string | undefined | void, Db.DatabaseError | Db.ForeignKeyViolation | Db.NotNullViolation | Db.CheckViolation, Db.Database>
 >()
+
+// `runWrite` takes a write without `returning` and gives its `WriteResult`.
+const Notes = PG.table("notes", { columns: { id: PG.int4, body: PG.text }, primaryKey: ["id"] })
+expectTypeOf(Db.runWrite(PG.insertInto(Notes).values({ id: 1, body: "a" }))).toEqualTypeOf<
+	Effect.Effect<Db.WriteResult, Db.DatabaseError | CH.QueryBuilderError, Db.Database>
+>()
+expectTypeOf(Db.runWrite(PG.update(Notes).set({ body: "b" }).where(($) => [$.id.eq(PG.param.int("id"))]), { id: 1 })).toEqualTypeOf<
+	Effect.Effect<Db.WriteResult, Db.DatabaseError | CH.QueryBuilderError, Db.Database>
+>()
+// @ts-expect-error -- a write with `returning` gives its rows to `run`
+Db.runWrite(PG.insertInto(Notes).values({ id: 1, body: "a" }).returning("id"))
+// @ts-expect-error -- a SELECT is not a write
+Db.runWrite(PG.from(Notes).select("id"))
+// @ts-expect-error -- the write's param is missing
+Db.runWrite(PG.deleteFrom(Notes).where(($) => [$.id.eq(PG.param.int("id"))]))
