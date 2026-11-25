@@ -214,6 +214,23 @@ export const mariadb = MySQL.compileUnsafe(bump, { n: 1 }, { dialect: MySQL.mari
 - VALUES rows only: with `select`, compiling is a defect. On a table with a `tenantColumn` it is
   `"cross-tenant"`, since another tenant's row can hold the duplicate key.
 
+`onDuplicateKeyDoNothing()` skips a duplicate instead: it writes
+`ON DUPLICATE KEY UPDATE col = table.col` on the first written column, an update that changes
+nothing.
+
+**It is not `INSERT IGNORE`, and code moving from Drizzle's `.ignore()` should know why.**
+`IGNORE` downgrades every error it can to a warning, not only the duplicate key: a string too
+long for its column is truncated and stored, a NULL in a NOT NULL column is stored as `0` or
+`''`, a value out of range is clamped, and a row whose foreign key has no parent is silently
+dropped. `onDuplicateKeyDoNothing` skips only the duplicate; those still fail the statement
+(`Data too long for column`, and so on).
+
+- `affectedRows` for a skipped row is 1 when the connection sets `CLIENT_FOUND_ROWS`, which
+  mysql2 (and so `@effect/sql-mysql2`) does by default, and 0 without it (mysql2's
+  `flags: ["-FOUND_ROWS"]`). An inserted row is 1 either way. Checked on MySQL 8.4 and
+  MariaDB 11.4.
+- It keeps the rows' tenant scope: it writes no existing row.
+
 See [On duplicate key update](./inserts.md#on-duplicate-key-update).
 
 ## Types

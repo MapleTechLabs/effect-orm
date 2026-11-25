@@ -249,6 +249,7 @@ export type ConflictClause =
 	| ({ readonly action: "nothing" } & OnConflictDoNothing<any>)
 	| ({ readonly action: "update" } & OnConflictDoUpdate<any, any, any, any>)
 	| ({ readonly action: "duplicateKeyUpdate" } & OnDuplicateKeyUpdate<any, any, any>)
+	| { readonly action: "duplicateKeyNothing" }
 
 /** @internal — runtime insert state */
 export interface CHInsertState {
@@ -359,6 +360,15 @@ export interface CHInsert<
 	): CHInsert<Cols, Defaulted, Computed, Output, Params | ParamsIn<S[keyof S]>, Req>
 
 	/**
+	 * Skip a row that conflicts on any unique key, on MySQL and MariaDB:
+	 * `ON DUPLICATE KEY UPDATE col = col` on the first written column, an
+	 * update that changes nothing. Not `INSERT IGNORE`, which also turns
+	 * truncation, foreign key and NOT NULL errors into warnings. VALUES rows
+	 * only. Replaces any earlier `onConflict*` or `onDuplicateKey*`.
+	 */
+	onDuplicateKeyDoNothing(): CHInsert<Cols, Defaulted, Computed, Output, Params, Req>
+
+	/**
 	 * Declare that this insert, such as a batch of rows from many tenants, deliberately spans tenants, forcing
 	 * `tenantScope: "cross-tenant"` and setting `crossTenantDeclared`. A
 	 * database with `requireTenantScope` runs it; see docs/tenant-scoping.md.
@@ -409,6 +419,7 @@ const makeInsert = <Cols extends ColumnDefs, Defaulted extends string, Computed 
 		makeInsert({ ...state, conflict: { action: "update", ...options } }),
 	onDuplicateKeyUpdate: (options: OnDuplicateKeyUpdate<any, any, any>) =>
 		makeInsert({ ...state, conflict: { action: "duplicateKeyUpdate", set: options.set } }),
+	onDuplicateKeyDoNothing: () => makeInsert({ ...state, conflict: { action: "duplicateKeyNothing" } }),
 	crossTenant: () => makeInsert({ ...state, crossTenant: true }),
 })
 

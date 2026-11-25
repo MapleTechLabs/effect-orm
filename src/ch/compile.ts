@@ -1944,7 +1944,9 @@ const onConflictClause = (
 	const { table, conflict } = insert._state
 	if (conflict === undefined) return ""
 	const where = `insertInto(${table.name})`
-	if (conflict.action === "duplicateKeyUpdate") return onDuplicateKeyClause(insert, conflict, cell, wrote, columns)
+	if (conflict.action === "duplicateKeyUpdate" || conflict.action === "duplicateKeyNothing") {
+		return onDuplicateKeyClause(insert, conflict, cell, wrote, columns)
+	}
 	const dialect = currentDialect()
 	if (dialect.clauses.onConflict !== true) {
 		return fail(new QueryBuilderDefect({
@@ -2083,7 +2085,7 @@ const writtenOnly = (
  */
 const onDuplicateKeyClause = (
 	insert: CHInsert<any, any, any, any>,
-	conflict: Extract<ConflictClause, { readonly action: "duplicateKeyUpdate" }>,
+	conflict: Extract<ConflictClause, { readonly action: "duplicateKeyUpdate" | "duplicateKeyNothing" }>,
 	cell: (column: string, value: unknown, context: string) => string,
 	wrote: (column: string, value: unknown, sql: string) => void,
 	columns: ReadonlyArray<string>,
@@ -2092,15 +2094,22 @@ const onDuplicateKeyClause = (
 	const where = `insertInto(${table.name})`
 	const dialect = currentDialect()
 	const style = dialect.clauses.onDuplicateKey
+	const method = conflict.action === "duplicateKeyNothing" ? "onDuplicateKeyDoNothing" : "onDuplicateKeyUpdate"
 	if (style === undefined) {
 		return fail(new QueryBuilderDefect({
-			message: `${where}: onDuplicateKeyUpdate has no meaning for the ${dialect.name} dialect, which has no ON DUPLICATE KEY UPDATE clause${
+			message: `${where}: ${method} has no meaning for the ${dialect.name} dialect, which has no ON DUPLICATE KEY UPDATE clause${
 				dialect.clauses.onConflict === true ? "; use onConflictDoUpdate" : ""
 			}`,
 		}), "")
 	}
 	if (insert._state.selectQuery !== undefined) {
-		return fail(new QueryBuilderDefect({ message: `${where}: onDuplicateKeyUpdate takes values() rows, not select()` }), "")
+		return fail(new QueryBuilderDefect({ message: `${where}: ${method} takes values() rows, not select()` }), "")
+	}
+	const existing = createQualifiedColumnAccessor(table.name, table.tenantColumn, table.columns)
+	if (conflict.action === "duplicateKeyNothing") {
+		// An update that changes nothing: MySQL leaves the row, and its ON UPDATE columns, as they are.
+		const first = columns[0]!
+		return `\nON DUPLICATE KEY UPDATE ${quoteIdent(columnSqlName(table.columns, first))} = ${compileSqlFragment(existing[first]!.toFragment())}`
 	}
 	// MySQL compares table aliases without case on some platforms.
 	if (style === "rowAlias" && table.name.split(".").at(-1)?.toLowerCase() === PROPOSED_ROW) {
@@ -2108,7 +2117,6 @@ const onDuplicateKeyClause = (
 			message: `${where}: onDuplicateKeyUpdate names the proposed row ${PROPOSED_ROW}, which is also this table's name`,
 		}), "")
 	}
-	const existing = createQualifiedColumnAccessor(table.name, table.tenantColumn, table.columns)
 	const excluded = writtenOnly(proposedRowAccessor(table, style === "rowAlias" ? "qualified" : "valuesFunction"), table, columns, where)
 	const set =
 		typeof conflict.set === "function"

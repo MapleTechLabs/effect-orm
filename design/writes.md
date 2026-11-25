@@ -179,7 +179,10 @@ Maple: 25 `DO UPDATE`, 43 `DO NOTHING`, 66 `excluded.` references, 6 `setWhere`.
   `VALUES (...) AS excluded` and reads `excluded.col` (MySQL 8.0.19+), `"valuesFunction"` reads
   `VALUES(col)` (MariaDB). The same `set` forms go through the same accessor. Its `excludedAll`
   skips the declared primary key instead of a target, and it is always cross-tenant on a tenant
-  table, since any unique key can match another tenant's row.
+  table, since any unique key can match another tenant's row. `onDuplicateKeyDoNothing()` writes
+  `col = table.col` on the first written column rather than `INSERT IGNORE`, which would also
+  downgrade truncation, NOT NULL and foreign key errors; it writes no existing row, so it keeps
+  the rows' tenant scope.
 
 ## 7. ClickHouse specifics
 

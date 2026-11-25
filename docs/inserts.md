@@ -383,6 +383,28 @@ ON DUPLICATE KEY UPDATE `count` = `counters`.`count` + VALUES(`count`)
   `QueryBuilderDefect`.
 - It is always `"cross-tenant"` on a table with a `tenantColumn`; see [Tenant scope](#tenant-scope).
 
+`onDuplicateKeyDoNothing()` skips a row that conflicts on any unique key. It writes
+`ON DUPLICATE KEY UPDATE col = table.col` on the first column the insert writes: an update that
+changes nothing, so the existing row and its `ON UPDATE` columns stay as they are.
+
+```sql
+INSERT INTO `counters` (`id`, `key`, `count`, `note`)
+VALUES (?, ?, ?, ?)
+ON DUPLICATE KEY UPDATE `id` = `counters`.`id`
+```
+
+- It is not `INSERT IGNORE` (Drizzle's `.ignore()`). `IGNORE` skips a duplicate too, but it also
+  turns other errors into warnings and writes the row anyway: a value too long for its column
+  is cut short, a NULL in a NOT NULL column becomes the type's zero value, and a row with no
+  parent for a foreign key is dropped. With `onDuplicateKeyDoNothing` those still fail.
+- A skipped row counts as 1 affected row when the connection sets `CLIENT_FOUND_ROWS`, which
+  mysql2 does by default, and as 0 without it. An inserted row counts as 1 either way, so with
+  mysql2's default `affectedRows` cannot tell a skipped row from an inserted one.
+- Like any duplicate check, it locks the existing row it matched until the transaction ends.
+- VALUES rows only, on MySQL and MariaDB; otherwise compiling is a `QueryBuilderDefect`. It keeps
+  the rows' tenant scope: it writes no existing row, and learns of another tenant's key no more
+  than a plain INSERT's duplicate-key error does.
+
 ## Settings
 
 On ClickHouse, `settings` adds a `SETTINGS` clause to the insert, before `VALUES` or the
@@ -411,7 +433,8 @@ does not prove its columns. Without this evidence the upsert is `"cross-tenant"`
 the inserted values name one tenant. OR conditions do not supply tenant evidence.
 `onDuplicateKeyUpdate` has neither a target nor a `where`, and fires on any unique key, so it
 is always `"cross-tenant"`: declare it with `.crossTenant()` where every unique key of the
-table holds the tenant column.
+table holds the tenant column. `onDuplicateKeyDoNothing` writes no existing row, so it keeps the
+rows' scope.
 
 An `INSERT ... SELECT` into a tenant table is `"single-tenant"` when the SELECT is, and each row
 takes its tenant from a tenant column of the source or from the same param that pins the SELECT.
@@ -437,7 +460,7 @@ A batch that mixes tenants on purpose, such as an ingest flush, declares it with
 | `onConflictDoUpdate` setting no or unknown columns | `QueryBuilderError` `InvalidArguments`  |
 | `excluded` / `excludedAll` naming an unknown column | `QueryBuilderError` `InvalidArguments` |
 | `onConflict*` without ON CONFLICT, a bad target   | `QueryBuilderDefect`                     |
-| `onDuplicateKeyUpdate` on another dialect, with `select`, or into a table named `excluded` on MySQL | `QueryBuilderDefect` |
+| `onDuplicateKeyUpdate` / `onDuplicateKeyDoNothing` on another dialect or with `select`; `onDuplicateKeyUpdate` into a table named `excluded` on MySQL | `QueryBuilderDefect` |
 | `onDuplicateKeyUpdate` reading an unwritten column of the proposed row | `QueryBuilderError` `InvalidArguments` |
 | `settings` without insert settings, a bad name    | `QueryBuilderDefect`                     |
 

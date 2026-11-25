@@ -177,6 +177,13 @@ CH.insertInto(Counters).values({ key: "k", count: 1 }).onDuplicateKeyUpdate({ se
 CH.insertInto(Spans).values({ OrgId: "o", Label: "l" }).onDuplicateKeyUpdate({ set: { Day: "x" } })
 // @ts-expect-error there is no target
 CH.insertInto(Counters).values({ key: "k", count: 1 }).onDuplicateKeyUpdate({ target: ["key"], set: { count: 0 } })
+// onDuplicateKeyDoNothing takes nothing and keeps the insert's params.
+const skipParam = CH.insertInto(Counters).values({ key: CH.param.string("k"), count: 1 }).onDuplicateKeyDoNothing()
+// @ts-expect-error k is required
+PG.compileUnsafe(skipParam)
+PG.compileUnsafe(skipParam, { k: "k" })
+// @ts-expect-error no options
+CH.insertInto(Counters).values({ key: "k", count: 1 }).onDuplicateKeyDoNothing({ target: ["key"] })
 
 // INSERT ... SELECT: the selected row must fit the table.
 const Daily = CH.table("daily", { OrgId: CH.string, Total: CH.uint64, Note: CH.nullable(CH.string) })
