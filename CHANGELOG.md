@@ -1,5 +1,15 @@
 # @maple-dev/effect-orm
 
+## 1.3.1
+
+### Patch Changes
+
+- 22bc6e1: `maskLiteralsAndComments` keeps a line break that is inside a quoted string or identifier, as it already did inside a comment. It replaced one with a space, so line numbers counted in the masked text were off after a multi-line literal.
+- 7e80320: On ClickHouse, a string literal matched against a pattern that is an expression is now written `materialize('…')`: `lit(path).startsWith($.Prefix)`, `lit(text).contains($.Word)` and `lit(text).like($.Pattern)` failed on ClickHouse 26.2 with "Function 'like' doesn't support search with non-constant needles in constant haystack". The same server does not match an empty string against `'%%'`, which an empty literal ran into: `lit("").contains($.Word)`, `startsWith` and `endsWith` are now written `Word = ''`, which is what they mean. A column on the left, or a pattern that is a string, compiles as before.
+  
+  The SQL of such an expression changes, so a table whose DDL holds one (a `MATERIALIZED` column, an index or sorting key written this way) shows that definition as changed in the next migration. A constant built by a function, such as `lower(lit("A")).startsWith($.Name)`, is not rewritten and still fails on 26.2.
+- 27de404: `splitTerminalClauses` now finds a `SETTINGS` or `FORMAT` clause that follows `ALL` or a `*` wildcard. `SELECT a, count() FROM t GROUP BY ALL FORMAT JSON`, `ALTER TABLE t DROP PARTITION ALL SETTINGS mutations_sync = 2` and `SELECT * FORMAT JSON` came back whole, clause included, because `ALL` and `*` were always read as wanting an operand after them. They are now read by what precedes them: `SELECT ALL x`, `UNION ALL SELECT` and `a * b` still take an operand.
+
 ## 1.3.0
 
 ### Minor Changes
