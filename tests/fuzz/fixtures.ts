@@ -1,5 +1,5 @@
 // Independent, shrinkable input data for the query oracle and database CTEs.
-import fc from "fast-check"
+import { Gen } from "../../effect-prop/src/index"
 import type { CoreContext } from "../core-cases"
 import { fixtureRows } from "../core-cases"
 import type { FuzzDialect } from "./dialects/types"
@@ -32,19 +32,25 @@ export const coreFixture: Fixture = {
 	customers: fixtureRows.customers.map(([OrgId, Name, Tier]) => ({ OrgId: OrgId as string, Name: Name as string, Tier: Tier as string })),
 }
 
-const org = fc.constantFrom("org_1", "org_2", "org_3")
-const name = fc.constantFrom("acme", "globex", "initech", "umbrella", "it's", "")
+const org = Gen.element("org_1", "org_2", "org_3")
+const name = Gen.element("acme", "globex", "initech", "umbrella", "it's", "")
 /** Small shared pools deliberately produce matching keys, duplicates and missing joins. */
-export const fixture: fc.Arbitrary<Fixture> = fc.record({
-	orders: fc.array(fc.record({
-		OrgId: org,
-		Customer: name,
-		Amount: fc.oneof(fc.constantFrom(0, 5, 7, 10, 20, 99), fc.integer({ min: -100, max: 120 })),
-		Status: fc.constantFrom("paid", "open", "void", ""),
-		Note: fc.option(fc.constantFrom("rush", "it's", "", "acme"), { nil: null }),
-		Created: fc.integer({ min: 0, max: 4 }).map((i) => Date.UTC(2026, 0, 1) + i * 600_000),
-	}), { maxLength: 10 }).map((rows) => rows.map((row, i) => ({ ...row, Id: i + 1 }))),
-	customers: fc.array(fc.record({ OrgId: org, Name: name, Tier: fc.constantFrom("gold", "silver", "bronze", "platinum", "") }), { maxLength: 8 }),
+export const fixture: Gen.Gen<Fixture> = Gen.struct({
+	orders: Gen.map(
+		Gen.array(
+			Gen.struct({
+				OrgId: org,
+				Customer: name,
+				Amount: Gen.oneOf(Gen.element(0, 5, 7, 10, 20, 99), Gen.int(-100, 120)),
+				Status: Gen.element("paid", "open", "void", ""),
+				Note: Gen.weighted([1, Gen.constant(null)], [4, Gen.element("rush", "it's", "", "acme")]),
+				Created: Gen.map(Gen.int(0, 4), (i) => Date.UTC(2026, 0, 1) + i * 600_000),
+			}),
+			{ maxLength: 10 },
+		),
+		(rows) => rows.map((row, i) => ({ ...row, Id: i + 1 })),
+	),
+	customers: Gen.array(Gen.struct({ OrgId: org, Name: name, Tier: Gen.element("gold", "silver", "bronze", "platinum", "") }), { maxLength: 8 }),
 })
 
 const columns = {

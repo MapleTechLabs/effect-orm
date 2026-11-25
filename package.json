@@ -126,7 +126,7 @@
 	},
 	"scripts": {
 		"build": "tsdown",
-		"typecheck": "tsc --noEmit && tsc -p tsconfig.tests.json --noEmit",
+		"typecheck": "tsc --noEmit && tsc -p tsconfig.tests.json --noEmit && tsc -p effect-prop/tsconfig.json --noEmit",
 		"test": "vitest run && node scripts/check-doc-citations.mjs && node scripts/check-exports-documented.mjs && node scripts/check-doc-examples.mjs",
 		"prepublishOnly": "bun run test:release",
 		"test:clickhouse": "bun run build && bun scripts/test-clickhouse.ts",

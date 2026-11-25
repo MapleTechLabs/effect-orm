@@ -42,7 +42,7 @@ export const knownHostileIssue = (input: HostileInput): string | undefined =>
 // Query plans (queries.fuzz.test.ts)
 
 import { foldConstant } from "./model"
-import type { Expr, Plan, UnionPlan } from "./plan"
+import type { Cond, Expr, Plan, UnionPlan } from "./plan"
 
 export interface PlanInput {
 	/** The target name (`dialects/*.ts`), or the dialect name for compile-only properties. */
@@ -73,9 +73,63 @@ const nodes = (value: unknown): ReadonlyArray<Record<string, unknown>> => {
 
 const readsJoinedColumn = (value: unknown): boolean => nodes(value).some((node) => node.k === "jcol")
 
-/** `LIKE '%%'` or `ILIKE '%%'` over a column of the joined table. */
+/**
+ * Whether a string expression can be `''` on some row. `OrgId` of orders never
+ * is; every other column is in some fixture, and a joined one is for an
+ * unmatched LEFT JOIN row where the target fills with defaults.
+ */
+const canBeEmpty = (e: Expr): boolean => {
+	switch (e.k) {
+		case "str":
+			return e.v === ""
+		case "col":
+			return e.col !== "OrgId"
+		case "jcol":
+			return true
+		case "coalesce":
+			// `coalesce('', x)` is `''`: only NULL falls through.
+			return canBeEmpty(e.e) || canBeEmpty(e.fallback)
+		default:
+			return false
+	}
+}
+
+type MatchNode = Extract<Cond, { readonly k: "match" }>
+const isContains = (node: Record<string, unknown>): node is MatchNode & Record<string, unknown> => node.k === "match" && node.op === "contains"
+
+/**
+ * `LIKE '%%'` or `ILIKE '%%'` over a column of the joined table: written out,
+ * or built by `contains` from a needle that is empty when the query runs (an
+ * empty string written in the plan is one `%`, see `textPattern`).
+ */
 const matchAllOverJoin = (value: unknown): boolean =>
-	nodes(value).some((node) => node.k === "like" && node.op !== "notLike" && node.pattern === "%%" && readsJoinedColumn(node.l))
+	nodes(value).some((node) => {
+		if (node.k === "like") return node.op !== "notLike" && node.pattern === "%%" && readsJoinedColumn(node.l)
+		if (!isContains(node) || !readsJoinedColumn(node.l)) return false
+		return node.needle.k === "param" ? node.needle.v === "" : node.needle.k === "expr" && canBeEmpty(node.needle.e)
+	})
+
+/**
+ * An empty string matched against `'%%'` off the one path 26.2 gets right (a
+ * column, or a materialized literal, against that pattern as a constant): an
+ * empty literal against the pattern written out, or a `contains` whose needle
+ * is read from a column, where both sides can be empty on the same row.
+ */
+const emptyAgainstMatchAll = (value: unknown): boolean =>
+	nodes(value).some((node) => {
+		if (node.k === "like") return node.pattern === "%%" && (node.l as Expr).k === "str" && canBeEmpty(node.l as Expr)
+		// A literal haystack is written `materialize('…')`, or as an equality when it is empty: right either way.
+		return isContains(node) && node.l.k !== "str" && node.needle.k === "expr" && node.needle.e.k !== "str" && canBeEmpty(node.needle.e) && canBeEmpty(node.l)
+	})
+
+/** `endsWith` of text that holds a NUL byte, written in the plan as a value, a param or a literal. */
+const suffixHoldsNul = (value: unknown): boolean =>
+	nodes(value).some((node) => {
+		if (node.k !== "match" || node.op !== "endsWith") return false
+		const needle = (node as unknown as MatchNode).needle
+		const text = needle.k === "expr" ? (needle.e.k === "str" ? needle.e.v : undefined) : needle.k === "time" ? undefined : needle.v
+		return typeof text === "string" && text.includes("\0")
+	})
 
 /** A string literal that ends in a NUL byte. */
 const trailingNul = (value: unknown): boolean =>
@@ -88,6 +142,10 @@ const fraction = (operand: unknown): boolean => {
 /** `x BETWEEN lo AND hi` with one bound a whole number and the other a fraction. */
 const mixedBetween = (value: unknown): boolean =>
 	nodes(value).some((node) => node.k === "between" && fraction(node.lo) !== fraction(node.hi))
+
+/** A fraction written in the plan as the right side of a comparison or a bound of a BETWEEN: `Id = 0.75`. */
+const fractionOperand = (value: unknown): boolean =>
+	nodes(value).some((node) => (node.k === "cmp" && fraction(node.r)) || (node.k === "between" && (fraction(node.lo) || fraction(node.hi))))
 
 const planIssues: ReadonlyArray<KnownIssue<PlanInput>> = [{
 	id: "clickhouse-26.2-negative-power-of-two-modulo",
@@ -116,6 +174,28 @@ const planIssues: ReadonlyArray<KnownIssue<PlanInput>> = [{
 	reason: "ClickHouse 26.2 drops a LEFT JOIN's unmatched rows under LIKE '%%' on the joined table",
 	matches: ({ executed, target, plan }) => executed && target.startsWith("clickhouse") && plan.join === "left" && matchAllOverJoin(plan.where),
 }, {
+	id: "clickhouse-26.2-empty-like-match-all",
+	// Server bug, not the builder's, and the cause of the entry above: on 26.2.19.43 an empty string
+	// does not match `'%%'`. `SELECT '' LIKE '%%'` is 0, as is any empty constant on the left
+	// (`concat('', '')`, `coalesce(NULL, '')`), and so is `materialize('') LIKE materialize('%%')`:
+	// a pattern computed per row, which is what `a.contains(b)` builds when `b` is a column, wrong on
+	// the rows where both are empty. Only a column, or the `materialize('…')` the builder writes for a
+	// literal beside a computed pattern, against the constant `'%%'` is right, and so are `'%'`,
+	// `'%%%'` and a non-empty string; `NOT LIKE` and `ILIKE` follow. 26.8 is right throughout. The
+	// planner asks the same question of an unmatched LEFT JOIN row, which is how it loses those rows.
+	// `position(a, b) > 0` is right on both versions. The builder leaves `lit('').like('%%')` a constant:
+	// materializing it would cost every constant LIKE its folding, for a pattern nobody writes.
+	reason: "ClickHouse 26.2 does not match an empty string against LIKE '%%'",
+	matches: ({ executed, target, plan }) => executed && target.startsWith("clickhouse") && emptyAgainstMatchAll(plan),
+}, {
+	id: "clickhouse-26.2-like-suffix-nul",
+	// Server bug, not the builder's: on 26.2.19.43 a LIKE pattern that is a suffix (`'%…'`) and holds
+	// a NUL byte matches what it should not, for a column and a constant alike: `'org_1' LIKE '%\0'`,
+	// `'ab' LIKE '%\0b'` and `'abc' LIKE '%b\0c'` are all true. A NUL in `'%…%'` or `'…%'` is
+	// right, as is the function `endsWith('org_1', '\0')`; 26.8 is right throughout.
+	reason: "ClickHouse 26.2 matches a LIKE suffix pattern that holds a NUL byte wrongly",
+	matches: ({ executed, target, plan }) => executed && target.startsWith("clickhouse") && suffixHoldsNul(plan),
+}, {
 	id: "mariadb-order-by-trailing-nul",
 	// Server limit, not the builder's: MariaDB 11.4 sorts a VARCHAR (a literal, a `CAST(… AS CHAR)`)
 	// by a fixed-length key padded with NUL bytes, so under `utf8mb4_nopad_bin` `''`, `'\0'` and
@@ -123,6 +203,17 @@ const planIssues: ReadonlyArray<KnownIssue<PlanInput>> = [{
 	// MySQL 8.4 orders them. The model cannot say which of two tied rows comes first.
 	reason: "MariaDB orders VARCHAR values that differ only in trailing NUL bytes as equal",
 	matches: ({ executed, target, plan }) => executed && target.startsWith("mariadb") && plan.shape.orderBy.length > 0 && trailingNul(plan),
+}, {
+	id: "mysql-prepared-fraction-after-parameter-constant-column",
+	// Server quirk, and only over this suite's fixture, like the entry below: on MySQL 8.4.11 a prepared
+	// fraction is rounded when the column is a constant column of a CTE (`CAST(1 AS SIGNED)`) and a
+	// predicate with a parameter of its own comes first. `OrgId = ? AND Id = ?` with `['org_1', 0.75]`
+	// and `Amount > ? AND Id = ?` with `[0.5, 0.75]` both match Id 1; `<>`, `>`, `>=`, `<=`, `IN`,
+	// `BETWEEN` and `NOT BETWEEN` go wrong the same way. The fraction's predicate alone or first, the
+	// text protocol, a real INT or BIGINT column (18 prepared comparisons checked) and MariaDB 11.4 are
+	// all right. The params of an earlier union branch come first too, so this skips every fraction.
+	reason: "MySQL 8.4 rounds a prepared fraction that follows another predicate's parameter when the column is a constant",
+	matches: ({ executed, target, plan }) => executed && target === "mysql" && fractionOperand(plan),
 }, {
 	id: "mysql-prepared-between-constant-column",
 	// Server quirk, and only over this suite's fixture: a prepared `Amount BETWEEN ? AND ?` bound

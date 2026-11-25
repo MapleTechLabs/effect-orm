@@ -23,6 +23,10 @@ const maskSql = (sql: string, markLiterals = false): string => {
 	const blank = (count: number) => {
 		out += " ".repeat(count)
 	}
+	/** Blanks `sql[from, to)`, keeping its line breaks. */
+	const blankKeepingLines = (from: number, to: number) => {
+		for (let j = from; j < to; j++) out += sql[j] === "\n" ? "\n" : " "
+	}
 	while (i < sql.length) {
 		const ch = sql[i]
 		const next = sql[i + 1]
@@ -37,7 +41,7 @@ const maskSql = (sql: string, markLiterals = false): string => {
 		if (ch === "/" && next === "*") {
 			const close = sql.indexOf("*/", i + 2)
 			const end = close === -1 ? sql.length : close + 2
-			for (let j = i; j < end; j++) out += sql[j] === "\n" ? "\n" : " "
+			blankKeepingLines(i, end)
 			i = end
 			continue
 		}
@@ -49,11 +53,11 @@ const maskSql = (sql: string, markLiterals = false): string => {
 			while (i < sql.length) {
 				const c = sql[i]
 				if (c === "\\") {
-					blank(Math.min(2, sql.length - i))
+					blankKeepingLines(i, Math.min(i + 2, sql.length))
 					i += 2
 					continue
 				}
-				blank(1)
+				blankKeepingLines(i, i + 1)
 				i++
 				if (c === quote) break
 			}
@@ -78,6 +82,49 @@ export interface TerminalClauses {
 type Candidate = { readonly start: number; readonly kind: "settings" | "format" }
 
 const TERMINAL_KEYWORD_RE = /\b(SETTINGS|FORMAT)\b/gi
+
+/** The last word or symbol of a text. */
+const LAST_TOKEN_RE = /([a-zA-Z_]\w*|[^\s])\s*$/
+const OPERAND_KEYWORD_RE =
+	/^(?:SELECT|DISTINCT|AS|FROM|JOIN|BY|WHERE|PREWHERE|HAVING|QUALIFY|ON|AND|OR|NOT|WHEN|THEN|ELSE|WITH|IN|BETWEEN|LIKE|ILIKE|LIMIT|OFFSET)$/i
+const OPERAND_SYMBOL_RE = /^[,.+/%<>=!|&^(-]$/
+/** A name, or the `?` that marks a quoted one. */
+const IDENTIFIER_RE = /^(?:[a-zA-Z_]\w*|\?)$/
+
+/** The last `count` words or symbols before `end`, nearest first. */
+const tokensBefore = (text: string, end: number, count: number): Array<string> => {
+	const tokens: Array<string> = []
+	let rest = text.slice(0, end)
+	while (tokens.length < count) {
+		const match = LAST_TOKEN_RE.exec(rest)
+		if (match === null) break
+		tokens.push(match[1])
+		rest = rest.slice(0, match.index)
+	}
+	return tokens
+}
+
+/**
+ * Whether an operand must follow `token`, the nearest of the tokens before a
+ * keyword. Two tokens read both ways and need the ones before them:
+ *
+ * - `ALL` wants an operand only as a set quantifier: `SELECT ALL x`, `UNION
+ *   ALL SELECT`. Anywhere else it is one: `GROUP BY ALL`, `ORDER BY ALL`,
+ *   `PARTITION ALL`, a column or table named `all`.
+ * - `*` is the wildcard, a complete operand, where a select item starts
+ *   (`SELECT *`, `, *`, `count(*)`) and after a qualifier (`t.*`). Anywhere
+ *   else it multiplies: `a * b`, `t.offset * b`.
+ */
+const expectsOperandAfter = ([token, earlier, before]: ReadonlyArray<string | undefined>): boolean => {
+	if (token === undefined) return true
+	if (/^ALL$/i.test(token)) return earlier !== undefined && /^(?:SELECT|UNION|INTERSECT|EXCEPT)$/i.test(earlier)
+	if (token === "*") {
+		const wildcard =
+			earlier === undefined || /^(?:SELECT|DISTINCT|ALL|[,(])$/i.test(earlier) || (earlier === "." && before !== undefined && IDENTIFIER_RE.test(before))
+		return !wildcard
+	}
+	return OPERAND_KEYWORD_RE.test(token) || OPERAND_SYMBOL_RE.test(token)
+}
 
 /** Paren nesting depth at each offset of the masked text. */
 const depthsOf = (masked: string): Int32Array => {
@@ -120,12 +167,7 @@ export function splitTerminalClauses(sql: string): TerminalClauses {
 	while (match !== null) {
 		// A terminal clause follows a complete expression/table, never a place that
 		// still needs an operand. In `SELECT format JSON`, FORMAT is the column.
-		const previous = /([a-zA-Z_]\w*|[^\s])\s*$/.exec(marked.slice(0, match.index))?.[1]
-		const expectsOperand =
-			previous === undefined ||
-			/^(?:SELECT|DISTINCT|ALL|AS|FROM|JOIN|BY|WHERE|PREWHERE|HAVING|QUALIFY|ON|AND|OR|NOT|WHEN|THEN|ELSE|WITH|IN|BETWEEN|LIKE|ILIKE|LIMIT|OFFSET)$/i.test(previous) ||
-			/^[,.+*/%<>=!|&^(-]$/.test(previous)
-		if (depths[match.index] === 0 && !expectsOperand) {
+		if (depths[match.index] === 0 && !expectsOperandAfter(tokensBefore(marked, match.index, 3))) {
 			candidates.push({
 				start: match.index,
 				kind: match[1].toLowerCase() === "format" ? "format" : "settings",

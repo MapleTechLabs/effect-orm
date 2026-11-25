@@ -1,0 +1,23 @@
+{
+	"name": "effect-prop",
+	"version": "0.0.0",
+	"private": true,
+	"description": "Property-based testing for Effect: replayable generators, shrinking with no per-type code, several failures per run, and coverage-guided search",
+	"license": "MIT",
+	"type": "module",
+	"sideEffects": false,
+	"exports": {
+		".": "./src/index.ts",
+		"./node": "./src/node.ts",
+		"./vitest": "./src/vitest.ts"
+	},
+	"peerDependencies": {
+		"effect": "^4.0.6",
+		"vitest": "^4.0.0"
+	},
+	"peerDependenciesMeta": {
+		"vitest": {
+			"optional": true
+		}
+	}
+}

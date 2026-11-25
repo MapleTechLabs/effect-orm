@@ -29,6 +29,40 @@ describe("text match", () => {
 		expect(pg.parameters).toEqual(["%"])
 	})
 
+	// ClickHouse 26.2 refuses a constant matched against a pattern computed per row, and folds '' LIKE '%%' to false.
+	it("a literal matched against an expression is materialized on ClickHouse, and only there", () => {
+		const prefixOf = CH.compileUnsafe(CH.from(Events).select("Id").where(($) => [CH.lit("/a/b").startsWith($.Name)]))
+		expect(prefixOf.sql).toContain(String.raw`materialize('/a/b') LIKE (replace(replace(replace(events.Name, '\\', '\\\\'), '%', '\\%'), '_', '\\_') || '%')`)
+		const insensitive = CH.compileUnsafe(CH.from(Events).select("Id").where(($) => [CH.lit("x").contains($.Name, { insensitive: true })]))
+		expect(insensitive.sql).toContain("materialize('x') ILIKE (")
+		for (const pattern of ["like", "notLike", "ilike"] as const) {
+			const compiled = CH.compileUnsafe(CH.from(Events).select("Id").where(($) => [CH.lit("abc")[pattern]($.Name)]))
+			expect(compiled.sql, pattern).toContain("materialize('abc') ")
+		}
+		// A column on the left, or a pattern that is a string, is written as before.
+		const column = CH.compileUnsafe(CH.from(Events).select("Id").where(($) => [$.Name.contains($.Id), CH.lit("abc").like("a%"), CH.lit("abc").contains("b")]))
+		expect(column.sql).not.toContain("materialize")
+		const pg = PG.compileUnsafe(PG.from(Users).select("id").where(($) => [PG.lit("abc").startsWith($.name)]))
+		expect(pg.sql).not.toContain("materialize")
+		const sqlite = SQLite.compileUnsafe(SQLite.from(SQLite.table("t", { columns: { id: SQLite.text, name: SQLite.text }, primaryKey: ["id"] })).select("id").where(($) => [SQLite.lit("abc").startsWith($.name)]))
+		expect(sqlite.sql).not.toContain("materialize")
+	})
+
+	// Materialized, ClickHouse 26.2 would answer false where the value is empty too: `'' LIKE '%%'`, row by row.
+	it("an empty literal matched against an expression is an equality on ClickHouse", () => {
+		for (const match of ["contains", "startsWith", "endsWith"] as const) {
+			for (const options of [undefined, { insensitive: true }]) {
+				const compiled = CH.compileUnsafe(CH.from(Events).select("Id").where(($) => [CH.lit("")[match]($.Name, options)]))
+				expect(compiled.sql, match).toContain("WHERE events.Name = ''")
+				expect(compiled.sql, match).not.toContain("LIKE")
+			}
+		}
+		// A string value, a non-empty literal and the other dialects are written as before.
+		expect(CH.compileUnsafe(CH.from(Events).select("Id").where(($) => [CH.lit("").contains("x")])).sql).toContain("'' LIKE '%x%'")
+		expect(CH.compileUnsafe(CH.from(Events).select("Id").where(($) => [CH.lit("a").contains($.Name)])).sql).toContain("materialize('a') LIKE")
+		expect(PG.compileUnsafe(PG.from(Users).select("id").where(($) => [PG.lit("").contains($.name)])).sql).toContain("LIKE")
+	})
+
 	it("startsWith and endsWith put the wildcard on one side, also on a nullable column", () => {
 		const compiled = CH.compileUnsafe(
 			CH.from(Events).select("Id").where(($) => [$.Name.startsWith("a_"), $.Note.endsWith("%z")]),

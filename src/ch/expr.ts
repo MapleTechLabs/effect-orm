@@ -624,6 +624,24 @@ const likePattern = (pattern: string | Expr<string, any>): string => {
 	)
 }
 
+/**
+ * The left side of a LIKE whose pattern is an expression. ClickHouse 26.2
+ * refuses a constant there (`'abc' LIKE concat('%', col, '%')`: "doesn't
+ * support search with non-constant needles in constant haystack"), and folds
+ * the constant `'' LIKE '%%'` to false. `materialize` makes the literal a
+ * column, which every version matches row by row. A string pattern needs none
+ * of it, and neither does a column on the left. Only a literal is recognised:
+ * a constant built by a function (`lower(lit('A'))`) is written as it is, and
+ * still fails on 26.2.
+ */
+const likeSubject = (fragment: SqlFragment, pattern: string | Expr<string, any>): string => {
+	const sql = compile(fragment)
+	return isClickHouse() && fragment._tag === "Str" && typeof pattern !== "string" ? `materialize(${sql})` : sql
+}
+
+/** Outside a compile, ClickHouse is the default dialect. */
+const isClickHouse = (): boolean => (activeSqlSyntax()?.dialect ?? "clickhouse") === "clickhouse"
+
 /** `ESCAPE '\'` where LIKE has no default escape, so `\%` means a literal `%` on every dialect. */
 const likeEscape = (): string => (activeSqlSyntax()?.likeEscape === true ? " ESCAPE '\\'" : "")
 
@@ -686,10 +704,14 @@ const textPattern = (value: string | Expr<string, any>, match: TextMatch, glob: 
 const textMatch = (fragment: SqlFragment, value: string | Expr<string, any>, match: TextMatch, options?: TextMatchOptions): Condition<any> =>
 	makeCond(
 		known(() => {
+			// The empty string contains, starts with and ends with only itself. Written as
+			// that on ClickHouse, where 26.2 does not match an empty subject against the
+			// `'%%'` an empty value makes, row by row.
+			if (isClickHouse() && fragment._tag === "Str" && fragment.value === "" && isExprLike(value)) return `${compile(value.toFragment())} = ''`
 			const insensitive = options?.insensitive === true
 			const likeCase = activeSqlSyntax()?.likeCase ?? "sensitive"
 			if (likeCase === "sensitive") {
-				return `${compile(fragment)} ${insensitive ? "ILIKE" : "LIKE"} ${textPattern(value, match, false)}${likeEscape()}`
+				return `${likeSubject(fragment, value)} ${insensitive ? "ILIKE" : "LIKE"} ${textPattern(value, match, false)}${likeEscape()}`
 			}
 			if (insensitive) return `lower(${compile(fragment)}) LIKE lower(${textPattern(value, match, false)})${likeEscape()}`
 			return likeCase === "collation"
@@ -846,11 +868,11 @@ export function makeExpr<T>(
 		notBetween: (low, high) =>
 			makeCond(known(() => `${compile(fragment)} NOT BETWEEN ${compile(operand(low))} AND ${compile(operand(high))}`)),
 
-		like: (pattern) => makeCond(known(() => `${compile(fragment)} LIKE ${likePattern(pattern)}${likeEscape()}`)),
-		notLike: (pattern) => makeCond(known(() => `${compile(fragment)} NOT LIKE ${likePattern(pattern)}${likeEscape()}`)),
+		like: (pattern) => makeCond(known(() => `${likeSubject(fragment, pattern)} LIKE ${likePattern(pattern)}${likeEscape()}`)),
+		notLike: (pattern) => makeCond(known(() => `${likeSubject(fragment, pattern)} NOT LIKE ${likePattern(pattern)}${likeEscape()}`)),
 		ilike: (pattern) => makeCond(known(() => activeSqlSyntax()?.ilike === false
 			? fail(new QueryBuilderDefect({ message: `ILIKE is not supported by the ${activeSqlSyntax()?.dialect} dialect; use LIKE, which follows that dialect's own case rules, or contains(…, { insensitive: true })` }), "FALSE")
-			: `${compile(fragment)} ILIKE ${likePattern(pattern)}`)),
+			: `${likeSubject(fragment, pattern)} ILIKE ${likePattern(pattern)}`)),
 		contains: (value, options) => textMatch(fragment, value, "contains", options),
 		startsWith: (value, options) => textMatch(fragment, value, "startsWith", options),
 		endsWith: (value, options) => textMatch(fragment, value, "endsWith", options),

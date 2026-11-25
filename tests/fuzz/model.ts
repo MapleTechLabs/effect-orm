@@ -331,6 +331,18 @@ const evalCond = (env: Env, row: Row, c: Cond): Bool => {
 			const matched = likeRegex(c.pattern, c.op === "ilike" || env.sem.likeIgnoresCase).test(l)
 			return c.op === "notLike" ? !matched : matched
 		}
+		case "match": {
+			let l = evalExpr(env, row, c.l) as string | null
+			let needle = evalOperand(env, row, c.needle) as string | null
+			if (l === null || needle === null) return null
+			if (c.insensitive) {
+				// Which characters fold beyond ASCII is the database's choice (docs/expressions.md); not modelled.
+				if (/[^\x00-\x7f]/.test(l + needle)) skip("case-insensitive match over non-ASCII text")
+				l = l.toLowerCase()
+				needle = needle.toLowerCase()
+			}
+			return c.op === "contains" ? l.includes(needle) : c.op === "startsWith" ? l.startsWith(needle) : l.endsWith(needle)
+		}
 		case "between": {
 			if (env.sem.quotients === "internal" && hasDivision(c.e)) skip("MySQL compares a DECIMAL quotient at nine places, not the four it shows")
 			const e = evalExpr(env, row, c.e)
@@ -528,9 +540,14 @@ export const evaluate = (plan: Plan, sem: Semantics, fixture: Fixture = coreFixt
 export const evaluateUnion = (plan: UnionPlan, sem: Semantics, fixture: Fixture = coreFixture): ModelResult => {
 	const scales = sem.unionDecimals === undefined ? undefined : unionScales(plan)
 	// A branch the server computes as a derived table before the union keeps the scale it has alone.
-	const materialized = (branch: Plan) =>
-		sem.unionDecimals === "materialized" && branch.shape.k === "rows" && (branch.shape.distinct || branch.shape.limit !== undefined || branch.shape.offset !== undefined)
-	const parts = plan.branches.map((branch) => evaluate(branch, sem, fixture, materialized(branch) ? undefined : scales))
+	const scalesOf = (branch: Plan): ReadonlyMap<string, number> | undefined => {
+		if (scales === undefined || branch.shape.k !== "rows") return scales
+		const { select, distinct, limit, offset } = branch.shape
+		if (sem.unionDecimals === "materialized") return distinct || limit !== undefined || offset !== undefined ? undefined : scales
+		// MySQL computes a DISTINCT branch first too, but a constant it has already folded keeps its digits.
+		return distinct ? new Map(select.filter(([, e]) => constant(e)).map(([alias]) => [alias, scales.get(alias)!])) : scales
+	}
+	const parts = plan.branches.map((branch) => evaluate(branch, sem, fixture, scalesOf(branch)))
 	const rows = parts.flatMap((part) => [...part.rows])
 	const first = plan.branches[0]!
 	const aliases = first.shape.k === "rows" ? first.shape.select.map(([alias]) => alias) : []

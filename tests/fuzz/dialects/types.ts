@@ -70,10 +70,12 @@ export interface Semantics {
 	readonly likeIgnoresCase: boolean
 	/**
 	 * How a UNION widens a DECIMAL column to the largest scale among its branches (`integerDivision:
-	 * "decimal"` only). `evaluated`: every branch's value is stored from its internal digits, so
-	 * `14 / 3` is 4.66666667 beside a scale-8 branch (MySQL, whose branches are parenthesized).
-	 * `materialized`: the same, except a branch with DISTINCT, LIMIT or OFFSET is a derived table
-	 * the server computes first, at its own scale, and then pads: 4.66670000 (MariaDB).
+	 * "decimal"` only). `evaluated`: a branch's value is stored from its internal digits, so
+	 * `14 / 3` is 4.66666667 beside a scale-8 branch (MySQL, whose branches are parenthesized). The
+	 * exception is a DISTINCT branch, which MySQL computes first: there a value computed from a row
+	 * keeps its own scale (`Id / 3` is 0.66670000), and only a constant keeps its digits.
+	 * `materialized`: a branch with DISTINCT, LIMIT or OFFSET is a derived table the server computes
+	 * first, at its own scale, and then pads: 4.66670000 (MariaDB).
 	 */
 	readonly unionDecimals?: "evaluated" | "materialized"
 }

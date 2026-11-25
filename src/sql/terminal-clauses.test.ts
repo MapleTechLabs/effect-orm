@@ -23,6 +23,16 @@ describe("maskLiteralsAndComments", () => {
 	})
 })
 
+describe("maskLiteralsAndComments line breaks", () => {
+	it("keeps a line break inside a quoted string, also after a backslash", () => {
+		/** What masking leaves of a literal or a comment: its line breaks. */
+		const blank = (text: string) => text.replace(/[^\n]/g, " ")
+		expect(maskLiteralsAndComments("SELECT 'a\nb', 1")).toBe(`SELECT ${blank("'a\nb'")}, 1`)
+		expect(maskLiteralsAndComments("SELECT 'a\\\nb'")).toBe(`SELECT ${blank("'a\\\nb'")}`)
+		expect(maskLiteralsAndComments("SELECT `a\nb` /* c\nd */ -- e\nFROM t")).toBe(`SELECT ${blank("`a\nb`")} ${blank("/* c\nd */")} ${blank("-- e")}\nFROM t`)
+	})
+})
+
 describe("splitTerminalClauses", () => {
 	it("returns the whole statement when there is no terminal clause", () => {
 		expect(splitTerminalClauses("SELECT 1")).toEqual({
@@ -98,6 +108,48 @@ describe("splitTerminalClauses", () => {
 			settings: "SETTINGS max_execution_time=10,\n  max_threads=2",
 			format: undefined,
 		})
+	})
+
+	it("splits after GROUP BY ALL and ORDER BY ALL, where ALL is the operand", () => {
+		expect(splitTerminalClauses("SELECT a, count() FROM t GROUP BY ALL FORMAT JSON")).toEqual({
+			body: "SELECT a, count() FROM t GROUP BY ALL",
+			settings: undefined,
+			format: "FORMAT JSON",
+		})
+		expect(splitTerminalClauses("SELECT a FROM t ORDER BY ALL SETTINGS max_threads = 1")).toEqual({
+			body: "SELECT a FROM t ORDER BY ALL",
+			settings: "SETTINGS max_threads = 1",
+			format: undefined,
+		})
+	})
+
+	it("still reads a column named format after SELECT ALL and UNION ALL", () => {
+		expect(splitTerminalClauses("SELECT ALL format FROM t").format).toBeUndefined()
+		expect(splitTerminalClauses("SELECT ALL format JSON").format).toBeUndefined()
+		expect(splitTerminalClauses("SELECT 1 UNION ALL SELECT format FROM t").format).toBeUndefined()
+	})
+
+	it("splits after ALL where it is an operand or a name", () => {
+		expect(splitTerminalClauses("ALTER TABLE t DROP PARTITION ALL SETTINGS mutations_sync = 2").settings).toBe("SETTINGS mutations_sync = 2")
+		expect(splitTerminalClauses("SELECT x AS all FORMAT JSON").format).toBe("FORMAT JSON")
+		expect(splitTerminalClauses("SELECT * FROM all FORMAT JSON").format).toBe("FORMAT JSON")
+	})
+
+	it("splits after the wildcard, and not after a multiplication", () => {
+		expect(splitTerminalClauses("SELECT * FORMAT JSON")).toEqual({ body: "SELECT *", settings: undefined, format: "FORMAT JSON" })
+		expect(splitTerminalClauses("SELECT t.* SETTINGS max_threads = 1").settings).toBe("SETTINGS max_threads = 1")
+		expect(splitTerminalClauses("SELECT a, * FORMAT CSV").format).toBe("FORMAT CSV")
+		expect(splitTerminalClauses("SELECT count(*) FORMAT JSON").format).toBe("FORMAT JSON")
+		expect(splitTerminalClauses("SELECT `t`.* FORMAT JSON").format).toBe("FORMAT JSON")
+		// `a * format` multiplies by a column, here aliased `JSON`.
+		expect(splitTerminalClauses("SELECT a * format JSON FROM t").format).toBeUndefined()
+		expect(splitTerminalClauses("SELECT a * format JSON").format).toBeUndefined()
+		// Also when the left operand is named like a keyword, is qualified, or is a number ending in a dot.
+		for (const left of ["offset", "limit", "t.offset", "`in`", "10."]) {
+			const sql = `SELECT ${left} * format JSON`
+			expect(splitTerminalClauses(sql), sql).toEqual({ body: sql, settings: undefined, format: undefined })
+		}
+		expect(splitTerminalClauses("SELECT limit * settings x = 1").settings).toBeUndefined()
 	})
 
 	it("keeps the last FORMAT when an earlier one is only an identifier", () => {

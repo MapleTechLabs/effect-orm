@@ -12,7 +12,9 @@
 //   - `known` issues are skipped by name (see `known-issues.ts`);
 //     `FUZZ_STRICT=1` turns them all back on, `FUZZ_STRICT=<id>,<id>` just those.
 import fc from "fast-check"
-import { Arbitrary, Effect } from "effect"
+import { Arbitrary, Cause, Effect } from "effect"
+import { Gen, Prop, Search } from "../../effect-prop/src/index"
+import { Coverage } from "../../effect-prop/src/node"
 import { pinnedFor } from "./regressions"
 
 const int = (name: string): number | undefined => {
@@ -28,6 +30,10 @@ export const config = {
 	path: process.env.FUZZ_PATH || undefined,
 	/** Native Effect Arbitrary replay token; separate from fast-check shrink paths. */
 	replay: process.env.FUZZ_REPLAY || undefined,
+	/** effect-prop: the replay token of one failing input. */
+	propReplay: process.env.PROP_REPLAY || undefined,
+	/** effect-prop: how many distinct failures a property looks for before it stops. Default 1. */
+	failures: int("PROP_FAILURES"),
 	/** `1`: ignore every known issue. A comma list of ids: ignore just those (to verify one fix). */
 	strict: new Set((process.env.FUZZ_STRICT ?? "").split(",").filter(Boolean)),
 	verbose: process.env.FUZZ_VERBOSE === "1",
@@ -89,7 +95,8 @@ export interface PropertyOptions<T> {
 	readonly timeoutMs?: number
 }
 
-const runCount = (runs: number): number => {
+/** A property's run count: its own default times `FUZZ_SCALE`, or `FUZZ_RUNS`. */
+export const runCount = (runs: number): number => {
 	if (config.runs === undefined && (!Number.isFinite(config.scale) || config.scale <= 0)) {
 		throw new Error("FUZZ_SCALE must be a positive finite number")
 	}
@@ -106,10 +113,11 @@ const runCount = (runs: number): number => {
  */
 export const property = async <T>(
 	name: string,
-	arb: fc.Arbitrary<T> | Arbitrary.Arbitrary<T>,
+	arb: fc.Arbitrary<T> | Arbitrary.Arbitrary<T> | Gen.Gen<T>,
 	predicate: (input: T) => void | Promise<void>,
 	options: PropertyOptions<T>,
 ): Promise<void> => {
+	if (Gen.isGen(arb)) return guidedProperty(name, arb, predicate, options)
 	if (Arbitrary.isArbitrary(arb)) return nativeProperty(name, arb, predicate, options)
 	if (config.replay !== undefined) throw new Error("FUZZ_REPLAY is for Effect properties; select one with -t")
 	const skips = new Map<string, number>()
@@ -161,6 +169,114 @@ export const property = async <T>(
 			"--- error",
 			error instanceof Error ? error.message : String(error),
 			error instanceof FuzzFailure ? describeContext(error.context) : "",
+			`--- pin it: add the input above to tests/fuzz/regressions.ts under a key matching ${JSON.stringify(name)}`,
+		].join("\n"),
+	)
+}
+
+/** The built library, and not the `dist/` of any dependency: what coverage-guided search steers by. */
+const library = new URL("../../dist/", import.meta.url).href
+const coverage = Coverage.layer({ include: (url) => url.startsWith(library) })
+
+/**
+ * A message with what varies from input to input taken out: everything from
+ * the first quoted value on (a server quotes the offending text, and an
+ * apostrophe in its own words would pair up wrongly), and numbers, except an
+ * error code.
+ */
+const generalise = (text: string): string =>
+	text
+		.split("\n")[0]!
+		.replace(/['"`].*$/, "…")
+		.replace(/(?<!Code: )\b\d+/g, "N")
+		.slice(0, 100)
+
+/**
+ * What groups a failure with others of the same cause. One `expect` in a
+ * suite covers many bugs, so the group is what the database or the builder
+ * said, not where the assertion is.
+ */
+const signatureOf = (error: unknown): string | undefined => {
+	if (!(error instanceof FuzzFailure)) return undefined
+	const outcome = error.context.outcome as { readonly _tag?: string; readonly message?: string } | undefined
+	if (outcome?._tag !== undefined && outcome._tag !== "Rows") return `${outcome._tag}: ${generalise(outcome.message ?? "")}`
+	const refused = typeof error.context.error === "string" ? `: ${generalise(error.context.error)}` : ""
+	const said = error.message.split("\n")[0]!.replace(/:? ?expected .*$/, "")
+	return said === "" ? "the result differs from what was expected" : `${generalise(said)}${refused}`
+}
+
+/**
+ * A property on effect-prop (../../effect-prop): native generators, and every
+ * distinct failure of a run when `PROP_FAILURES` asks for more than one. A
+ * failure replays with the `PROP_REPLAY` value its report prints.
+ *
+ * A soak (more inputs than the property's own count: `FUZZ_SCALE` above 1, or
+ * a larger `FUZZ_RUNS`) is guided by V8 coverage of the built library. The
+ * smoke budget is not: one reading of the coverage costs about 2 ms in a test
+ * process this size, more than compiling a plan, and a few hundred inputs are
+ * too few for the guidance to repay it.
+ */
+const guidedProperty = async <T>(name: string, gen: Gen.Gen<T>, predicate: (input: T) => void | Promise<void>, options: PropertyOptions<T>): Promise<void> => {
+	if (config.path !== undefined) throw new Error("FUZZ_PATH is for fast-check properties; this one replays with PROP_REPLAY")
+	if (config.replay !== undefined) throw new Error("FUZZ_REPLAY is for Effect Arbitrary properties; this one replays with PROP_REPLAY")
+	if (config.failures !== undefined && (!Number.isSafeInteger(config.failures) || config.failures < 1)) throw new Error("PROP_FAILURES must be a positive safe integer")
+	const runs = runCount(options.runs)
+	const guided = runs > options.runs
+	const skips = new Map<string, number>()
+	const judge = (input: T) =>
+		Effect.tryPromise({ try: async () => void (await predicate(input)), catch: (error) => error }).pipe(
+			Effect.catch((error) => {
+				if (!(error instanceof Skip)) {
+					const group = signatureOf(error)
+					return Effect.andThen(group === undefined ? Effect.void : Prop.signature(group), Effect.die(error))
+				}
+				skips.set(error.reason, (skips.get(error.reason) ?? 0) + 1)
+				return Prop.assume(false, error.reason)
+			}),
+		)
+	const result = await Effect.runPromise(
+		Prop.check(gen, judge, {
+			name,
+			runs,
+			seed: config.seed,
+			failures: config.failures,
+			replay: config.propReplay,
+			budget: options.timeoutMs,
+			examples: pinnedFor(name) as ReadonlyArray<T>,
+			// A skipped input is a discard: as many are allowed as fast-check allowed skips.
+			maxDiscards: 1000 * runs,
+			search: guided ? Search.coverage : Search.random,
+			format: (value) => fc.stringify(value),
+		}).pipe(guided ? Effect.provide(coverage) : (check) => check),
+	)
+	const skipped = [...skips].map(([reason, count]) => `${count}× ${reason}`).join(", ")
+	if (config.verbose || !Prop.passed(result)) report(`[fuzz] ${name}: ${result.runs} checked${skipped ? `, skipped ${skipped}` : ""}`)
+	if (config.verbose) report(Prop.formatReport(result, { coverage: true }))
+	if (result.exhausted !== undefined) {
+		throw new Error(`[fuzz] ${name}: ${result.runs === 0 ? "every input was skipped" : result.exhausted} (${[...skips.keys()].join(", ")})`)
+	}
+	if (result.failures.length === 0) {
+		// Stopped by the time budget is not a pass: the inputs the run was asked for were not all judged.
+		if (result.budgetSpent) throw new Error(`[fuzz] ${name}: interrupted by its ${options.timeoutMs} ms budget after ${result.runs} runs`)
+		return
+	}
+	const pattern = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+	throw new Error(
+		[
+			`[fuzz] ${name}: ${result.failures.length} distinct failure${result.failures.length === 1 ? "" : "s"} after ${result.runs} runs (seed ${result.seed})`,
+			...result.failures.flatMap((failure, index) => {
+				const error = failure.cause === undefined ? undefined : Cause.squash(failure.cause)
+				return [
+					"",
+					`=== ${index + 1}. ${failure.signature} (found by ${failure.foundBy}, ${failure.shrinkSteps} shrink steps)`,
+					...(failure.replay === undefined ? [] : [`replay: PROP_REPLAY='${failure.replay}' bun run fuzz -t '${pattern}'`]),
+					"--- input (shrunk)",
+					result.format(failure.value),
+					"--- error",
+					error instanceof Error ? error.message : failure.message,
+					error instanceof FuzzFailure ? describeContext(error.context) : "",
+				]
+			}),
 			`--- pin it: add the input above to tests/fuzz/regressions.ts under a key matching ${JSON.stringify(name)}`,
 		].join("\n"),
 	)

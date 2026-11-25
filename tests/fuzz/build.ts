@@ -45,6 +45,9 @@ const nameParams = (plan: Plan, prefix: string): { readonly names: Map<Operand, 
 			case "like":
 			case "in":
 				return expr(c.k === "like" ? c.l : c.e)
+			case "match":
+				expr(c.l)
+				return operand(c.needle)
 			case "null":
 				return expr(c.e)
 			case "between":
@@ -112,6 +115,8 @@ export const buildPlan = (dialect: FuzzDialect, ctx: CoreContext, plan: Plan, pr
 				return expr($, c.l)[c.op](operand($, c.r))
 			case "like":
 				return expr($, c.l)[c.op](c.pattern)
+			case "match":
+				return expr($, c.l)[c.op](operand($, c.needle), c.insensitive ? { insensitive: true } : undefined)
 			case "null":
 				return expr($, c.e)[c.op]()
 			case "between":
