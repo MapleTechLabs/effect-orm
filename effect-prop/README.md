@@ -145,9 +145,11 @@ What to know about V8 coverage:
   collection started, and names only for a file loaded later.
 - A function with no branches stops being counted once V8 optimizes it, so a
   later property in the same process can list it as never reached.
-- Reading coverage costs about a millisecond, so `Search.coverage` reads it once
-  per batch of inputs and reruns a batch input by input only when it did
-  something new.
+- Reading coverage costs a millisecond or more (about 2 ms in a process that has
+  loaded database drivers), so `Search.coverage` reads it once per batch of
+  inputs and reruns a batch input by input only when it did something new. For a
+  cheap property and a few hundred inputs that is still most of the run: guide
+  long runs, and leave a smoke budget on `Search.random`.
 
 ## Replay and regressions
 

@@ -74,8 +74,12 @@ this repository. Their generators are native (`Gen`, in `plan.ts` and
 `fixtures.ts`), which buys three things:
 
 - a failing plan shrinks by structure: a condition is dropped, or replaced by one of its own sub-conditions;
-- the search is guided by V8 coverage of `dist/`: a plan that reaches new code in the builder is kept and varied;
-- one run reports every distinct failure, grouped by what the database or the builder said.
+- one run reports every distinct failure, grouped by what the database or the builder said;
+- a soak is guided by V8 coverage of `dist/`: a plan that reaches new code in the builder is kept and varied.
+
+The guidance is for soaks only (`FUZZ_SCALE` above 1, or `FUZZ_RUNS` above a
+property's own count). Reading the coverage costs about 2 ms, more than
+compiling a plan, so at the smoke budget of `bun run test` the search is random.
 
 They go through the same `property()` and follow `FUZZ_SCALE`, `FUZZ_RUNS`,
 `FUZZ_SEED`, `FUZZ_VERBOSE` and `FUZZ_STRICT` like every other suite, with
@@ -87,7 +91,7 @@ PROP_REPLAY='p1.…' bun run fuzz -t 'plans match the model \(postgres, plain st
 PROP_FAILURES=10 FUZZ_SCALE=20 bun run fuzz -t '\(clickhouse'                            # every distinct failure, not the first
 ```
 
-`FUZZ_VERBOSE=1` also prints what the inputs reached in `dist/`. A replay token
+In a soak, `FUZZ_VERBOSE=1` also prints what the inputs reached in `dist/`. A replay token
 belongs to the generator that made it: after `plan.ts` changes it builds a
 different plan, so pin the printed input, not the token.
 

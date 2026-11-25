@@ -206,15 +206,22 @@ const signatureOf = (error: unknown): string | undefined => {
 }
 
 /**
- * A property on effect-prop (../../effect-prop): native generators, a search
- * guided by V8 coverage of the built library, and every distinct failure of a
- * run when `PROP_FAILURES` asks for more than one. A failure replays with the
- * `PROP_REPLAY` value its report prints.
+ * A property on effect-prop (../../effect-prop): native generators, and every
+ * distinct failure of a run when `PROP_FAILURES` asks for more than one. A
+ * failure replays with the `PROP_REPLAY` value its report prints.
+ *
+ * A soak (more inputs than the property's own count: `FUZZ_SCALE` above 1, or
+ * a larger `FUZZ_RUNS`) is guided by V8 coverage of the built library. The
+ * smoke budget is not: one reading of the coverage costs about 2 ms in a test
+ * process this size, more than compiling a plan, and a few hundred inputs are
+ * too few for the guidance to repay it.
  */
 const guidedProperty = async <T>(name: string, gen: Gen.Gen<T>, predicate: (input: T) => void | Promise<void>, options: PropertyOptions<T>): Promise<void> => {
 	if (config.path !== undefined) throw new Error("FUZZ_PATH is for fast-check properties; this one replays with PROP_REPLAY")
 	if (config.replay !== undefined) throw new Error("FUZZ_REPLAY is for Effect Arbitrary properties; this one replays with PROP_REPLAY")
 	if (config.failures !== undefined && (!Number.isSafeInteger(config.failures) || config.failures < 1)) throw new Error("PROP_FAILURES must be a positive safe integer")
+	const runs = runCount(options.runs)
+	const guided = runs > options.runs
 	const skips = new Map<string, number>()
 	const judge = (input: T) =>
 		Effect.tryPromise({ try: async () => void (await predicate(input)), catch: (error) => error }).pipe(
@@ -230,17 +237,17 @@ const guidedProperty = async <T>(name: string, gen: Gen.Gen<T>, predicate: (inpu
 	const result = await Effect.runPromise(
 		Prop.check(gen, judge, {
 			name,
-			runs: runCount(options.runs),
+			runs,
 			seed: config.seed,
 			failures: config.failures,
 			replay: config.propReplay,
 			budget: options.timeoutMs,
 			examples: pinnedFor(name) as ReadonlyArray<T>,
 			// A skipped input is a discard: as many are allowed as fast-check allowed skips.
-			maxDiscards: 1000 * runCount(options.runs),
-			search: Search.coverage,
+			maxDiscards: 1000 * runs,
+			search: guided ? Search.coverage : Search.random,
 			format: (value) => fc.stringify(value),
-		}).pipe(Effect.provide(coverage)),
+		}).pipe(guided ? Effect.provide(coverage) : (check) => check),
 	)
 	const skipped = [...skips].map(([reason, count]) => `${count}× ${reason}`).join(", ")
 	if (config.verbose || !Prop.passed(result)) report(`[fuzz] ${name}: ${result.runs} checked${skipped ? `, skipped ${skipped}` : ""}`)

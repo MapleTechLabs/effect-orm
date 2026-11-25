@@ -80,6 +80,15 @@ describe("fuzz harness coverage guarantees", () => {
 		config.failures = Number.NaN
 		await expect(property("guided bad failures", Gen.constant(1), () => {}, { runs: 1 })).rejects.toThrow("PROP_FAILURES")
 	})
+	it("effect-prop: a soak runs the scaled count, on the guided search", async () => {
+		reset()
+		config.scale = 3
+		let checked = 0
+		await property("guided soak", Gen.int(0, 9), () => { checked++ }, { runs: 20 })
+		// The guided search runs a batch again to find which input was new, so the property runs at least once per input.
+		expect(checked).toBeGreaterThanOrEqual(60)
+		expect(checked).toBeLessThan(200)
+	})
 	it("effect-prop: reports each distinct failure once, shrunk, with its context and a replay command", async () => {
 		reset()
 		const predicate = (n: number) => {
