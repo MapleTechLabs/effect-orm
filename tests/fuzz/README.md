@@ -1,7 +1,7 @@
 # The fuzzer
 
 Property-based tests for the query builder and codecs, run with Effect Arbitrary
-and fast-check. Database properties run on real engines. They catch
+and fast-check, and one suite on effect-prop (see below). Database properties run on real engines. They catch
 what hand-written cases miss: SQL that runs but returns the wrong rows, escaping
 bugs, and values the builder throws on instead of refusing.
 
@@ -27,6 +27,7 @@ are (the migration fuzzer creates its databases as `root`, with the URL's passwo
 | `migrations.postgres.fuzz.test.ts` | random Postgres table/column/default/nullability/index transitions reach a fresh create's shape and preserve scalar, JSON and array rows | PGlite catalogs and independent seed values |
 | `migrations.mysql.fuzz.test.ts` | a MySQL migration between two random schemas (types, nullability, defaults, keys, UNIQUE columns, indexes, table and column renames), run statement by statement on seeded rows in a throwaway database on MySQL 8.4 and MariaDB 11.4, gives a fresh create's `information_schema` and keeps the rows | a fresh create in another database, and the seeded rows |
 | `codecs.fuzz.test.ts` | schema-derived values round-trip through composed codecs and compiled row codecs; malformed wire rows fail with a typed decode error | Effect `TestSchema`, schema equivalence and explicit wire corruptions |
+| `terminal-clauses.fuzz.test.ts` | a ClickHouse statement built as body + `SETTINGS` + `FORMAT` splits into exactly those; masking keeps every offset; no text makes the splitter throw | the parts the statement was built from, and invariants |
 | `registry.fuzz.test.ts` | every dialect and public type export has fuzz coverage or an explicit reason | public exports and the literal catalog |
 
 ## Choosing a generator
@@ -60,6 +61,24 @@ FUZZ_REPLAY='…' bun run fuzz -t 'compiled row codec rejects malformed wire \(p
 are version-specific. Pin important inputs in `regressions.ts` as well. A property
 whose every input is discarded now fails, including known-issue skips; hitting a
 configured time budget also fails rather than reporting partial coverage as success.
+
+## Properties on effect-prop
+
+`terminal-clauses.fuzz.test.ts` runs on [effect-prop](../../effect-prop/README.md),
+the property-testing library in this repository, not on fast-check. Its
+generators are native (`Gen`), so a failure shrinks by structure, and its search
+is guided by V8 coverage of `dist/`. It follows `FUZZ_SCALE`, `FUZZ_RUNS` and
+`FUZZ_SEED` like every other suite, with effect-prop's own variables for the rest:
+
+```sh
+PROP_REPLAY='p1.…' bun run fuzz -t 'a statement splits'   # rerun one failing input
+PROP_FAILURES=10 bun run fuzz -t 'a statement splits'    # every distinct failure, not the first
+PROP_VERBOSE=1 bun run fuzz -t 'terminal clauses'        # what the inputs reached, and what they did not
+```
+
+A fixed bug is pinned in the property's `examples`. Write new suites this way
+when the input is a grammar or a sequence of operations; [GUIDE.md](../../effect-prop/GUIDE.md)
+says how.
 
 ## Adding a dialect
 

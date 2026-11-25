@@ -89,7 +89,8 @@ export interface PropertyOptions<T> {
 	readonly timeoutMs?: number
 }
 
-const runCount = (runs: number): number => {
+/** A property's run count: its own default times `FUZZ_SCALE`, or `FUZZ_RUNS`. */
+export const runCount = (runs: number): number => {
 	if (config.runs === undefined && (!Number.isFinite(config.scale) || config.scale <= 0)) {
 		throw new Error("FUZZ_SCALE must be a positive finite number")
 	}
