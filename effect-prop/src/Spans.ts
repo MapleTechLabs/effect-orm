@@ -46,7 +46,8 @@ export const layer: Layer.Layer<never> = Layer.effectContext(
 				pending.clear()
 				return peeked.length
 			}),
-			summary: Effect.sync(() => ({ kind: "span edges", covered: seen.size, total: seen.size, files: [] })),
+			// Only the edges that were opened are known: there is no total to compare them with.
+			summary: Effect.sync(() => ({ kind: "span edges", covered: seen.size, total: undefined, files: [] })),
 		}
 		return Context.make(Feedback, service).pipe(Context.add(Tracer.Tracer, tracer))
 	}),

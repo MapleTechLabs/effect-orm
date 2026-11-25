@@ -1,6 +1,7 @@
 import { Arbitrary, Schema } from "effect"
 import { describe, expect, it } from "vitest"
 import { Gen, Source } from "../src/index"
+import { relativePath } from "../src/internal"
 
 const run = <A>(gen: Gen.Gen<A>, options: Source.SourceOptions): { value: A; source: Source.Source } => {
 	const source = new Source.Source(options)
@@ -152,8 +153,10 @@ describe("Gen", () => {
 		const trees = Gen.sample(tree, { count: 300, seed: 2 })
 		expect(Math.max(...trees.map(depth))).toBeLessThanOrEqual(4)
 		expect(Math.max(...trees.map(depth))).toBeGreaterThanOrEqual(3)
-		const { source } = run(tree, { rng: new Source.Rng(5) })
-		expect(source.spans.every((s) => s.label === "tree")).toBe(true)
+		// One node over two leaves: recurse, then twice "stop" and a leaf's value.
+		const { value, source } = run(tree, { prefix: [1, 0, 0, 0, 0] })
+		expect(value).toEqual([0, 0])
+		expect(source.spans.map((s) => [s.label, s.start, s.end])).toEqual([["tree", 1, 3], ["tree", 3, 5], ["tree", 0, 5]])
 	})
 
 	it("bridges an Effect Schema, deterministically in its seed draw", () => {
@@ -206,6 +209,16 @@ describe("Gen", () => {
 		// The outer one is one level deep whenever it reaches `inner`, which must still get its own three.
 		const outer = Gen.recursive<Tree>(Gen.constant(0), () => inner, { maxDepth: 1, label: "node" })
 		expect(Math.max(...Gen.sample(outer, { count: 400, seed: 1 }).map(depth))).toBe(3)
+	})
+
+	it("names a file by its path under the working directory, from a path or a file URL of either platform", () => {
+		expect(relativePath("/repo/src/a.ts", "/repo")).toBe("src/a.ts")
+		expect(relativePath("file:///repo/src/a.ts", "/repo")).toBe("src/a.ts")
+		expect(relativePath("file:///my%20repo/src/a.ts", "/my repo")).toBe("src/a.ts")
+		expect(relativePath("file:///C:/repo/src/a.ts", "C:\\repo")).toBe("src/a.ts")
+		expect(relativePath("C:\\repo\\src\\a.ts", "C:\\repo")).toBe("src/a.ts")
+		expect(relativePath("/elsewhere/a.ts", "/repo")).toBe("/elsewhere/a.ts")
+		expect(relativePath("/repository/a.ts", "/repo")).toBe("/repository/a.ts")
 	})
 
 	it("unicodeChar reaches U+007F, and a size is a whole number", () => {

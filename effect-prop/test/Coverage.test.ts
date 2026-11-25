@@ -179,7 +179,9 @@ describe("Spans", () => {
 		)
 		expect(novelty.reduce((a, b) => a + b, 0)).toBe(3)
 		expect(novelty.filter((n) => n > 0).length).toBe(2)
-		expect(report.feedback).toEqual({ kind: "span edges", covered: 3, total: 3, files: [] })
+		expect(report.feedback).toEqual({ kind: "span edges", covered: 3, total: undefined, files: [] })
+		// What exists is not known, so the report gives a count and no ratio.
+		expect(Prop.formatReport(report)).toContain("span edges: reached 3, 0 inputs kept")
 	})
 
 	it("starts each check from nothing when two share the layer", async () => {

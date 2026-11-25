@@ -20,7 +20,8 @@ export interface FileSummary {
 export interface FeedbackSummary {
 	readonly kind: string
 	readonly covered: number
-	readonly total: number
+	/** How many there are to reach, or `undefined` when only what was reached is known. */
+	readonly total: number | undefined
 	readonly files: ReadonlyArray<FileSummary>
 }
 

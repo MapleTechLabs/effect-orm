@@ -562,7 +562,8 @@ export const formatReport = <A, E>(report: Report<A, E>, options: { readonly cov
 		for (const [each, n] of labelled) lines.push(`    ${((100 * n) / Math.max(1, report.runs)).toFixed(1).padStart(5)}% ${each}`)
 	}
 	if (report.feedback !== undefined) {
-		lines.push("", `  ${report.feedback.kind}: reached ${report.feedback.covered} of ${report.feedback.total} known, ${report.kept} inputs kept`)
+		const { kind, covered, total } = report.feedback
+		lines.push("", `  ${kind}: reached ${covered}${total === undefined ? "" : ` of ${total} known`}, ${report.kept} inputs kept`)
 		if (options.coverage === true) {
 			// The files the inputs got into first: that is where a gap is a gap in the generator.
 			const files = [...report.feedback.files].sort((a, b) => b.covered - a.covered)
