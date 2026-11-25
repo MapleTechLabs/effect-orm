@@ -47,6 +47,16 @@ for (const [name, url, dialect] of servers) {
 						leftOut: yield* violation(db, `INSERT INTO \`${units}\` (id, org_id) VALUES (4, 1)`),
 						check: yield* violation(db, `INSERT INTO \`${units}\` VALUES (5, 1, 0)`),
 						syntax: yield* violation(db, `INSERT INTO \`${units}\` VALUES (`),
+						// The duplicated value is user input: it cannot name the key, and a newline in it
+						// does not lose the name (DatabaseError keeps the message's first line only).
+						spoofed: yield* Effect.andThen(
+							db.execute({ sql: `INSERT INTO \`${orgs}\` VALUES (3, ?)`, parameters: ["x' for key 'evil"] }),
+							violation(db, `INSERT INTO \`${orgs}\` VALUES (4, 'x'' for key ''evil')`),
+						),
+						multiline: yield* Effect.andThen(
+							db.execute({ sql: `INSERT INTO \`${orgs}\` VALUES (5, ?)`, parameters: ["l1\nl2"] }),
+							violation(db, `INSERT INTO \`${orgs}\` VALUES (6, 'l1\\nl2')`),
+						),
 					}
 				}),
 			)
@@ -69,6 +79,10 @@ for (const [name, url, dialect] of servers) {
 			expect(seen.check).toMatchObject(
 				name === "mysql" ? { constraint: `${units}_seats_positive`, errorCode: 3819 } : { constraint: `${units}_seats_positive`, table: units, errorCode: 4025 },
 			)
+			for (const spoof of [seen.spoofed, seen.multiline]) {
+				expect(spoof).toBeInstanceOf(Db.UniqueViolation)
+				expect(spoof).toMatchObject({ constraint: `${orgs}_email_key` })
+			}
 			// Not a constraint: it stays a DatabaseError, now with the server's number.
 			expect(seen.syntax).toBeInstanceOf(Db.DatabaseError)
 			expect(seen.syntax).toMatchObject({ errorCode: 1064, sqlState: "42000" })

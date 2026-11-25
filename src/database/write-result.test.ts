@@ -26,7 +26,11 @@ const sqliteWrites = (db: Db.DatabaseApi) =>
 		const two = yield* db.runWrite(SQLite.insertInto(Notes).values([{ body: "b" }, { body: "c" }]))
 		const updated = yield* db.runWrite(SQLite.update(Notes).set({ body: "z" }).where(($) => [$.id.gt(1)]))
 		const none = yield* db.runWrite(SQLite.deleteFrom(Notes).where(($) => [$.id.eq(99)]))
-		return { one, two, updated, none }
+		// An upsert that updates row 1 leaves the connection's last rowid at 3: not its key.
+		const upserted = yield* db.runWrite(
+			SQLite.insertInto(Notes).values({ id: 1, body: "again" }).onConflictDoUpdate({ target: ["id"], set: SQLite.excluded(["body"]) }),
+		)
+		return { one, two, updated, none, upserted }
 	})
 
 const expectSqliteWrites = (seen: Effect.Success<ReturnType<typeof sqliteWrites>>) =>
@@ -36,6 +40,7 @@ const expectSqliteWrites = (seen: Effect.Success<ReturnType<typeof sqliteWrites>
 		two: { affectedRows: 2, insertId: 3 },
 		updated: { affectedRows: 2, insertId: undefined },
 		none: { affectedRows: 0, insertId: undefined },
+		upserted: { affectedRows: 1, insertId: undefined },
 	})
 
 describe("runWrite", () => {
@@ -102,6 +107,18 @@ describe("runWrite", () => {
 		}).pipe(Effect.provide(Db.layerTest({ dialect: MySQL.mysqlDialect }))),
 	)
 
+	it.effect("layerTest: no insert id on Postgres, and rows queued for runWrite are a test bug", () =>
+		Effect.gen(function* () {
+			const test = yield* Db.TestDatabase
+			const T = PG.table("notes", { columns: { id: PG.int4, body: PG.text }, primaryKey: ["id"] })
+			yield* test.reply({ affectedRows: 1, insertId: 41 })
+			expect(yield* Db.runWrite(PG.insertInto(T).values({ id: 1, body: "a" }))).toEqual({ affectedRows: 1, insertId: undefined })
+			yield* test.reply([{ id: 1 }])
+			const exit = yield* Effect.exit(Db.runWrite(PG.insertInto(T).values({ id: 2, body: "b" })))
+			expect(Exit.isFailure(exit) && String(exit.cause)).toMatch(/queue a TestWriteReply/)
+		}).pipe(Effect.provide(Db.layerTest({ dialect: PG.postgresDialect }))),
+	)
+
 	it.effect("refuses a ClickHouse write before sending it", () =>
 		Effect.gen(function* () {
 			const test = yield* Db.TestDatabase
@@ -124,8 +141,9 @@ describe("runWrite", () => {
 			expect(yield* read({ changes: 1, lastInsertRowid: 5 }, false)).toEqual({ affectedRows: 1, insertId: undefined })
 			const big = yield* Effect.flip(read({ affectedRows: 1, insertId: "9007199254740993" }))
 			expect(big).toMatchObject({ reason: "UnsafeInteger" })
-			const unknown = yield* Effect.exit(read({ rows: [] }))
-			expect(Exit.isFailure(unknown) && String(unknown.cause)).toMatch(/no affected-row count/)
+			// The write already ran, so an unknown shape is an error in the channel, not a defect.
+			const unknown = yield* Effect.flip(read({ rows: [] }))
+			expect(unknown).toMatchObject({ reason: "WriteResultUnsupported" })
 		}),
 	)
 })

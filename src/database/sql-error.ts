@@ -21,6 +21,10 @@ export const firstLine = (cause: unknown): string => {
 	return message.split("\n")[0]?.trim().slice(0, 500) ?? message
 }
 
+// A SQLSTATE is five characters with a digit among them (`23505`, `HY000`,
+// `42S02`); Node's error names (`EPIPE`, `EBUSY`) are five letters.
+const isSqlState = (value: unknown): value is string => typeof value === "string" && /^[0-9A-Z]{5}$/.test(value) && /[0-9]/.test(value)
+
 /**
  * The server's five-character error code (`40001`, `23505`), when a driver in
  * the chain kept it. `@effect/sql-pg` classifies some codes into reasons;
@@ -29,9 +33,9 @@ export const firstLine = (cause: unknown): string => {
 export const sqlStateOf = (cause: unknown): string | undefined => {
 	let current: unknown = cause
 	for (let depth = 0; depth < 8 && typeof current === "object" && current !== null; depth++) {
-		if ("code" in current && typeof current.code === "string" && /^[0-9A-Z]{5}$/.test(current.code)) return current.code
+		if ("code" in current && isSqlState(current.code)) return current.code
 		// mysql2 keeps the server's code as `sqlState`, its `code` being a name (`ER_DUP_ENTRY`).
-		if ("sqlState" in current && typeof current.sqlState === "string" && /^[0-9A-Z]{5}$/.test(current.sqlState)) return current.sqlState
+		if ("sqlState" in current && isSqlState(current.sqlState)) return current.sqlState
 		const inner = next(current)
 		if (inner === undefined || inner === current) break
 		current = inner
@@ -62,18 +66,36 @@ export const errorCodeOf = (cause: unknown): number | undefined => {
 	return undefined
 }
 
-// mysql2's error: a string `code` (`ER_DUP_ENTRY`) beside the server's `errno`.
-// MySQL and MariaDB number their errors from 1000; Node's own system errors
-// (`ECONNREFUSED`) also carry an `errno`, a negative one, which is not a server code.
+// mysql2's server error: the server's `errno` beside its name as `code`
+// (`ER_DUP_ENTRY`) and its text as `sqlMessage`. MySQL and MariaDB number their
+// errors from 1000. Node's system errors (`ECONNREFUSED`, a negative `errno`)
+// and other drivers' (bun:sqlite's extended codes) carry no `sqlMessage`.
 const mysqlErrnoField = (current: object): number | undefined =>
 	"errno" in current &&
 	typeof current.errno === "number" &&
 	Number.isInteger(current.errno) &&
 	current.errno >= 1000 &&
 	"code" in current &&
-	typeof current.code === "string"
+	typeof current.code === "string" &&
+	"sqlMessage" in current &&
+	typeof current.sqlMessage === "string"
 		? current.errno
 		: undefined
+
+/**
+ * The whole message of a mysql2 server error (`sqlMessage`). `DatabaseError`
+ * keeps only the first line, and a value the message quotes can span lines.
+ */
+export const mysqlMessageOf = (cause: unknown): string | undefined => {
+	let current: unknown = cause
+	for (let depth = 0; depth < 8 && typeof current === "object" && current !== null; depth++) {
+		if (mysqlErrnoField(current) !== undefined) return (current as { readonly sqlMessage: string }).sqlMessage
+		const inner = next(current)
+		if (inner === undefined || inner === current) break
+		current = inner
+	}
+	return undefined
+}
 
 /**
  * The MySQL or MariaDB server error number (`1062`, `1452`) of a mysql2 error

@@ -109,7 +109,9 @@ const makeTest = (
 		const answerRaw = (sql: string, parameters: ReadonlyArray<unknown>): Effect.Effect<unknown, SqlError> =>
 			Effect.flatMap(next(sql, parameters), (reply) =>
 				isRows(reply)
-					? Effect.succeed({ affectedRows: 0 })
+					? reply.length === 0
+						? Effect.succeed({ affectedRows: 0 })
+						: Effect.die(new Error("layerTest: runWrite was answered with rows; queue a TestWriteReply ({ affectedRows, insertId? }) for it"))
 					: isWrite(reply)
 						? Effect.succeed({ affectedRows: reply.affectedRows, insertId: reply.insertId ?? 0 })
 						: Effect.fail(reply),

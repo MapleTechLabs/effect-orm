@@ -72,15 +72,17 @@ export interface WriteResult {
 	/**
 	 * The rows the statement wrote, as the server counts them. Through mysql2,
 	 * which connects with `CLIENT_FOUND_ROWS`, an UPDATE counts every row it
-	 * matched, including those it left as they were, and an
-	 * `ON DUPLICATE KEY UPDATE` counts 1 for a row inserted and 2 for one updated.
+	 * matched, including those it left as they were; an
+	 * `ON DUPLICATE KEY UPDATE` counts 2 for a row it updated, and 1 for a row
+	 * inserted or matched and left as it was.
 	 */
 	readonly affectedRows: number
 	/**
 	 * The generated key of an insert: MySQL's `AUTO_INCREMENT` of the first row
-	 * inserted, SQLite's and D1's rowid of the last. `undefined` for an update or
-	 * delete, an insert that generated none, and always on Postgres, where
-	 * `returning` reads it.
+	 * inserted (of the existing row, for an `ON DUPLICATE KEY UPDATE` that
+	 * updated one), SQLite's and D1's rowid of the last. `undefined` for an
+	 * update or delete, an insert that generated none, a SQLite or D1
+	 * `onConflictDoUpdate`, and always on Postgres, where `returning` reads it.
 	 */
 	readonly insertId: number | undefined
 }
@@ -482,8 +484,17 @@ export const fromSqlClient = <Functions extends string = string>(
 			),
 		) as Effect.Effect<any, any, any>
 
+	// Whether the driver's insert id is this write's key. Postgres reports none.
+	// SQLite's and D1's last rowid is the connection's, not the statement's: an
+	// upsert that updated, or a WITHOUT ROWID table, leaves an earlier insert's,
+	// so it is not read for an `onConflictDoUpdate`.
+	const readsKey = (write: Runnable, kind: string): boolean =>
+		kind === "insert" &&
+		dialect.name !== "postgres" &&
+		!(dialect.functions === "sqlite" && "_state" in write && (write as AnyInsert)._state.conflict?.action === "update")
+
 	// The driver's own result of a write, which `unsafe(...).raw` returns: mysql2's
-	// ResultSetHeader, node-postgres's Result, PGlite's Results, node:sqlite's
+	// ResultSetHeader, @effect/sql-pg's and PGlite's results, node:sqlite's
 	// `{ changes, lastInsertRowid }`, D1's result with its `meta`.
 	const runWrite: DatabaseApi["runWrite"] = (write, params) =>
 		Effect.flatMap(fillDefaults(write as Runnable), (filled) =>
@@ -503,7 +514,7 @@ export const fromSqlClient = <Functions extends string = string>(
 							guard(compiled).pipe(
 								Effect.andThen(driver(raw.unsafe(compiled.sql, compiled.parameters ?? []).raw)),
 								Effect.mapError(toDatabaseError(compiled.sql)),
-								Effect.flatMap((result) => writeResultOf(result, compiled.kind === "insert", compiled.sql)),
+								Effect.flatMap((result) => writeResultOf(result, readsKey(filled, compiled.kind), compiled.sql)),
 							),
 							undefined,
 							traceOptions,
@@ -752,24 +763,25 @@ const integerOf = (value: unknown, what: string, sql: string): Effect.Effect<num
 }
 
 /** @internal — what a driver's raw write result says, whichever driver sent it. */
-export const writeResultOf = (result: unknown, insert: boolean, sql: string): Effect.Effect<WriteResult, DatabaseError> =>
+export const writeResultOf = (result: unknown, readKey: boolean, sql: string): Effect.Effect<WriteResult, DatabaseError> =>
 	Effect.gen(function* () {
 		const meta = field(result, "meta")
 		const affected = field(result, "affectedRows") ?? field(result, "rowCount") ?? field(result, "changes") ?? field(meta, "changes")
 		const affectedRows = yield* integerOf(affected, "affected rows", sql)
+		// The write has already run, and outside a transaction it is committed, so this
+		// is an error in the channel, not a defect that would read as "nothing happened".
 		if (affectedRows === undefined) {
-			return yield* Effect.die(
-				new DatabaseError({
-					message: "the SQL client returned no affected-row count for this write; runWrite reads mysql2, node-postgres, PGlite, node:sqlite and D1 results",
-					sql,
-					reason: "WriteResultUnsupported",
-					cause: undefined,
-				}),
-			)
+			return yield* new DatabaseError({
+				message:
+					"the write ran, but the SQL client returned no affected-row count; runWrite reads @effect/sql-mysql2, @effect/sql-pg, PGlite, node:sqlite and D1 results",
+				sql,
+				reason: "WriteResultUnsupported",
+				cause: undefined,
+			})
 		}
 		// node:sqlite's and D1's last rowid outlives the insert that set it, so it is
 		// read only for an insert that wrote a row. MySQL reports 0 for no key.
-		const key = insert && affectedRows > 0 ? (field(result, "insertId") ?? field(result, "lastInsertRowid") ?? field(meta, "last_row_id")) : undefined
+		const key = readKey && affectedRows > 0 ? (field(result, "insertId") ?? field(result, "lastInsertRowid") ?? field(meta, "last_row_id")) : undefined
 		const insertId = yield* integerOf(key, "insert id", sql)
 		return { affectedRows, insertId: insertId === 0 ? undefined : insertId }
 	})

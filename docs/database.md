@@ -827,19 +827,25 @@ export const addNote = (orgId: string, body: string) =>
 
 The counts are the driver's, and they differ by database:
 
-- **MySQL and MariaDB** (mysql2): `insertId` is the first row's `AUTO_INCREMENT` key, so a
-  multi-row insert's keys are `insertId`, `insertId + 1`, ... under the default
-  `innodb_autoinc_lock_mode`. mysql2 connects with `CLIENT_FOUND_ROWS`, so an UPDATE counts every
-  row it matched, including those it left as they were, and an `ON DUPLICATE KEY UPDATE` counts 1
-  for a row inserted and 2 for one it updated.
-- **SQLite and D1**: `insertId` is the rowid of the last row inserted. `affectedRows` counts the
-  rows changed.
-- **Postgres**: `insertId` is always `undefined`; read a generated key with `returning`.
-  `affectedRows` is the command's row count.
+- **MySQL and MariaDB** (`@effect/sql-mysql2`): `insertId` is the first row's `AUTO_INCREMENT`
+  key. A multi-row insert's keys follow it only when `auto_increment_increment` is 1 and
+  `innodb_autoinc_lock_mode` hands out consecutive keys; read them back otherwise. mysql2 connects
+  with `CLIENT_FOUND_ROWS`, so an UPDATE counts every row it matched, including those it left as
+  they were. An `ON DUPLICATE KEY UPDATE` counts 2 for a row it updated and 1 for a row inserted or
+  matched and left as it was, so 1 does not mean inserted; on an update, `insertId` is the
+  existing row's key.
+- **SQLite and D1**: `insertId` is the rowid of the last row inserted. That rowid belongs to the
+  connection, not the statement, so it is not read for an `onConflictDoUpdate` (an upsert that
+  updates leaves an earlier insert's), and it is meaningless for a `WITHOUT ROWID` table.
+  `affectedRows` counts the rows changed.
+- **Postgres** (`@effect/sql-pg`, PGlite): `insertId` is always `undefined`; read a generated key
+  with `returning`. `affectedRows` is the command's row count.
 - **ClickHouse** reports neither, so `runWrite` refuses a ClickHouse write, as a defect, before
   sending it. Use `run`.
 
 `insertId` is `undefined` for an update or delete, and for an insert that generated no key. A
 count or key past 2^53 fails with `DatabaseError` (reason `UnsafeInteger`) rather than being
-rounded. `layerTest` answers a `runWrite` with a queued `{ affectedRows, insertId }` reply; see
+rounded, and a client whose result `runWrite` cannot read fails with reason
+`WriteResultUnsupported`. Both happen after the write ran, so outside a transaction it is
+committed: do not retry such a failure as if nothing was written. `layerTest` answers a `runWrite` with a queued `{ affectedRows, insertId }` reply; see
 [Testing](./testing.md).
