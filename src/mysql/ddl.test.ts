@@ -437,6 +437,24 @@ describe("diffMysqlSchemas", () => {
 			])
 		})
 
+		it("adds a dependent back only after the column it reads stops being VIRTUAL, even when declared before it", () => {
+			// Declared after `x` when the table was made, before it now: the database still has it after.
+			const before = v({ n: MySQL.int, x: total("n * 2"), g: total("x + 1") })
+			const stored = diffMysqlSchemas(before, v({ n: MySQL.int, g: total("x + 1"), x: total("n * 2", true) }))
+			expect(sqlOf(stored.ops)).toEqual([
+				"ALTER TABLE `links` DROP COLUMN `g`",
+				"ALTER TABLE `links` DROP COLUMN `x`, ADD COLUMN `x` int GENERATED ALWAYS AS (n * 2) STORED AFTER `n`",
+				// After `x`, the generated column it reads, not after `n`, the column declared before it.
+				"ALTER TABLE `links` ADD COLUMN `g` int GENERATED ALWAYS AS (x + 1) VIRTUAL AFTER `x`",
+			])
+			const base = diffMysqlSchemas(before, v({ n: MySQL.int, g: total("x + 1"), x: MySQL.int }), missing("x"))
+			expect(sqlOf(base.ops)).toEqual([
+				"ALTER TABLE `links` DROP COLUMN `g`",
+				"ALTER TABLE `links` DROP COLUMN `x`, ADD COLUMN `x` int NOT NULL AFTER `n`",
+				"ALTER TABLE `links` ADD COLUMN `g` int GENERATED ALWAYS AS (x + 1) VIRTUAL AFTER `n`",
+			])
+		})
+
 		it("drops the generated columns reading a column that becomes or stops being VIRTUAL, and adds them back after", () => {
 			const version = (stored: boolean) => v({ n: MySQL.int, total: total("n * 2", stored), doubled: MySQL.column(MySQL.int, { generated: { as: ($) => $.total!.mul(2) } }) })
 			expect(sqlOf(diffMysqlSchemas(version(true), version(false)).ops)).toEqual([

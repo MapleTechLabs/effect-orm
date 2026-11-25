@@ -74,6 +74,8 @@ export const diffMysqlSchemas = (
 	const ops: Array<MysqlMigrationOp> = []
 	// The phase an op runs in, when that is not its kind's.
 	const phases = new Map<MysqlMigrationOp, Phase>()
+	// The order of a table's column changes within their phase.
+	const changeRank = new Map<MysqlMigrationOp, number>()
 	const missingHints: Array<Hint> = []
 	const unsupported: Array<UnsupportedChange> = []
 	const prev = applyRenames(original, next, hints, ops, unsupported)
@@ -118,11 +120,6 @@ export const diffMysqlSchemas = (
 		const uniqueOn = (column: string) =>
 			pick(next, "unique").some((u) => u.table === name && u.columns.includes(column)) ||
 			pick(next, "index").some((i) => i.table === name && i.unique && i.columns.includes(mysqlIdent(column)))
-		// Where a column goes: after the one declared before it, which exists by the time it runs.
-		const placeOf = (column: MysqlColumnEntity): string | null => {
-			const index = now.findIndex((c) => c.name === column.name)
-			return index === 0 ? null : now[index - 1]!.name
-		}
 
 		// Columns renamed or dropped and added again: a generated column reading one is dropped
 		// first and added back after, and so is one reading that, and so on.
@@ -177,15 +174,17 @@ export const diffMysqlSchemas = (
 		for (const column of now) {
 			if (!old.has(column.name) && column.generated === undefined) ops.push({ op: "add_column", column })
 		}
-		// Then every other change, in declaration order: a generated column reads only generated columns declared before it.
+		// Then every other change, ordered below by what the columns read.
+		const changes: Array<readonly [MysqlColumnEntity, MysqlMigrationOp]> = []
+		const record = (column: MysqlColumnEntity, op: MysqlMigrationOp) => changes.push([column, op])
 		for (const column of now) {
 			const prior = old.get(column.name)
 			if (prior === undefined) {
-				if (column.generated !== undefined) phases.set(pushed({ op: "add_column", column, after: placeOf(column) }), Phase.ChangeColumns)
+				if (column.generated !== undefined) record(column, pushed({ op: "add_column", column, after: null }))
 				continue
 			}
 			if (dependentNames.has(column.name)) {
-				if (rebuilt.has(`${name}.${column.name}`)) phases.set(pushed({ op: "add_column", column, after: placeOf(column) }), Phase.ChangeColumns)
+				if (rebuilt.has(`${name}.${column.name}`)) record(column, pushed({ op: "add_column", column, after: null }))
 				continue
 			}
 			const change = changeOf(prior, column)
@@ -201,13 +200,38 @@ export const diffMysqlSchemas = (
 				}
 				// A base column's values are lost, either way; a generated one's are computed again.
 				const lossy = from === "base" || column.generated === undefined
-				if (confirm(lossy ? [dropHint(column.name)] : [], { op: "replace_column", column, was: from, after: placeOf(column) })) rebuilt.add(`${name}.${column.name}`)
+				if (confirm(lossy ? [dropHint(column.name)] : [], { op: "replace_column", column, was: from, after: null })) {
+					rebuilt.add(`${name}.${column.name}`)
+					record(column, ops.at(-1)!)
+				}
 				continue
 			}
 			// MODIFY: a new type converts a base column's values (or truncates them), and a base
 			// column made STORED loses its values to the computed ones. Confirm either like a drop.
 			const lossy = from === "base" && (prior.type !== column.type || column.generated !== undefined)
-			confirm(lossy ? [dropHint(column.name)] : [], { op: "modify_column", column, fill: !prior.notNull && column.notNull })
+			if (confirm(lossy ? [dropHint(column.name)] : [], { op: "modify_column", column, fill: !prior.notNull && column.notNull })) record(column, ops.at(-1)!)
+		}
+		// Each change after the changes to the columns its new definition reads (a string `as`:
+		// the columns its text names), else in declaration order. A column is placed after the
+		// nearest column declared before it that exists by then (the dependents are dropped
+		// until they are added back), or after the last generated column it reads, which MySQL
+		// requires of a generated column and a string `as` declared too early would break.
+		const exists = new Set([...was.map((c) => c.name).filter((c) => !dependentNames.has(c)), ...now.filter((c) => !old.has(c.name) && c.generated === undefined).map((c) => c.name)])
+		const waiting = [...changes]
+		for (let rank = 0; waiting.length > 0; rank++) {
+			const ready = (entry: readonly [MysqlColumnEntity, MysqlMigrationOp]) =>
+				!waiting.some(([other]) => other !== entry[0] && entry[0].generated !== undefined && readsColumn(entry[0], other.name, undefined))
+			// A cycle (only a string `as` can write one) runs in declaration order.
+			const index = Math.max(0, waiting.findIndex(ready))
+			const [column, op] = waiting.splice(index, 1)[0]!
+			const preceding = now.slice(0, now.indexOf(column)).reverse().find((c) => exists.has(c.name))
+			const read = column.generated === undefined ? [] : now.filter((c) => c !== column && c.generated !== undefined && exists.has(c.name) && readsColumn(column, c.name, undefined))
+			const anchor = [...(preceding === undefined ? [] : [preceding]), ...read].sort((a, b) => b.position - a.position)[0]
+			const placed: MysqlMigrationOp = op.op === "add_column" || op.op === "replace_column" ? { ...op, after: anchor?.name ?? null } : op
+			ops[ops.indexOf(op)] = placed
+			phases.set(placed, Phase.ChangeColumns)
+			changeRank.set(placed, rank)
+			exists.add(column.name)
 		}
 		// Generated columns before base ones, and the last declared first: a generated column
 		// may read any base column, but only generated ones declared before it.
@@ -248,7 +272,7 @@ export const diffMysqlSchemas = (
 	const created = new Set(ops.flatMap((op) => (op.op === "create_table" ? [op.table.name] : [])))
 	const result = ops.filter((op) => !(op.op === "add_unique" && created.has(op.unique.table)))
 
-	const rank = (op: MysqlMigrationOp) => [phases.get(op) ?? phaseOf[op.op], keyOrder[op.op] ?? 0] as const
+	const rank = (op: MysqlMigrationOp) => [phases.get(op) ?? phaseOf[op.op], keyOrder[op.op] ?? changeRank.get(op) ?? 0] as const
 	return {
 		ops: result
 			.map((op, i) => [op, rank(op), i] as const)
