@@ -79,8 +79,8 @@ for (const [name, url, dialect] of servers) {
 							}
 							// ORDER BY with LIMIT on an UPDATE takes the lowest ids first.
 							const updated = yield* db.runWrite(MySQL.update(Runs).set({ runId: "c" }).where(($) => [$.runId.eq("b")]).orderBy(["id", "asc"]).limit(2))
-							const left = yield* db.run(MySQL.from(Runs).select("runId").orderBy(["runId", "asc"]))
-							return { deleted, updated: updated.affectedRows, left: left.map((row) => row.runId) }
+							const left = yield* db.run(MySQL.from(Runs).select("id", "runId").orderBy(["id", "asc"]))
+							return { deleted, updated: updated.affectedRows, left: left.map((row) => `${row.id - 10}:${row.runId}`) }
 						}).pipe(Effect.ensuring(drop))
 					}).pipe(
 						Effect.provide(
@@ -88,7 +88,8 @@ for (const [name, url, dialect] of servers) {
 						),
 					),
 				)
-				expect(counts).toEqual({ deleted: [4, 4, 2], updated: 2, left: ["b", "c", "c"] })
+				// Run "b" was ids 11-13: the two lowest became "c".
+				expect(counts).toEqual({ deleted: [4, 4, 2], updated: 2, left: ["1:c", "2:c", "3:b"] })
 			})
 		}
 	})

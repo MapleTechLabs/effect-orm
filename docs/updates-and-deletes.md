@@ -124,8 +124,8 @@ const chunk = MySQL.deleteFrom(Steps)
 
 Postgres, SQLite, D1 and ClickHouse take neither: the write carries `WriteLimitClause`, so
 compiling it for them is a type error, and the compile refuses it as well. MySQL refuses them on
-a multi-table write, so they cannot be combined with [`from`](#update--from). They do not change
-the [tenant scope](#tenant-scope).
+a multi-table write, so they cannot be combined with [`from`](#update--from). The WHERE decides
+the [tenant scope](#tenant-scope), as without them; a subquery in the ORDER BY counts as a read.
 
 _(Backed by `docs/updates-and-deletes.md > A chunked DELETE with ORDER BY and LIMIT`.)_
 

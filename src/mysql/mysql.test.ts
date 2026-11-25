@@ -144,7 +144,8 @@ describe("the MySQL dialect", () => {
 		})
 
 		it("refuses a limit that is not a non-negative integer, as a failure the caller can report", () => {
-			for (const n of [-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, 2 ** 53]) {
+			// `undefined` is a value missing at run time: dropping it would delete without a bound.
+			for (const n of [-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, 2 ** 53, undefined]) {
 				expect(() => MySQL.compileUnsafe(ofRun.limit(n as number), { org: "o", run: "r" })).toThrow(/limit\(.*\): expected a non-negative integer/)
 			}
 		})
@@ -152,6 +153,7 @@ describe("the MySQL dialect", () => {
 		it("refuses an orderBy naming no column of the table", () => {
 			expect(() => MySQL.compileUnsafe(ofRun.orderBy(["run_id" as "runId", "asc"]), { org: "o", run: "r" })).toThrow(/naming the table's columns/)
 			expect(() => MySQL.compileUnsafe(ofRun.orderBy(["id", "up" as "asc"]), { org: "o", run: "r" })).toThrow(/naming the table's columns/)
+			expect(() => MySQL.compileUnsafe(ofRun.orderBy(($) => [[$.id, "up" as "asc"]]), { org: "o", run: "r" })).toThrow(/^deleteFrom\(runs\): orderBy/)
 		})
 
 		it("refuses them on a dialect without them, and on a multi-table UPDATE ... FROM", () => {

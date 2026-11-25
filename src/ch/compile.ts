@@ -120,10 +120,10 @@ const orderByClause = (specs: ReadonlyArray<[string, "asc" | "desc"]>): Array<st
 	})
 
 /** The callback form of `orderBy`: each expression as it renders, then its direction. */
-const orderByExprs = (specs: ReadonlyArray<readonly [Expr<any, any>, "asc" | "desc"]>): Array<string> =>
+const orderByExprs = (specs: ReadonlyArray<readonly [Expr<any, any>, "asc" | "desc"]>, where = "CHQuery"): Array<string> =>
 	specs.map(([expr, direction]) => {
 		if (!isExprLike(expr) || (direction !== "asc" && direction !== "desc")) {
-			return fail(new QueryBuilderDefect({ message: "CHQuery: orderBy(($) => ...) returns [expression, \"asc\" | \"desc\"] pairs" }), "")
+			return fail(new QueryBuilderDefect({ message: `${where}: orderBy(($) => ...) returns [expression, "asc" | "desc"] pairs` }), "")
 		}
 		return `${compileSqlFragment(expr.toFragment())} ${direction.toUpperCase()}`
 	})
@@ -2556,6 +2556,9 @@ const valuesColumns = (
 
 // UPDATE and DELETE
 
+/** Whether `limit` was called: `limit(undefined)` (a missing value at run time) is refused, not dropped. */
+const hasLimit = (state: CHUpdateState | CHDeleteState): boolean => Object.hasOwn(state, "limitValue")
+
 /** Prefix of the param a write's `limit` is bound as. */
 const LIMIT_PARAM = "$$limit"
 
@@ -2573,7 +2576,7 @@ const writeOrderLimit = (
 	let sql = ""
 	const order =
 		state.orderByFn !== undefined
-			? orderByExprs(state.orderByFn($))
+			? orderByExprs(state.orderByFn($), where)
 			: (state.orderBySpecs ?? []).map((spec) => {
 					const [column, direction] = Array.isArray(spec) ? spec : []
 					if (typeof column !== "string" || !Object.hasOwn(state.table.columns, column) || (direction !== "asc" && direction !== "desc")) {
@@ -2587,7 +2590,7 @@ const writeOrderLimit = (
 		return fail(new QueryBuilderDefect({ message: `${where}: orderBy() needs at least one column` }), "")
 	}
 	if (order.length > 0) sql += `\nORDER BY ${order.join(", ")}`
-	if (state.limitValue !== undefined) {
+	if (hasLimit(state)) {
 		const value: unknown = state.limitValue
 		if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
 			return fail(new QueryBuilderError({ code: "InvalidArguments", message: `${where}: limit(${String(value)}): expected a non-negative integer` }), "")
@@ -2646,13 +2649,14 @@ function compileUpdateOrDelete(
 	// ORDER BY and LIMIT: MySQL's single-table UPDATE and DELETE. A multi-table
 	// write (a FROM source) refuses them there, so it is refused here too.
 	const ordered = state.orderBySpecs !== undefined || state.orderByFn !== undefined
-	if ((ordered || state.limitValue !== undefined) && dialect.clauses.writeOrderLimit !== true) {
-		const named = ordered && state.limitValue !== undefined ? "orderBy() and limit() have" : ordered ? "orderBy() has" : "limit() has"
+	const limited = hasLimit(state)
+	if ((ordered || limited) && dialect.clauses.writeOrderLimit !== true) {
+		const named = ordered && limited ? "orderBy() and limit() have" : ordered ? "orderBy() has" : "limit() has"
 		return fail(new QueryBuilderDefect({
 			message: `${where}: ${named} no meaning for the ${dialect.name} dialect, whose ${kind === "update" ? "UPDATE" : "DELETE"} takes no ORDER BY or LIMIT`,
 		}), failedQuery<any, undefined>())
 	}
-	if ((ordered || state.limitValue !== undefined) && from !== undefined) {
+	if ((ordered || limited) && from !== undefined) {
 		return fail(new QueryBuilderDefect({ message: `${where}: orderBy() and limit() write a single-table UPDATE; an UPDATE ... FROM takes neither` }), failedQuery<any, undefined>())
 	}
 
