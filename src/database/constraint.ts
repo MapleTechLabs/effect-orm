@@ -7,7 +7,7 @@
 
 import { Effect, Option } from "effect"
 import { CheckViolation, DatabaseError, ForeignKeyViolation, NotNullViolation, TransactionCommitFailed, UniqueViolation, type ConstraintViolation } from "./errors"
-import { serverFieldOf, sqliteConstraintOf, type SqliteConstraint } from "./sql-error"
+import { mysqlErrnoOf, serverFieldOf, sqliteConstraintOf, type SqliteConstraint } from "./sql-error"
 
 type Kind = typeof UniqueViolation | typeof ForeignKeyViolation | typeof NotNullViolation | typeof CheckViolation
 
@@ -26,6 +26,22 @@ const kindOf = (error: DatabaseError | TransactionCommitFailed): Kind | undefine
 const fromClickHouseMessage = (message: string) => {
 	const match = /Constraint `([^`]+)` for table ([^\s(]+)/.exec(message)
 	return match === null ? {} : { constraint: match[1], table: match[2] }
+}
+
+// MySQL and MariaDB error numbers for the constraint kinds a caller branches on.
+// Their SQLSTATE is 23000 for every integrity failure (HY000 for a CHECK), so the
+// number is what tells them apart.
+const MYSQL_KINDS: Readonly<Record<number, Kind>> = {
+	1062: UniqueViolation, // ER_DUP_ENTRY
+	1586: UniqueViolation, // ER_DUP_ENTRY_WITH_KEY_NAME
+	1216: ForeignKeyViolation, // ER_NO_REFERENCED_ROW
+	1217: ForeignKeyViolation, // ER_ROW_IS_REFERENCED
+	1451: ForeignKeyViolation, // ER_ROW_IS_REFERENCED_2
+	1452: ForeignKeyViolation, // ER_NO_REFERENCED_ROW_2
+	1048: NotNullViolation, // ER_BAD_NULL_ERROR
+	1364: NotNullViolation, // ER_NO_DEFAULT_FOR_FIELD: a NOT NULL column with no default left out
+	3819: CheckViolation, // ER_CHECK_CONSTRAINT_VIOLATED (MySQL)
+	4025: CheckViolation, // ER_CONSTRAINT_FAILED (MariaDB)
 }
 
 interface Named {
@@ -60,6 +76,32 @@ const fromSqliteMessage = (kind: SqliteConstraint, message: string): Named => {
 	return columns.length === 1 ? { table, column: columns[0]?.[2] } : { table }
 }
 
+// MySQL and MariaDB name things only in the message:
+//   Duplicate entry 'a@x' for key 'users.users_email_key'   (MariaDB: for key 'users_email_key')
+//   Cannot add or update a child row: a foreign key constraint fails (`db`.`units`, CONSTRAINT `units_org_fk` FOREIGN KEY ...)
+//   Column 'starts_at' cannot be null / Field 'starts_at' doesn't have a default value
+//   Check constraint 'seats_positive' is violated.          (MariaDB: CONSTRAINT `seats_positive` failed for `db`.`tours`)
+const fromMysqlMessage = (Kind: Kind, message: string): Named => {
+	if (Kind === UniqueViolation) {
+		const key = /for key '([^']+)'/.exec(message)?.[1]
+		if (key === undefined) return {}
+		const dot = key.lastIndexOf(".")
+		return dot === -1 ? { constraint: key } : { table: key.slice(0, dot), constraint: key.slice(dot + 1) }
+	}
+	if (Kind === ForeignKeyViolation) {
+		const match = /\(`[^`]+`\.`([^`]+)`, CONSTRAINT `([^`]+)`/.exec(message)
+		return match === null ? {} : { table: match[1], constraint: match[2] }
+	}
+	if (Kind === NotNullViolation) {
+		const column = /^(?:Column|Field) '([^']+)'/.exec(message)?.[1]
+		return column === undefined ? {} : { column }
+	}
+	const mysql = /Check constraint '([^']+)' is violated/.exec(message)
+	if (mysql !== null) return { constraint: mysql[1] }
+	const mariadb = /CONSTRAINT `([^`]+)` failed for `[^`]+`\.`([^`]+)`/.exec(message)
+	return mariadb === null ? {} : { constraint: mariadb[1], table: mariadb[2] }
+}
+
 const SQLITE_KINDS: Readonly<Record<SqliteConstraint, Kind>> = {
 	UNIQUE: UniqueViolation,
 	PRIMARYKEY: UniqueViolation,
@@ -75,9 +117,16 @@ const SQLITE_KINDS: Readonly<Record<SqliteConstraint, Kind>> = {
 export const constraintViolation = (error: unknown): Option.Option<ConstraintViolation> => {
 	if (!(error instanceof DatabaseError || error instanceof TransactionCommitFailed)) return Option.none()
 	const sqlite = sqliteConstraintOf(error.cause)
-	const Kind = sqlite === undefined ? kindOf(error) : SQLITE_KINDS[sqlite]
+	const errno = sqlite === undefined ? mysqlErrnoOf(error.cause) : undefined
+	const mysqlKind = errno === undefined ? undefined : MYSQL_KINDS[errno]
+	const Kind = sqlite !== undefined ? SQLITE_KINDS[sqlite] : (mysqlKind ?? (errno === undefined ? kindOf(error) : undefined))
 	if (Kind === undefined) return Option.none()
-	const { constraint, table, column } = sqlite === undefined ? namedByServer(error) : fromSqliteMessage(sqlite, error.message)
+	const { constraint, table, column } =
+		sqlite !== undefined
+			? fromSqliteMessage(sqlite, error.message)
+			: mysqlKind !== undefined
+				? fromMysqlMessage(mysqlKind, error.message)
+				: namedByServer(error)
 	return Option.some(
 		new Kind({
 			message: error.message,

@@ -21,10 +21,19 @@ export interface TestStatement {
 }
 
 /**
- * The answer to one statement: rows as the server would send them (before
- * decoding), or the driver error it would fail with.
+ * What a write reports, as `runWrite` reads it. Queue it for a `runWrite`;
+ * `run` and `execute` read it as no rows.
  */
-export type TestReply = ReadonlyArray<Record<string, unknown>> | SqlError
+export interface TestWriteReply {
+	readonly affectedRows: number
+	readonly insertId?: number | undefined
+}
+
+/**
+ * The answer to one statement: rows as the server would send them (before
+ * decoding), what a write did, or the driver error it would fail with.
+ */
+export type TestReply = ReadonlyArray<Record<string, unknown>> | TestWriteReply | SqlError
 
 export interface TestDatabaseOptions {
 	/** The dialect to compile for: `postgresDialect`, `clickhouseDialect`, `sqliteDialect` or `d1Dialect`. */
@@ -52,6 +61,9 @@ export class TestDatabase extends Context.Service<TestDatabase, TestDatabaseApi>
 
 const isRows = (reply: TestReply): reply is ReadonlyArray<Record<string, unknown>> => Array.isArray(reply)
 
+const isWrite = (reply: TestReply): reply is TestWriteReply =>
+	!Array.isArray(reply) && typeof (reply as Partial<TestWriteReply>).affectedRows === "number"
+
 // Placeholders are already in the SQL `Database` sends; this compiler only has
 // to pass that SQL and its parameters through.
 const compiler = SqlStatement.makeCompiler({
@@ -76,18 +88,31 @@ const makeTest = (
 			return Effect.as(Ref.update(sent, (all) => [...all, statement]), statement)
 		}
 
-		const answer = (sql: string, parameters: ReadonlyArray<unknown>): Effect.Effect<ReadonlyArray<any>, SqlError> =>
+		const next = (sql: string, parameters: ReadonlyArray<unknown>): Effect.Effect<TestReply> =>
 			Effect.flatMap(record(sql, parameters), (statement) =>
-				Effect.flatMap(
+				Effect.map(
 					Ref.modify(queued, (replies): readonly [TestReply | undefined, ReadonlyArray<TestReply>] => [
 						replies[0],
 						replies.slice(1),
 					]),
-					(next) => {
-						const reply = next ?? respond(statement)
-						return isRows(reply) ? Effect.succeed(reply) : Effect.fail(reply)
-					},
+					(queuedReply) => queuedReply ?? respond(statement),
 				),
+			)
+
+		const answer = (sql: string, parameters: ReadonlyArray<unknown>): Effect.Effect<ReadonlyArray<any>, SqlError> =>
+			Effect.flatMap(next(sql, parameters), (reply) =>
+				isRows(reply) ? Effect.succeed(reply) : isWrite(reply) ? Effect.succeed([]) : Effect.fail(reply),
+			)
+
+		// `runWrite` reads the raw result: a write reply in mysql2's shape, and rows
+		// (the default reply is none) as a write that changed nothing.
+		const answerRaw = (sql: string, parameters: ReadonlyArray<unknown>): Effect.Effect<unknown, SqlError> =>
+			Effect.flatMap(next(sql, parameters), (reply) =>
+				isRows(reply)
+					? Effect.succeed({ affectedRows: 0 })
+					: isWrite(reply)
+						? Effect.succeed({ affectedRows: reply.affectedRows, insertId: reply.insertId ?? 0 })
+						: Effect.fail(reply),
 			)
 
 		// Transaction control runs unprepared; it is recorded and always succeeds.
@@ -99,7 +124,7 @@ const makeTest = (
 		const connection: Connection = {
 			execute: (sql, parameters, transformRows) =>
 				transformRows ? Effect.map(answer(sql, parameters), transformRows) : answer(sql, parameters),
-			executeRaw: answer,
+			executeRaw: answerRaw,
 			executeValues: values,
 			executeValuesUnprepared: values,
 			executeUnprepared: control,

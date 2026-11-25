@@ -22,6 +22,7 @@ export {
 	runNonEmpty,
 	runOne,
 	runOption,
+	runWrite,
 	stream,
 	transaction,
 	type BatchCheck,
@@ -36,6 +37,8 @@ export {
 	type Statement,
 	type TransactionInfo,
 	type TransactionOptions,
+	type Write,
+	type WriteResult,
 } from "./database/database"
 export { constraintViolation, refineConstraints } from "./database/constraint"
 export {
@@ -98,6 +101,7 @@ export {
 	type TestDatabaseApi,
 	type TestDatabaseOptions,
 	type TestReply,
+	type TestWriteReply,
 	type TestStatement,
 } from "./database/test-layer"
 export {

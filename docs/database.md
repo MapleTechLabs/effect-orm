@@ -383,7 +383,7 @@ again. `read uncommitted` is not offered because Postgres runs it as `read commi
 
 | Error | When |
 | --- | --- |
-| `DatabaseError` | A statement failed. `reason` is the driver's classification (`UniqueViolation`, `SerializationError`, `DeadlockError`, ...), `sqlState` the server's five-character code (Postgres) and `errorCode` its numeric code (ClickHouse) |
+| `DatabaseError` | A statement failed. `reason` is the driver's classification (`UniqueViolation`, `SerializationError`, `DeadlockError`, ...), `sqlState` the server's five-character code (Postgres, MySQL) and `errorCode` its numeric code (ClickHouse, MySQL's error number) |
 | `TransactionCommitFailed` | COMMIT failed: a deferred constraint, a serialization failure at commit, a dropped connection. Carries `reason`, `sqlState` and `errorCode` |
 | `TransactionRollbackFailed` | ROLLBACK failed after the body failed. `bodyCause` is the body's failure, `cause` the rollback's |
 | `TransactionOptionsRejected` | A setting the dialect does not support, or settings on a nested transaction |
@@ -397,10 +397,10 @@ reading SQLSTATEs. Every other failure passes through unchanged.
 
 | Error | Postgres SQLSTATE | ClickHouse code | SQLite and D1 | MySQL, MariaDB |
 | --- | --- | --- | --- | --- |
-| `UniqueViolation` | 23505 | — | `SQLITE_CONSTRAINT_UNIQUE`, `SQLITE_CONSTRAINT_PRIMARYKEY` | 1062 (`ER_DUP_ENTRY`) |
-| `ForeignKeyViolation` | 23503 | — | `SQLITE_CONSTRAINT_FOREIGNKEY` | — |
-| `NotNullViolation` | 23502 | — | `SQLITE_CONSTRAINT_NOTNULL` | — |
-| `CheckViolation` | 23514 | 469 (`VIOLATED_CONSTRAINT`) | `SQLITE_CONSTRAINT_CHECK` | — |
+| `UniqueViolation` | 23505 | — | `SQLITE_CONSTRAINT_UNIQUE`, `SQLITE_CONSTRAINT_PRIMARYKEY` | 1062 (`ER_DUP_ENTRY`), 1586 |
+| `ForeignKeyViolation` | 23503 | — | `SQLITE_CONSTRAINT_FOREIGNKEY` | 1451, 1452 (also 1216, 1217) |
+| `NotNullViolation` | 23502 | — | `SQLITE_CONSTRAINT_NOTNULL` | 1048, and 1364 for a NOT NULL column with no default left out |
+| `CheckViolation` | 23514 | 469 (`VIOLATED_CONSTRAINT`) | `SQLITE_CONSTRAINT_CHECK` | 3819 (MySQL), 4025 (MariaDB) |
 
 Each carries `message`, `sql`, the server's `sqlState` or `errorCode`, and `cause` (the error it
 came from). It also carries `constraint`, `table` and `column` when the server named them:
@@ -410,9 +410,11 @@ or NOT NULL constraints to violate. SQLite names no unique index: a unique or NO
 carries the `table` and, when the key has one column, the `column`. A CHECK violation carries
 the CHECK's name as `constraint`, or its expression when it has no name. A foreign key violation
 names nothing. SQLite's extended code is read from `node:sqlite` and from D1's message; neither
-sets `sqlState` or `errorCode`. On MySQL only a duplicate key is refined, from the
-`UniqueViolation` reason `@effect/sql-mysql2` gives error 1062; a foreign key, NOT NULL or CHECK
-failure stays a `DatabaseError` (reason `ConstraintError`).
+sets `sqlState` or `errorCode`. MySQL and MariaDB give every integrity failure SQLSTATE
+23000, so the kind is read from the server's error number, which is the violation's
+`errorCode`. They name things only in the message: a duplicate key names the key (MySQL 8 as
+`table.key`, which becomes `table` and `constraint`), a foreign key names the constraint and the
+referencing table, NOT NULL the column, and a CHECK its constraint (MariaDB also the table).
 
 ```ts title="database-constraints.ts"
 import { Effect } from "effect"
@@ -791,3 +793,53 @@ The builder compiles SELECTs, [INSERTs](./inserts.md) and
 rows, decoded, or none without `returning`; a write without it goes through `command`, as
 `execute` does. Write other statements with `sql`, as above, and read `RETURNING` with `query`
 and a schema.
+
+### Write results
+
+`runWrite(write, params?)` runs an insert, update or delete that has no `returning` and gives
+back what the server reported of it, a `WriteResult`:
+
+| Field | What it is |
+| --- | --- |
+| `affectedRows` | The rows the statement wrote, as the server counts them |
+| `insertId` | The key an insert generated, or `undefined` |
+
+It is how MySQL and MariaDB, which have no `RETURNING`, read an `AUTO_INCREMENT` key:
+
+```ts title="database-write-result.ts"
+import { Effect } from "effect"
+import * as Db from "@maple-dev/effect-orm/database"
+import * as MySQL from "@maple-dev/effect-orm/mysql"
+
+const Notes = MySQL.table("notes", { id: MySQL.bigint, orgId: MySQL.varchar(36), body: MySQL.text }, { defaults: ["id"] })
+
+export const addNote = (orgId: string, body: string) =>
+	Effect.gen(function* () {
+		const { insertId } = yield* Db.runWrite(MySQL.insertInto(Notes).values({ orgId, body }))
+		const { affectedRows } = yield* Db.runWrite(
+			MySQL.update(Notes)
+				.set({ body: body.trim() })
+				.where(($) => [$.orgId.eq(orgId), $.id.eq(insertId ?? 0)]),
+		)
+		return { id: insertId, touched: affectedRows }
+	})
+```
+
+The counts are the driver's, and they differ by database:
+
+- **MySQL and MariaDB** (mysql2): `insertId` is the first row's `AUTO_INCREMENT` key, so a
+  multi-row insert's keys are `insertId`, `insertId + 1`, ... under the default
+  `innodb_autoinc_lock_mode`. mysql2 connects with `CLIENT_FOUND_ROWS`, so an UPDATE counts every
+  row it matched, including those it left as they were, and an `ON DUPLICATE KEY UPDATE` counts 1
+  for a row inserted and 2 for one it updated.
+- **SQLite and D1**: `insertId` is the rowid of the last row inserted. `affectedRows` counts the
+  rows changed.
+- **Postgres**: `insertId` is always `undefined`; read a generated key with `returning`.
+  `affectedRows` is the command's row count.
+- **ClickHouse** reports neither, so `runWrite` refuses a ClickHouse write, as a defect, before
+  sending it. Use `run`.
+
+`insertId` is `undefined` for an update or delete, and for an insert that generated no key. A
+count or key past 2^53 fails with `DatabaseError` (reason `UnsafeInteger`) rather than being
+rounded. `layerTest` answers a `runWrite` with a queued `{ affectedRows, insertId }` reply; see
+[Testing](./testing.md).

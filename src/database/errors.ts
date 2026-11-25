@@ -5,8 +5,8 @@ import { Schema } from "effect"
  *
  * `reason` is the driver's classification (`SqlError.reason._tag`:
  * `UniqueViolation`, `SerializationError`, `DeadlockError`, ...), `sqlState`
- * the server's five-character code (Postgres) and `errorCode` its numeric code
- * (ClickHouse), when the driver reported one, so callers can branch without
+ * the server's five-character code (Postgres, MySQL) and `errorCode` its numeric
+ * code (ClickHouse, MySQL's error number), when the driver reported one, so callers can branch without
  * digging through `cause`. `refineConstraints` turns a constraint failure into
  * a `ConstraintViolation`.
  */
@@ -22,7 +22,8 @@ export class DatabaseError extends Schema.TaggedError<DatabaseError>()("@maple-d
 // What every constraint violation carries. `constraint`, `table` and `column`
 // are present when the server named them: Postgres names the constraint and
 // table, and the column for NOT NULL; ClickHouse names the CHECK constraint;
-// SQLite names the table and a single column, or the CHECK. `cause` is the `DatabaseError` or `TransactionCommitFailed` it came from.
+// SQLite names the table and a single column, or the CHECK; MySQL names the key,
+// the foreign key and its table, the NOT NULL column, or the CHECK. `cause` is the `DatabaseError` or `TransactionCommitFailed` it came from.
 const ViolationFields = {
 	message: Schema.String,
 	sql: Schema.optional(Schema.String),
@@ -34,25 +35,25 @@ const ViolationFields = {
 	cause: Schema.Defect(),
 }
 
-/** A row would duplicate a unique key or primary key. Postgres SQLSTATE 23505, SQLite `SQLITE_CONSTRAINT_UNIQUE` or `_PRIMARYKEY`. */
+/** A row would duplicate a unique key or primary key. Postgres SQLSTATE 23505, SQLite `SQLITE_CONSTRAINT_UNIQUE` or `_PRIMARYKEY`, MySQL 1062. */
 export class UniqueViolation extends Schema.TaggedError<UniqueViolation>()(
 	"@maple-dev/effect-orm/UniqueViolation",
 	ViolationFields,
 ) {}
 
-/** A row references a missing row, or a delete leaves rows that reference it. Postgres SQLSTATE 23503, SQLite `SQLITE_CONSTRAINT_FOREIGNKEY`. */
+/** A row references a missing row, or a delete leaves rows that reference it. Postgres SQLSTATE 23503, SQLite `SQLITE_CONSTRAINT_FOREIGNKEY`, MySQL 1451 and 1452. */
 export class ForeignKeyViolation extends Schema.TaggedError<ForeignKeyViolation>()(
 	"@maple-dev/effect-orm/ForeignKeyViolation",
 	ViolationFields,
 ) {}
 
-/** A NOT NULL column got NULL. Postgres SQLSTATE 23502, SQLite `SQLITE_CONSTRAINT_NOTNULL`. */
+/** A NOT NULL column got NULL. Postgres SQLSTATE 23502, SQLite `SQLITE_CONSTRAINT_NOTNULL`, MySQL 1048 and 1364. */
 export class NotNullViolation extends Schema.TaggedError<NotNullViolation>()(
 	"@maple-dev/effect-orm/NotNullViolation",
 	ViolationFields,
 ) {}
 
-/** A row fails a CHECK constraint. Postgres SQLSTATE 23514, ClickHouse code 469 (`VIOLATED_CONSTRAINT`), SQLite `SQLITE_CONSTRAINT_CHECK`. */
+/** A row fails a CHECK constraint. Postgres SQLSTATE 23514, ClickHouse code 469 (`VIOLATED_CONSTRAINT`), SQLite `SQLITE_CONSTRAINT_CHECK`, MySQL 3819, MariaDB 4025. */
 export class CheckViolation extends Schema.TaggedError<CheckViolation>()(
 	"@maple-dev/effect-orm/CheckViolation",
 	ViolationFields,

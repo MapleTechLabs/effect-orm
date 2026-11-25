@@ -229,7 +229,9 @@ const created = PG.insertInto(ApiKeys)
 The row schema is derived from the list, as it is from a SELECT: an untyped expression
 (`untypedExpr`) leaves the insert undecoded, with `rowSchemaSource: "none"` and the alias in
 `untypedColumns`. `CompiledQuery.returning` lists the aliases. ClickHouse and MySQL have no
-RETURNING, so compiling an insert with `returning` for them is a `QueryBuilderDefect`.
+RETURNING, so compiling an insert with `returning` for them is a `QueryBuilderDefect`. On MySQL,
+`Db.runWrite` returns the insert's `AUTO_INCREMENT` key and affected rows instead
+([Write results](./database.md#write-results)).
 
 ## On conflict
 

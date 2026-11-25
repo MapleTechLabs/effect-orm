@@ -30,6 +30,8 @@ export const sqlStateOf = (cause: unknown): string | undefined => {
 	let current: unknown = cause
 	for (let depth = 0; depth < 8 && typeof current === "object" && current !== null; depth++) {
 		if ("code" in current && typeof current.code === "string" && /^[0-9A-Z]{5}$/.test(current.code)) return current.code
+		// mysql2 keeps the server's code as `sqlState`, its `code` being a name (`ER_DUP_ENTRY`).
+		if ("sqlState" in current && typeof current.sqlState === "string" && /^[0-9A-Z]{5}$/.test(current.sqlState)) return current.sqlState
 		const inner = next(current)
 		if (inner === undefined || inner === current) break
 		current = inner
@@ -38,19 +40,51 @@ export const sqlStateOf = (cause: unknown): string | undefined => {
 }
 
 /**
- * The server's numeric error code (ClickHouse `469`), when a driver in the
- * chain kept it: a number, or a string of digits that is not a five-character
- * SQLSTATE. `@effect/sql-clickhouse` keeps it as the client's string `code`,
- * `ClickhouseHttpClient` as a number.
+ * The server's numeric error code (ClickHouse `469`, MySQL `1062`), when a
+ * driver in the chain kept it: a number, or a string of digits that is not a
+ * five-character SQLSTATE. `@effect/sql-clickhouse` keeps it as the client's
+ * string `code`, `ClickhouseHttpClient` as a number, mysql2 as `errno`.
  */
 export const errorCodeOf = (cause: unknown): number | undefined => {
 	let current: unknown = cause
 	for (let depth = 0; depth < 8 && typeof current === "object" && current !== null; depth++) {
+		const errno = mysqlErrnoField(current)
+		if (errno !== undefined) return errno
 		if ("code" in current) {
 			const code = current.code
 			if (typeof code === "number" && Number.isInteger(code)) return code
 			if (typeof code === "string" && /^[0-9]{1,4}$/.test(code)) return Number(code)
 		}
+		const inner = next(current)
+		if (inner === undefined || inner === current) break
+		current = inner
+	}
+	return undefined
+}
+
+// mysql2's error: a string `code` (`ER_DUP_ENTRY`) beside the server's `errno`.
+// MySQL and MariaDB number their errors from 1000; Node's own system errors
+// (`ECONNREFUSED`) also carry an `errno`, a negative one, which is not a server code.
+const mysqlErrnoField = (current: object): number | undefined =>
+	"errno" in current &&
+	typeof current.errno === "number" &&
+	Number.isInteger(current.errno) &&
+	current.errno >= 1000 &&
+	"code" in current &&
+	typeof current.code === "string"
+		? current.errno
+		: undefined
+
+/**
+ * The MySQL or MariaDB server error number (`1062`, `1452`) of a mysql2 error
+ * in the chain. Read on its own, not through `errorCode`, so a ClickHouse code
+ * is never taken for a MySQL one.
+ */
+export const mysqlErrnoOf = (cause: unknown): number | undefined => {
+	let current: unknown = cause
+	for (let depth = 0; depth < 8 && typeof current === "object" && current !== null; depth++) {
+		const errno = mysqlErrnoField(current)
+		if (errno !== undefined) return errno
 		const inner = next(current)
 		if (inner === undefined || inner === current) break
 		current = inner
