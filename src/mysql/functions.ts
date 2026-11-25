@@ -48,4 +48,4 @@ export const coalesce = <A, P1, P2>(first: Expr<A | null, P1>, fallback: Expr<A,
  * `false`, never as a NULL the boolean codec would refuse.
  */
 export const asBoolean = <Q = never>(condition: Condition<Q>): Expr<boolean, Q | MysqlOnly> =>
-	makeExpr(scalar.lazy(() => `((${sql(condition)}) IS TRUE)`), boolean.schema as Schema.Codec<boolean, unknown>)
+	makeExpr(scalar.lazy(() => `((${sql(condition)}) IS TRUE)`, "asBoolean"), boolean.schema as Schema.Codec<boolean, unknown>)

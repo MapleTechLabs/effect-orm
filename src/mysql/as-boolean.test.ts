@@ -15,7 +15,7 @@ const servers = [
 for (const [name, url, dialect] of servers) {
 	describe.skipIf(url === undefined)(`asBoolean on ${name}`, () => {
 		const table = `as_boolean_${name}_${process.pid}`
-		const T = MySQL.table(table, { id: MySQL.int, secret: MySQL.nullable(MySQL.varchar(32)) })
+		const T = MySQL.table(table, { id: MySQL.int, secret: MySQL.nullable(MySQL.varchar(32)), flag: MySQL.boolean }, { defaults: ["flag"] })
 
 		for (const prepared of [true, false]) {
 			it(`reads a condition as true or false, never NULL (${prepared ? "prepared" : "text protocol"})`, async () => {
@@ -24,13 +24,16 @@ for (const [name, url, dialect] of servers) {
 						const db = Db.fromSqlClient(yield* SqlClient.SqlClient, { dialect })
 						const drop = Effect.orDie(db.execute({ sql: `DROP TABLE IF EXISTS \`${table}\`` }))
 						yield* drop
-						yield* db.execute({ sql: `CREATE TABLE \`${table}\` (id INT PRIMARY KEY, secret VARCHAR(32) NULL)` })
+						yield* db.execute({ sql: `CREATE TABLE \`${table}\` (id INT PRIMARY KEY, secret VARCHAR(32) NULL, flag TINYINT(1) NOT NULL DEFAULT 0)` })
 						return yield* Effect.gen(function* () {
 							yield* db.runWrite(MySQL.insertInto(T).values([{ id: 1, secret: "k" }, { id: 2, secret: "" }, { id: 3, secret: null }]))
+							// Written through `set`, then read back as a column.
+							yield* db.runWrite(MySQL.update(T).set(($) => ({ flag: MySQL.asBoolean($.secret.neq("")) })).allRows().crossTenant())
 							return yield* db.run(
 								MySQL.from(T)
 									.select(($) => ({
 										id: $.id,
+										flag: $.flag,
 										stored: MySQL.asBoolean($.secret.isNotNull().and($.secret.neq(""))),
 										// `secret != ''` alone is NULL for the NULL row: it reads as false.
 										unknown: MySQL.asBoolean($.secret.neq("")),
@@ -41,9 +44,9 @@ for (const [name, url, dialect] of servers) {
 					}).pipe(Effect.provide(MysqlClient.layer({ url: Redacted.make(url!), disablePreparedStatements: !prepared }))),
 				)
 				expect(rows).toEqual([
-					{ id: 1, stored: true, unknown: true },
-					{ id: 2, stored: false, unknown: false },
-					{ id: 3, stored: false, unknown: false },
+					{ id: 1, flag: true, stored: true, unknown: true },
+					{ id: 2, flag: false, stored: false, unknown: false },
+					{ id: 3, flag: false, stored: false, unknown: false },
 				])
 			})
 		}
