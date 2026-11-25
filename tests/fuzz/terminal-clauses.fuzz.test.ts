@@ -174,11 +174,14 @@ describe("terminal clauses", () => {
 			const masked = maskLiteralsAndComments(text)
 			if (masked.length !== text.length) throw new Error(`length ${text.length} became ${masked.length}`)
 			for (let i = 0; i < text.length; i++) {
-				if (masked[i] !== text[i] && masked[i] !== " ") throw new Error(`offset ${i}: ${JSON.stringify(text[i])} became ${JSON.stringify(masked[i])}`)
+				// A line break stays one wherever it is; anything else is kept or blanked.
+				const kept = masked[i] === text[i] || (masked[i] === " " && text[i] !== "\n")
+				if (!kept) throw new Error(`offset ${i}: ${JSON.stringify(text[i])} became ${JSON.stringify(masked[i])}`)
 			}
 			if (maskLiteralsAndComments(masked) !== masked) throw new Error(`masking twice differs: ${JSON.stringify(masked)}`)
 		},
-		{ ...guided, runs: runCount(3000), format: (s) => JSON.stringify(s) },
+		// Found in review: a line break inside a quoted string was blanked.
+		{ ...guided, runs: runCount(3000), format: (s) => JSON.stringify(s), examples: ["'a\nb'", "`a\\\nb`"] },
 	)
 
 	prop(

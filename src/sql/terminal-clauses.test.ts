@@ -23,6 +23,16 @@ describe("maskLiteralsAndComments", () => {
 	})
 })
 
+describe("maskLiteralsAndComments line breaks", () => {
+	it("keeps a line break inside a quoted string, also after a backslash", () => {
+		/** What masking leaves of a literal or a comment: its line breaks. */
+		const blank = (text: string) => text.replace(/[^\n]/g, " ")
+		expect(maskLiteralsAndComments("SELECT 'a\nb', 1")).toBe(`SELECT ${blank("'a\nb'")}, 1`)
+		expect(maskLiteralsAndComments("SELECT 'a\\\nb'")).toBe(`SELECT ${blank("'a\\\nb'")}`)
+		expect(maskLiteralsAndComments("SELECT `a\nb` /* c\nd */ -- e\nFROM t")).toBe(`SELECT ${blank("`a\nb`")} ${blank("/* c\nd */")} ${blank("-- e")}\nFROM t`)
+	})
+})
+
 describe("splitTerminalClauses", () => {
 	it("returns the whole statement when there is no terminal clause", () => {
 		expect(splitTerminalClauses("SELECT 1")).toEqual({

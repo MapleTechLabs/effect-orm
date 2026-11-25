@@ -23,6 +23,10 @@ const maskSql = (sql: string, markLiterals = false): string => {
 	const blank = (count: number) => {
 		out += " ".repeat(count)
 	}
+	/** Blanks `sql[from, to)`, keeping its line breaks. */
+	const blankKeepingLines = (from: number, to: number) => {
+		for (let j = from; j < to; j++) out += sql[j] === "\n" ? "\n" : " "
+	}
 	while (i < sql.length) {
 		const ch = sql[i]
 		const next = sql[i + 1]
@@ -37,7 +41,7 @@ const maskSql = (sql: string, markLiterals = false): string => {
 		if (ch === "/" && next === "*") {
 			const close = sql.indexOf("*/", i + 2)
 			const end = close === -1 ? sql.length : close + 2
-			for (let j = i; j < end; j++) out += sql[j] === "\n" ? "\n" : " "
+			blankKeepingLines(i, end)
 			i = end
 			continue
 		}
@@ -49,11 +53,11 @@ const maskSql = (sql: string, markLiterals = false): string => {
 			while (i < sql.length) {
 				const c = sql[i]
 				if (c === "\\") {
-					blank(Math.min(2, sql.length - i))
+					blankKeepingLines(i, Math.min(i + 2, sql.length))
 					i += 2
 					continue
 				}
-				blank(1)
+				blankKeepingLines(i, i + 1)
 				i++
 				if (c === quote) break
 			}
