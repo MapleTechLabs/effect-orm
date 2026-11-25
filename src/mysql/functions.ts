@@ -3,7 +3,7 @@ import { makeExpr, type Condition, type Expr } from "../ch/expr"
 import { schemaOf } from "../ch/define-fn"
 import { builtins, type MysqlOnly } from "../ch/functions/builtin"
 import { CHNumber } from "../ch/types"
-import { MysqlInteger } from "./types"
+import { boolean, MysqlInteger } from "./types"
 import { compile } from "../sql/sql-fragment"
 
 // Each result carries `MysqlOnly`, as `builtins("mysql", …)` refuses them for
@@ -41,3 +41,11 @@ export const length = <P>(expr: Expr<string | null, P>): Expr<number | null, P |
 	makeExpr(scalar.lazy(() => `CHAR_LENGTH(${sql(expr)})`, "length"), Schema.NullOr(integer))
 export const coalesce = <A, P1, P2>(first: Expr<A | null, P1>, fallback: Expr<A, P2>): Expr<A, P1 | P2 | MysqlOnly> =>
 	makeExpr(scalar.lazy(() => `COALESCE(${sql(first)}, ${sql(fallback)})`, "coalesce"), schemaOf<A>(fallback))
+
+/**
+ * A condition as a boolean value, to select it or `set` a column from it:
+ * `((c) IS TRUE)`, so a condition MySQL evaluates to NULL (unknown) reads as
+ * `false`, never as a NULL the boolean codec would refuse.
+ */
+export const asBoolean = <Q = never>(condition: Condition<Q>): Expr<boolean, Q | MysqlOnly> =>
+	makeExpr(scalar.lazy(() => `((${sql(condition)}) IS TRUE)`), boolean.schema as Schema.Codec<boolean, unknown>)
