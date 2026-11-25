@@ -766,8 +766,9 @@ A generated column is ordered around what it reads: base columns are added befor
 (a new generated column goes in its declared place, `AFTER` the column before it), and generated
 columns are dropped before base ones, the last declared first. MySQL refuses to rename a column,
 or to drop and add it back, while a generated column reads it, so the generated columns that read
-one (and those that read them) are dropped before the change and added back after, with their
-indexes. Which columns a DSL callback reads is recorded in the snapshot (`generated.reads`); a
+one (and those that read them, including ones that are themselves renamed or replaced) are
+dropped before the change, the last declared first, and added back after in declaration order,
+with their indexes. Which columns a DSL callback reads is recorded in the snapshot (`generated.reads`); a
 string `as` is assumed to read every column its text names.
 
 A column is renamed with `CHANGE COLUMN` rather than `RENAME COLUMN`: MariaDB names a JSON

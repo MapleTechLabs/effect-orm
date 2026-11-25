@@ -392,6 +392,51 @@ describe("diffMysqlSchemas", () => {
 			expect(sqlOf(diffMysqlSchemas(version("qty"), version("QTY")).ops)[3]).toBe("ALTER TABLE `links` DROP COLUMN `g`")
 		})
 
+		it("drops and adds back, in dependency order, generated columns replaced together with the one they read", () => {
+			const chain = (stored: boolean) =>
+				v({
+					n: MySQL.int,
+					a: total("n * 2", stored),
+					b: MySQL.column(MySQL.int, { generated: { as: ($) => $.a!.add(1), stored }, unique: true }),
+					c: MySQL.column(MySQL.int, { generated: { as: ($) => $.b!.mul(2), stored } }),
+				})
+			for (const [from, to] of [[false, true], [true, false]] as const) {
+				const kind = to ? "STORED" : "VIRTUAL"
+				const result = diffMysqlSchemas(chain(from), chain(to))
+				expect(result.missingHints).toEqual([])
+				expect(sqlOf(result.ops)).toEqual([
+					"DROP INDEX `links_b_unique` ON `links`",
+					"ALTER TABLE `links` DROP COLUMN `c`",
+					"ALTER TABLE `links` DROP COLUMN `b`",
+					`ALTER TABLE \`links\` DROP COLUMN \`a\`, ADD COLUMN \`a\` int GENERATED ALWAYS AS (n * 2) ${kind} AFTER \`n\``,
+					`ALTER TABLE \`links\` ADD COLUMN \`b\` int GENERATED ALWAYS AS (\`a\` + 1) ${kind} AFTER \`a\``,
+					`ALTER TABLE \`links\` ADD COLUMN \`c\` int GENERATED ALWAYS AS (\`b\` * 2) ${kind} AFTER \`b\``,
+					"ALTER TABLE `links` ADD CONSTRAINT `links_b_unique` UNIQUE (`b`)",
+				])
+			}
+		})
+
+		it("drops and adds back a generated column that is renamed or replaced while a column it reads is renamed", () => {
+			const version = (qty: string, g: string, stored: boolean) =>
+				v({ [qty]: MySQL.int, [g]: MySQL.column(MySQL.int, { generated: { as: ($) => $[qty]!.mul(2), stored } }) })
+			const hints = [
+				{ type: "confirm_rename", kind: "column", entity: "links.qty", to: "quantity" },
+				{ type: "confirm_rename", kind: "column", entity: "links.g", to: "twice" },
+			] as const
+			// Renamed both, and made VIRTUAL: dropped by its old name, added back under its new one.
+			expect(sqlOf(diffMysqlSchemas(version("qty", "g", true), version("quantity", "twice", false), hints).ops)).toEqual([
+				"ALTER TABLE `links` DROP COLUMN `g`",
+				"ALTER TABLE `links` CHANGE COLUMN `qty` `quantity` int NOT NULL",
+				"ALTER TABLE `links` ADD COLUMN `twice` int GENERATED ALWAYS AS (`quantity` * 2) VIRTUAL AFTER `quantity`",
+			])
+			// Replaced while the column it reads is renamed.
+			expect(sqlOf(diffMysqlSchemas(version("qty", "g", true), version("quantity", "g", false), [hints[0]]).ops)).toEqual([
+				"ALTER TABLE `links` DROP COLUMN `g`",
+				"ALTER TABLE `links` CHANGE COLUMN `qty` `quantity` int NOT NULL",
+				"ALTER TABLE `links` ADD COLUMN `g` int GENERATED ALWAYS AS (`quantity` * 2) VIRTUAL AFTER `quantity`",
+			])
+		})
+
 		it("drops the generated columns reading a column that becomes or stops being VIRTUAL, and adds them back after", () => {
 			const version = (stored: boolean) => v({ n: MySQL.int, total: total("n * 2", stored), doubled: MySQL.column(MySQL.int, { generated: { as: ($) => $.total!.mul(2) } }) })
 			expect(sqlOf(diffMysqlSchemas(version(true), version(false)).ops)).toEqual([

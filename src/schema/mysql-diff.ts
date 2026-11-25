@@ -131,12 +131,17 @@ export const diffMysqlSchemas = (
 			const prior = old.get(column.name)
 			if (prior !== undefined && changeOf(prior, column) === "replace") moved.add(column.name)
 		}
+		// A column that is itself renamed or replaced still counts: renaming it, or dropping and
+		// adding it back in one statement, would leave the column it reads with a reader. It is
+		// dropped with the others and added back after, as it will be.
 		const dependents: Array<MysqlColumnEntity> = []
+		const isDependent = (column: string) => dependents.some((c) => c.name === column)
 		for (let grew = true; grew; ) {
 			grew = false
 			for (const column of was) {
-				if (column.generated === undefined || moved.has(column.name)) continue
-				if (![...moved].some((read) => readsColumn(column, read, renamedFrom.get(`${name}.${read}`)))) continue
+				if (column.generated === undefined || isDependent(column.name)) continue
+				const reads = [...moved].filter((read) => read !== column.name && readsColumn(column, read, renamedFrom.get(`${name}.${read}`)))
+				if (reads.length === 0) continue
 				moved.add(column.name)
 				dependents.push(column)
 				grew = true

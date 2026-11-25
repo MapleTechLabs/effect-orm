@@ -242,6 +242,36 @@ for (const [server, dialect] of [[mysqlServer, MySQL.mysqlDialect], [mariadbServ
 				}
 			})
 
+			it("replaces a chain of three generated columns together, each reading the one before", async () => {
+				const chain = (stored: boolean) =>
+					T({
+						n: MySQL.int,
+						a: gen("n * 2", stored),
+						b: MySQL.column(MySQL.int, { generated: { as: ($) => $.a!.add(1), stored }, unique: true }),
+						c: gen(($) => $.b!.mul(2), stored),
+					})
+				for (const [from, to] of [[false, true], [true, false]] as const) {
+					const { rows, columns, missing } = await migrate(chain(from), chain(to), ["INSERT INTO t (id, n) VALUES (1, 4), (2, 5)"])
+					expect(missing).toEqual([])
+					expect(rows).toEqual([{ id: 1, n: 4, a: 8, b: 9, c: 18 }, { id: 2, n: 5, a: 10, b: 11, c: 22 }])
+					expect(columns).toEqual(["id", "n", "a", "b", "c"])
+				}
+				// Two at once: the one read, and its reader.
+				const pair = (stored: boolean) => T({ n: MySQL.int, total: gen("n * 2", stored), doubled: gen(($) => $.total!.mul(2), stored) })
+				const { rows } = await migrate(pair(false), pair(true), ["INSERT INTO t (id, n) VALUES (1, 4)"])
+				expect(rows).toEqual([{ id: 1, n: 4, total: 8, doubled: 16 }])
+			})
+
+			it("renames a column while a generated column reading it is renamed and made VIRTUAL", async () => {
+				const version = (qty: string, g: string, stored: boolean) => T({ [qty]: MySQL.int, [g]: gen(($) => $[qty]!.mul(2), stored) })
+				const { rows, columns } = await migrate(version("qty", "g", true), version("quantity", "twice", false), ["INSERT INTO t (id, qty) VALUES (1, 4)"], [
+					{ type: "confirm_rename", kind: "column", entity: "t.qty", to: "quantity" },
+					{ type: "confirm_rename", kind: "column", entity: "t.g", to: "twice" },
+				])
+				expect(rows).toEqual([{ id: 1, quantity: 4, twice: 8 }])
+				expect(columns).toEqual(["id", "quantity", "twice"])
+			})
+
 			it("makes a STORED column base, keeping its values and its UNIQUE key, and a base column STORED", async () => {
 				const stored = T({ n: MySQL.int, total: MySQL.column(MySQL.int, { generated: { as: "n * 2", stored: true }, unique: true }) })
 				const base = T({ n: MySQL.int, total: MySQL.column(MySQL.int, { unique: true }) })
