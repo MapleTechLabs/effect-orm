@@ -24,6 +24,7 @@ import {
 	mysqlTable,
 	type ColumnInput,
 	type ColumnsOf,
+	type ComputedColumnsOf,
 	type DefaultedColumnsOf,
 	type ExternalTableDefinition,
 	type InsertRequirementsOf,
@@ -45,8 +46,10 @@ export {
 	type ColumnOptions,
 	type ColumnSpec,
 	type ColumnsOf,
+	type ComputedColumnsOf,
 	type DefaultedColumnsOf,
 	type ExternalTableDefinition,
+	type GeneratedColumn,
 	type IndexSpec,
 	type MysqlSchemaTable,
 	type TableDdl,
@@ -64,11 +67,18 @@ export { type Casing } from "./schema/casing"
 export function table<const Name extends string, const Columns extends Record<string, ColumnInput>>(
 	name: Name,
 	definition: ExternalTableDefinition<Columns>,
-): Table<Name, ColumnsOf<Columns>, DefaultedColumnsOf<Columns>, never, InsertRequirementsOf<Columns>, UpdateRequirementsOf<Columns>>
+): Table<Name, ColumnsOf<Columns>, DefaultedColumnsOf<Columns>, ComputedColumnsOf<Columns>, InsertRequirementsOf<Columns>, UpdateRequirementsOf<Columns>>
 export function table<const Name extends string, const Columns extends Record<string, ColumnInput>>(
 	name: Name,
 	definition: TableDefinition<Columns>,
-): MysqlSchemaTable<Name, ColumnsOf<Columns>, DefaultedColumnsOf<Columns>, InsertRequirementsOf<Columns>, UpdateRequirementsOf<Columns>>
+): MysqlSchemaTable<
+	Name,
+	ColumnsOf<Columns>,
+	DefaultedColumnsOf<Columns>,
+	InsertRequirementsOf<Columns>,
+	UpdateRequirementsOf<Columns>,
+	ComputedColumnsOf<Columns>
+>
 export function table<
 	const Name extends string,
 	const Columns extends ColumnDefs,

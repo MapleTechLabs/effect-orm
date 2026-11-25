@@ -861,9 +861,15 @@ parentheses MySQL requires, or a DSL callback, parenthesized for you; `dateTimeN
 `datetime`); either lets an insert leave the column out (`DefaultedColumnsOf`). `defaultFn` and
 `onUpdate` are client-side defaults, as on `/postgres`, with no DDL. Also `name` (the column's
 name in SQL) and `unique` (`true` or a constraint name), `CONSTRAINT <table>_<column>_unique
-UNIQUE (...)` by default.
+UNIQUE (...)` by default. `generated` (a `GeneratedColumn`, `{ as, stored? }`) declares a
+generated column, `GENERATED ALWAYS AS (<as>) STORED | VIRTUAL`, on owned and `external` tables
+alike: `as` is SQL or a DSL callback that may read the row, and the column is `computed`
+(`ComputedColumnsOf`), so no insert, update or `excludedAll` writes it. It takes no default of
+either kind and no `NOT NULL`. See [MySQL](./mysql.md#declare-a-table-with-its-ddl).
 
-**Types** — `ColumnInput`, `ColumnSpec`, `ColumnsOf`, `IndexSpec`, `TableDdl`, `MysqlSchemaTable`,
+**Types** — `ColumnInput`, `ColumnSpec`, `ColumnsOf`, `DefaultedColumnsOf`, `ComputedColumnsOf`,
+`GeneratedColumn`, `IndexSpec`, `TableDdl`, `MysqlSchemaTable` (its last parameter, `Computed`,
+the generated columns),
 `DdlExpr`, `DefinitionProblem`, `SchemaDefinitionError`. A definition that cannot render records a
 problem; `S.mysqlEntitiesOf` fails with a `SchemaDefinitionError`, and `S.renderMysqlSchema`
 writes the `CREATE TABLE` and `CREATE INDEX` statements. `effect-orm generate` with

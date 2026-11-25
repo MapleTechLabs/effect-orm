@@ -11,6 +11,7 @@ export const mysqlIdentList = (names: ReadonlyArray<string>): string => names.ma
 /** One column's definition, as `CREATE TABLE`, `ADD COLUMN` and `MODIFY COLUMN` write it. */
 export const renderMysqlColumnDefinition = (column: MysqlColumnEntity): string => {
 	const parts = [mysqlIdent(column.name), column.type]
+	if (column.generated !== undefined) parts.push(`GENERATED ALWAYS AS (${column.generated.expr}) ${column.generated.stored ? "STORED" : "VIRTUAL"}`)
 	if (column.notNull) parts.push("NOT NULL")
 	if (column.default !== null) parts.push(`DEFAULT ${column.default}`)
 	return parts.join(" ")

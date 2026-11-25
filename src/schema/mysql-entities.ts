@@ -25,6 +25,23 @@ export const MysqlColumnEntity = Schema.Struct({
 	notNull: Schema.Boolean,
 	/** The `DEFAULT` value as SQL: a literal, or an expression in parentheses. `null` for none. */
 	default: Schema.NullOr(Schema.String),
+	/**
+	 * `GENERATED ALWAYS AS (<expr>) STORED | VIRTUAL`: the expression as SQL,
+	 * without its parentheses. Absent on a column that is not generated, so
+	 * snapshots written before generated columns keep their ids.
+	 */
+	generated: Schema.optionalKey(
+		Schema.Struct({
+			expr: Schema.String,
+			stored: Schema.Boolean,
+			/**
+			 * The columns (database names) the expression reads, when it was built
+			 * with the DSL. Absent for SQL written as a string: the diff then
+			 * assumes it may read any column its text names.
+			 */
+			reads: Schema.optionalKey(Schema.Array(Schema.String)),
+		}),
+	),
 })
 export type MysqlColumnEntity = typeof MysqlColumnEntity.Type
 

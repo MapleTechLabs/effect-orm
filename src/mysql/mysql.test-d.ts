@@ -62,3 +62,42 @@ const Stamped = MySQL.table("stamped", {
 	primaryKey: ["id"],
 })
 MySQL.insertInto(Stamped).values({ id: 1 })
+
+// A generated column is read like any other, but an insert or update may not write it.
+const Orders = MySQL.table("orders", {
+	columns: {
+		id: MySQL.bigint,
+		qty: MySQL.int,
+		total: MySQL.column(MySQL.int, { generated: { as: ($) => $.qty.mul(2), stored: true } }),
+		label: MySQL.column(MySQL.nullable(MySQL.varchar(20)), { generated: { as: "CONCAT('#', id)" } }),
+	},
+	primaryKey: ["id"],
+})
+expectTypeOf(Orders).toExtend<MySQL.MysqlSchemaTable<"orders", any>>()
+MySQL.insertInto(Orders).values({ id: 1, qty: 2 })
+// @ts-expect-error a generated column cannot be inserted
+MySQL.insertInto(Orders).values({ id: 1, qty: 2, total: 4 })
+// @ts-expect-error a nullable generated column cannot be inserted either
+MySQL.insertInto(Orders).values({ id: 1, qty: 2, label: null })
+MySQL.update(Orders).set({ qty: 3 }).allRows()
+// @ts-expect-error a generated column cannot be set
+MySQL.update(Orders).set({ total: 3 }).allRows()
+// @ts-expect-error onDuplicateKeyUpdate cannot set a generated column
+MySQL.insertInto(Orders).values({ id: 1, qty: 2 }).onDuplicateKeyUpdate({ set: { total: 1 } })
+expectTypeOf<keyof MySQL.InsertRowOf<typeof Orders>>().toEqualTypeOf<"id" | "qty">()
+expectTypeOf<MySQL.SelectRowOf<typeof Orders>>().toEqualTypeOf<{ readonly id: number; readonly qty: number; readonly total: number; readonly label: string | null }>()
+expectTypeOf<keyof MySQL.TableSchemas<typeof Orders>["update"]["Type"]>().toEqualTypeOf<"id" | "qty">()
+// @ts-expect-error a generated column takes no default: the database computes it
+MySQL.column(MySQL.int, { generated: { as: "1" }, default: 1 })
+// @ts-expect-error nor a client default
+MySQL.column(MySQL.int, { generated: { as: "1" }, defaultFn: Effect.succeed(1) })
+
+const ExternalOrders = MySQL.table("orders", {
+	external: true,
+	columns: { id: MySQL.bigint, total: MySQL.column(MySQL.int, { generated: { as: "qty * 2", stored: true } }) },
+})
+MySQL.insertInto(ExternalOrders).values({ id: 1 })
+// @ts-expect-error an external table's generated column cannot be inserted
+MySQL.insertInto(ExternalOrders).values({ id: 1, total: 2 })
+// @ts-expect-error nor set
+MySQL.update(ExternalOrders).set({ total: 2 }).allRows()
