@@ -356,6 +356,9 @@ another dialect is refused in the type and at compile time.
   written as a `CONCAT` of parts. A name (select key, alias, CTE name) that spells it has no
   such escape and fails the compile with `InvalidLiteral`.
 - **OFFSET without LIMIT** is written with MySQL's largest row count.
+- **UPDATE and DELETE take `orderBy` and `limit`**, MySQL's single-table `ORDER BY ... LIMIT ?`,
+  for chunked deletes; no other dialect does. See
+  [ORDER BY and LIMIT](./updates-and-deletes.md#order-by-and-limit-mysql).
 - **MariaDB 11.4 pages `DISTINCT` over a join wrongly.** It counts `OFFSET` over the join's rows
   before `DISTINCT` removes their duplicates, so a page can repeat a row from the page before.
   Page a de-duplicated join from a subquery (`fromQuery(query.distinct(), "d")`) or with `groupBy`.

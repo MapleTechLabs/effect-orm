@@ -27,6 +27,7 @@ import {
 	type InferOutput,
 	type JoinedColumnAccessor,
 	type NeedsSelect,
+	type RowCount,
 } from "./query"
 import { isTableFunction, type Table, type TableFunction } from "./table"
 import type { SqlFragment } from "../sql/sql-fragment"
@@ -50,6 +51,18 @@ type WhereFn<Cols extends ColumnDefs, C, Joins extends Record<string, ColumnDefs
  */
 export type UpdateFromClause = ClauseEntry<"UPDATE ... FROM", "postgres" | "sqlite">
 
+/**
+ * What a write's `orderBy` or `limit` adds to its params: `UPDATE ... ORDER BY
+ * ... LIMIT n` and `DELETE ... ORDER BY ... LIMIT n` are MySQL and MariaDB
+ * single-table syntax, so `compile` and `run` for another dialect refuse them
+ * in the type, as the compile does at run time. SQLite has them only when
+ * built with `SQLITE_ENABLE_UPDATE_DELETE_LIMIT`, which is not assumed.
+ */
+export type WriteLimitClause = ClauseEntry<"UPDATE/DELETE ... ORDER BY/LIMIT", "mysql">
+
+/** A write's `orderBy` by column name: `["createdAt", "asc"]`. */
+export type WriteOrderBySpec<Cols extends ColumnDefs> = readonly [keyof Cols & string, "asc" | "desc"]
+
 /** @internal — the source of `update(...).from(source, alias)`. */
 export interface UpdateFromSource {
 	readonly alias: string
@@ -70,6 +83,12 @@ interface WriteState {
 	readonly settings?: Readonly<Record<string, InsertSettingValue>>
 	/** Set by `crossTenant()`. */
 	readonly crossTenant?: boolean
+	/** Set by `orderBy` with column names. */
+	readonly orderBySpecs?: ReadonlyArray<readonly [string, "asc" | "desc"]>
+	/** Set by `orderBy` with a callback. */
+	readonly orderByFn?: ($: any) => ReadonlyArray<readonly [Expr<any, any>, "asc" | "desc"]>
+	/** Set by `limit`: at most this many rows, bound as a parameter. */
+	readonly limitValue?: number
 }
 
 /** @internal — runtime update state */
@@ -157,6 +176,23 @@ export interface CHUpdate<
 	): CHUpdate<Cols, Computed, InferOutput<S>, Ready, Params | ParamsIn<S[keyof S]>, Req, Joins>
 
 	/**
+	 * The order the rows are changed in: column names, or a callback giving
+	 * `[expression, "asc" | "desc"]` pairs. Calling it again replaces the order.
+	 * MySQL and MariaDB only, and only on a single-table write: with `limit`,
+	 * it says which rows a chunk takes.
+	 */
+	orderBy(...specs: [WriteOrderBySpec<Cols>, ...Array<WriteOrderBySpec<Cols>>]): CHUpdate<Cols, Computed, Output, Ready, Params | WriteLimitClause, Req, Joins>
+	orderBy<const O extends ReadonlyArray<readonly [Expr<any>, "asc" | "desc"]>>(
+		fn: ($: ColumnAccessor<Cols>) => O,
+	): CHUpdate<Cols, Computed, Output, Ready, Params | ParamsIn<O[number][0]> | WriteLimitClause, Req, Joins>
+	/**
+	 * Change at most `n` rows (a non-negative integer, bound as a parameter):
+	 * `UPDATE t SET ... WHERE ... LIMIT ?`. MySQL and MariaDB only. Without
+	 * `orderBy`, which rows is up to the server.
+	 */
+	limit<N extends number>(n: RowCount<N>): CHUpdate<Cols, Computed, Output, Ready, Params | WriteLimitClause, Req, Joins>
+
+	/**
 	 * Declare that this update deliberately spans tenants, forcing
 	 * `tenantScope: "cross-tenant"` and setting `crossTenantDeclared`. A
 	 * database with `requireTenantScope` runs it; see docs/tenant-scoping.md.
@@ -195,6 +231,18 @@ export interface CHDelete<
 	returning<S extends Record<string, Expr<any>>>(
 		fn: ($: ColumnAccessor<Cols>) => S,
 	): CHDelete<Cols, InferOutput<S>, Ready, Params | ParamsIn<S[keyof S]>>
+
+	/** The order the rows are deleted in, as for an UPDATE. MySQL and MariaDB only. */
+	orderBy(...specs: [WriteOrderBySpec<Cols>, ...Array<WriteOrderBySpec<Cols>>]): CHDelete<Cols, Output, Ready, Params | WriteLimitClause>
+	orderBy<const O extends ReadonlyArray<readonly [Expr<any>, "asc" | "desc"]>>(
+		fn: ($: ColumnAccessor<Cols>) => O,
+	): CHDelete<Cols, Output, Ready, Params | ParamsIn<O[number][0]> | WriteLimitClause>
+	/**
+	 * Delete at most `n` rows (a non-negative integer, bound as a parameter):
+	 * `DELETE FROM t WHERE ... LIMIT ?`, as a chunked delete loops on until a
+	 * chunk deletes fewer than `n`. MySQL and MariaDB only.
+	 */
+	limit<N extends number>(n: RowCount<N>): CHDelete<Cols, Output, Ready, Params | WriteLimitClause>
 
 	/**
 	 * Declare that this delete deliberately spans tenants, forcing
@@ -269,6 +317,11 @@ const writeClauses = <State extends WriteState, Self>(state: State, make: (state
 	settings: (settings: Readonly<Record<string, InsertSettingValue>>) => make({ ...state, settings: { ...settings } }),
 	returning: (...args: ReadonlyArray<unknown>) => make({ ...state, returningFn: returningFnOf(state.table)(args) }),
 	crossTenant: () => make({ ...state, crossTenant: true }),
+	orderBy: (...specs: ReadonlyArray<unknown>) =>
+		typeof specs[0] === "function"
+			? make({ ...state, orderBySpecs: undefined, orderByFn: specs[0] as WriteState["orderByFn"] })
+			: make({ ...state, orderBySpecs: specs as WriteState["orderBySpecs"], orderByFn: undefined }),
+	limit: (n: number) => make({ ...state, limitValue: n }),
 })
 
 const makeUpdate = (state: CHUpdateState): CHUpdate<any, any, any, any, any, any, any> & Pick<CHUpdateStart<any, any, any, any, any>, "from"> => ({

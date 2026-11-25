@@ -2,8 +2,12 @@ import * as MysqlClient from "@effect/sql-mysql2/MysqlClient"
 import { DateTime, Effect, Redacted, Schema, Stream } from "effect"
 import * as SqlClient from "effect/sql/SqlClient"
 import { describe, expect, it } from "vitest"
+import type { Dialect } from "../ch/dialect"
 import * as Db from "../database"
+import * as CH from "../clickhouse"
 import * as MySQL from "../mysql"
+import * as PG from "../postgres"
+import * as SQLite from "../sqlite"
 
 const Items = MySQL.table("items", {
 	id: MySQL.bigint,
@@ -96,6 +100,73 @@ describe("the MySQL dialect", () => {
 		const row = { id: 1, note: "a", enabled: true, score: null, at: DateTime.makeUnsafe(0) }
 		expect(() => MySQL.compileUnsafe(MySQL.insertInto(Items).values(row).returning("id"))).toThrow(/RETURNING/)
 		expect(() => MySQL.compileUnsafe(MySQL.insertInto(Items).values(row).onConflictDoNothing())).toThrow(/ON CONFLICT/)
+	})
+
+	describe("ORDER BY and LIMIT on a single-table UPDATE or DELETE", () => {
+		const Runs = MySQL.table("runs", {
+			columns: { id: MySQL.bigint, orgId: MySQL.column(MySQL.varchar(36), { name: "org_id" }), runId: MySQL.column(MySQL.varchar(36), { name: "run_id" }), n: MySQL.int },
+			tenantColumn: "orgId",
+		})
+		const ofRun = MySQL.deleteFrom(Runs).where(($) => [$.orgId.eq(MySQL.param.string("org")), $.runId.eq(MySQL.param.string("run"))])
+
+		it("binds the limit after the WHERE's params, on MySQL and MariaDB", () => {
+			for (const dialect of [MySQL.mysqlDialect, MySQL.mariadbDialect]) {
+				const compiled = MySQL.compileUnsafe(ofRun.orderBy(["id", "asc"]).limit(20000), { org: "o", run: "r" }, { dialect })
+				expect(compiled.sql).toBe("DELETE FROM `runs`\nWHERE `org_id` = ?\n  AND `run_id` = ?\nORDER BY `id` ASC\nLIMIT ?")
+				expect(compiled.parameters).toEqual(["o", "r", 20000])
+			}
+		})
+
+		it("writes an UPDATE's ORDER BY by database column name, its SET params first", () => {
+			const compiled = MySQL.compileUnsafe(
+				MySQL.update(Runs).set({ n: 1 }).where(($) => [$.orgId.eq("o")]).orderBy(($) => [[$.runId, "desc"], [$.id, "asc"]]).limit(5),
+			)
+			expect(compiled.sql).toBe("UPDATE `runs` SET `n` = ?\nWHERE `org_id` = ?\nORDER BY `run_id` DESC, `id` ASC\nLIMIT ?")
+			expect(compiled.parameters).toEqual([1, "o", 5])
+		})
+
+		it("takes ORDER BY or LIMIT alone, and a later orderBy replaces the earlier one", () => {
+			expect(MySQL.compileUnsafe(MySQL.deleteFrom(Runs).allRows().limit(0).crossTenant()).sql).toBe("DELETE FROM `runs`\nLIMIT ?")
+			expect(MySQL.compileUnsafe(MySQL.update(Runs).set({ id: 1 }).allRows().orderBy(["n", "asc"]).orderBy(["id", "desc"]).crossTenant()).sql).toBe(
+				"UPDATE `runs` SET `id` = ?\nORDER BY `id` DESC",
+			)
+		})
+
+		it("keeps the write's tenant scope: the WHERE decides it, not the LIMIT", () => {
+			const pinned = MySQL.compileUnsafe(ofRun.limit(10), { org: "o", run: "r" })
+			expect(pinned.tenantScope).toBe("single-tenant")
+			expect(MySQL.compileUnsafe(MySQL.deleteFrom(Runs).where(($) => [$.runId.eq("r")]).limit(10)).tenantScope).toBe("cross-tenant")
+			// A subquery in ORDER BY is a read, and one over every tenant widens the write.
+			const Other = MySQL.table("other", { id: MySQL.bigint, orgId: MySQL.varchar(36) }, { tenantColumn: "orgId" })
+			const read = MySQL.compileUnsafe(ofRun.orderBy(($) => [[MySQL.subqueryExpr(MySQL.from(Other).select("id").limit(1), MySQL.bigint).add($.n), "asc"]]).limit(1), { org: "o", run: "r" })
+			expect(read.sql).toContain("ORDER BY (SELECT")
+			expect(read.tenantScope).toBe("cross-tenant")
+		})
+
+		it("refuses a limit that is not a non-negative integer, as a failure the caller can report", () => {
+			for (const n of [-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, 2 ** 53]) {
+				expect(() => MySQL.compileUnsafe(ofRun.limit(n as number), { org: "o", run: "r" })).toThrow(/limit\(.*\): expected a non-negative integer/)
+			}
+		})
+
+		it("refuses an orderBy naming no column of the table", () => {
+			expect(() => MySQL.compileUnsafe(ofRun.orderBy(["run_id" as "runId", "asc"]), { org: "o", run: "r" })).toThrow(/naming the table's columns/)
+			expect(() => MySQL.compileUnsafe(ofRun.orderBy(["id", "up" as "asc"]), { org: "o", run: "r" })).toThrow(/naming the table's columns/)
+		})
+
+		it("refuses them on a dialect without them, and on a multi-table UPDATE ... FROM", () => {
+			for (const dialect of [PG.postgresDialect, SQLite.sqliteDialect, CH.clickhouseDialect]) {
+				// @ts-expect-error -- the write carries a MySQL-only clause
+				expect(() => MySQL.compileUnsafe(ofRun.limit(1), { org: "o", run: "r" }, { dialect })).toThrow(/limit\(\) has no meaning for the/)
+				// @ts-expect-error -- the write carries a MySQL-only clause
+				expect(() => MySQL.compileUnsafe(ofRun.orderBy(["id", "asc"]), { org: "o", run: "r" }, { dialect })).toThrow(/orderBy\(\) has no meaning for the/)
+			}
+			// MySQL refuses ORDER BY and LIMIT on a multi-table write; a dialect with both is refused the same way.
+			const both: Dialect<"mysql"> = { ...MySQL.mysqlDialect, clauses: { ...MySQL.mysqlDialect.clauses, updateFrom: true } }
+			const joined = MySQL.update(Runs).from(Items, "i").set({ n: 1 }).where(($) => [$.id.eq($.i.id)]).limit(1).crossTenant()
+			// @ts-expect-error -- no dialect writes both UPDATE ... FROM and LIMIT
+			expect(() => MySQL.compileUnsafe(joined, {}, { dialect: both })).toThrow(/an UPDATE \.\.\. FROM takes neither/)
+		})
 	})
 
 	it("starts a transaction with its settings before START TRANSACTION", () => {

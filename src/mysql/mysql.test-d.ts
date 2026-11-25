@@ -1,6 +1,8 @@
 import { DateTime, Effect } from "effect"
 import { expectTypeOf } from "expect-type"
+import * as CH from "../clickhouse"
 import * as PG from "../postgres"
+import * as SQLite from "../sqlite"
 import * as MySQL from "../mysql"
 
 const Items = MySQL.table("items", { id: MySQL.bigint, note: MySQL.text, at: MySQL.nullable(MySQL.datetime), price: MySQL.decimal(10, 2) })
@@ -101,3 +103,32 @@ MySQL.insertInto(ExternalOrders).values({ id: 1 })
 MySQL.insertInto(ExternalOrders).values({ id: 1, total: 2 })
 // @ts-expect-error nor set
 MySQL.update(ExternalOrders).set({ total: 2 }).allRows()
+
+// ORDER BY and LIMIT on a single-table UPDATE or DELETE: MySQL and MariaDB only.
+const Runs = MySQL.table("runs", { id: MySQL.bigint, runId: MySQL.varchar(36), n: MySQL.int })
+const chunk = MySQL.deleteFrom(Runs).where(($) => [$.runId.eq(MySQL.param.string("run"))]).orderBy(["id", "asc"]).limit(20000)
+MySQL.compileUnsafe(chunk, { run: "r" })
+MySQL.compileUnsafe(MySQL.update(Runs).set({ n: 1 }).allRows().orderBy(($) => [[$.runId, "desc"]]).limit(5))
+// @ts-expect-error UPDATE/DELETE ... ORDER BY/LIMIT has no meaning for the postgres dialect
+PG.compileUnsafe(chunk, { run: "r" })
+// @ts-expect-error ... nor for ClickHouse
+CH.compileUnsafe(MySQL.deleteFrom(Runs).allRows().limit(1))
+// @ts-expect-error ... nor for SQLite, which has it only as a compile-time option
+SQLite.compileUnsafe(MySQL.update(Runs).set({ n: 1 }).allRows().orderBy(["id", "asc"]))
+// @ts-expect-error a negative limit
+MySQL.deleteFrom(Runs).allRows().limit(-1)
+// @ts-expect-error a fractional limit
+MySQL.deleteFrom(Runs).allRows().limit(1.5)
+// @ts-expect-error orderBy names the table's columns
+MySQL.deleteFrom(Runs).allRows().orderBy(["nope", "asc"])
+// @ts-expect-error orderBy needs a column
+MySQL.deleteFrom(Runs).allRows().orderBy()
+// The limit's params still have to be given: the WHERE's param is required.
+// @ts-expect-error required params remain required
+MySQL.compileUnsafe(chunk, {})
+// An UPDATE ... FROM with a LIMIT is a multi-table write MySQL refuses, and Postgres refuses the LIMIT.
+const joined = PG.update(Runs).from(Items, "i").set({ n: 1 }).where(($) => [$.id.eq($.i.id)]).limit(1)
+// @ts-expect-error no dialect writes both
+PG.compileUnsafe(joined)
+// @ts-expect-error no dialect writes both
+MySQL.compileUnsafe(joined)

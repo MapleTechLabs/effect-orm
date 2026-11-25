@@ -134,6 +134,7 @@ export const mysqlDialect: Dialect<"mysql"> = {
 		distinctOn: false,
 		fromlessSelect: "DUAL",
 		locking: { strengths: ["UPDATE", "SHARE"], of: true },
+		writeOrderLimit: true,
 	},
 	paramCodecs: {
 		dateTime: MysqlDateTimeLiteral,

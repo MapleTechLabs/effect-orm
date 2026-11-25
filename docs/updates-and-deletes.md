@@ -96,6 +96,39 @@ it to the target's tenant, or pin it, as a join would.
 
 _(Backed by `docs/updates-and-deletes.md > UPDATE ... FROM reads the source in SET and WHERE`.)_
 
+## ORDER BY and LIMIT (MySQL)
+
+On MySQL and MariaDB, `orderBy` and `limit` bound a single-table UPDATE or DELETE:
+`DELETE FROM t WHERE ... ORDER BY ... LIMIT ?`. `orderBy` takes `[column, "asc" | "desc"]`
+tuples of the table's columns, or a callback giving `[expression, direction]` pairs; calling it
+again replaces the order. `limit(n)` takes a non-negative integer and binds it; a negative or
+fractional literal is a type error, and such a value at run time is a `QueryBuilderError`
+(`InvalidArguments`). Without `orderBy`, which rows a `limit` takes is up to the server.
+
+Deleting a large set of rows in chunks keeps each transaction small: loop until a chunk deletes
+fewer rows than the limit, reading the count from `Db.runWrite`
+([write results](./database.md#write-results)).
+
+```ts
+const Steps = MySQL.table("steps", { id: MySQL.bigint, runId: MySQL.varchar(36) })
+
+const chunk = MySQL.deleteFrom(Steps)
+	.where(($) => [$.runId.eq(MySQL.param.string("runId"))])
+	.orderBy(["id", "asc"])
+	.limit(20000)
+// DELETE FROM `steps` WHERE `runId` = ? ORDER BY `id` ASC LIMIT ?
+
+// let deleted = 20000
+// while (deleted === 20000) deleted = (yield* Db.runWrite(chunk, { runId })).affectedRows
+```
+
+Postgres, SQLite, D1 and ClickHouse take neither: the write carries `WriteLimitClause`, so
+compiling it for them is a type error, and the compile refuses it as well. MySQL refuses them on
+a multi-table write, so they cannot be combined with [`from`](#update--from). They do not change
+the [tenant scope](#tenant-scope).
+
+_(Backed by `docs/updates-and-deletes.md > A chunked DELETE with ORDER BY and LIMIT`.)_
+
 ## WHERE, and writing every row
 
 `where` works as in a query: a list of conditions, AND-joined, with an `undefined` one skipped,
