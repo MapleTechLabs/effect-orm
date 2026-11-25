@@ -155,6 +155,29 @@ CH.insertInto(Spans).values({ OrgId: "o", Label: "l" }).onConflictDoUpdate({ tar
 // @ts-expect-error at least one column
 CH.excluded([])
 
+// ON DUPLICATE KEY UPDATE: no target, SET as for ON CONFLICT DO UPDATE.
+CH.insertInto(Counters).values({ key: "k", count: 1 }).onDuplicateKeyUpdate({ set: { count: 0 } })
+CH.insertInto(Counters)
+	.values({ key: "k", count: 1 })
+	.onDuplicateKeyUpdate({ set: ($, excluded) => ({ count: $.count.add(excluded.count) }) })
+CH.insertInto(Counters).values({ key: "k", count: 1 }).onDuplicateKeyUpdate({ set: CH.excluded(["count"]) })
+CH.insertInto(Counters).values({ key: "k", count: 1 }).onDuplicateKeyUpdate({ set: CH.excludedAll(["key"]) })
+// A param in SET is a param of the insert.
+const upsertParam = CH.insertInto(Counters).values({ key: "k", count: 1 }).onDuplicateKeyUpdate({ set: { count: CH.param.int("n") } })
+// @ts-expect-error n is required
+PG.compileUnsafe(upsertParam)
+PG.compileUnsafe(upsertParam, { n: 1 })
+// @ts-expect-error a value of another type
+CH.insertInto(Counters).values({ key: "k", count: 1 }).onDuplicateKeyUpdate({ set: { count: "1" } })
+// @ts-expect-error not a column
+CH.insertInto(Counters).values({ key: "k", count: 1 }).onDuplicateKeyUpdate({ set: { nope: 1 } })
+// @ts-expect-error not a column
+CH.insertInto(Counters).values({ key: "k", count: 1 }).onDuplicateKeyUpdate({ set: CH.excluded(["nope"]) })
+// @ts-expect-error a computed column cannot be set
+CH.insertInto(Spans).values({ OrgId: "o", Label: "l" }).onDuplicateKeyUpdate({ set: { Day: "x" } })
+// @ts-expect-error there is no target
+CH.insertInto(Counters).values({ key: "k", count: 1 }).onDuplicateKeyUpdate({ target: ["key"], set: { count: 0 } })
+
 // INSERT ... SELECT: the selected row must fit the table.
 const Daily = CH.table("daily", { OrgId: CH.string, Total: CH.uint64, Note: CH.nullable(CH.string) })
 const Source = CH.table("source", { OrgId: CH.string, Ms: CH.uint64, Label: CH.string })

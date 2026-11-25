@@ -9,9 +9,9 @@
 
 import { compiled, compiledUnsafe, fail } from "./failure"
 import { CHFloatResult, CHNumber, columnSqlName, custom, dateTime, dateTime64, type CHType, type ColumnDefs } from "./types"
-import type { CHQuery, CHQueryState, NeedsSelect } from "./query"
+import type { CHQuery, CHQueryState, ColumnAccessor, NeedsSelect } from "./query"
 import type { CHUnionQuery } from "./union"
-import { isExcludedSet, isInsert, type AnyInsert, type CHInsert, type ConflictTarget, type ExcludedSet } from "./insert"
+import { isExcludedSet, isInsert, type AnyInsert, type CHInsert, type ConflictClause, type ConflictTarget, type ExcludedSet } from "./insert"
 import { isDelete, isUpdate, type CHDelete, type CHUpdate } from "./update"
 import type { Table } from "./table"
 import { createColumnAccessor, createQualifiedColumnAccessor, createJoinedColumnAccessor, sourceAlias } from "./query"
@@ -19,6 +19,8 @@ import {
 	aliased,
 	columnTypeOf,
 	isExprLike,
+	makeColumnRef,
+	makeExpr,
 	type Condition,
 	type DialectSatisfied,
 	type Expr,
@@ -1942,10 +1944,13 @@ const onConflictClause = (
 	const { table, conflict } = insert._state
 	if (conflict === undefined) return ""
 	const where = `insertInto(${table.name})`
+	if (conflict.action === "duplicateKeyUpdate") return onDuplicateKeyClause(insert, conflict, cell, wrote, columns)
 	const dialect = currentDialect()
 	if (dialect.clauses.onConflict !== true) {
 		return fail(new QueryBuilderDefect({
-			message: `${where}: onConflict has no meaning for the ${dialect.name} dialect, which has no ON CONFLICT clause`,
+			message: `${where}: onConflict has no meaning for the ${dialect.name} dialect, which has no ON CONFLICT clause${
+				dialect.clauses.onDuplicateKey === undefined ? "" : "; use onDuplicateKeyUpdate"
+			}`,
 		}), "")
 	}
 
@@ -1982,7 +1987,7 @@ const onConflictClause = (
 		typeof conflict.set === "function"
 			? conflict.set(existing, excluded)
 			: isExcludedSet(conflict.set)
-				? excludedSetRecord(table, conflict.set, excluded, columns, conflict.target, where)
+				? excludedSetRecord(table, conflict.set, excluded, columns, targetColumnsOf(conflict.target), where)
 				: conflict.set
 	// `col = excluded.col` writes the value the rows already gave the column, so
 	// it adds nothing to the tenant evidence the rows hold.
@@ -1997,14 +2002,123 @@ const onConflictClause = (
 	}`
 }
 
+/** The name the proposed row goes by: Postgres's and SQLite's own, and MySQL's row alias. */
+const PROPOSED_ROW = "excluded"
+
 /**
- * The row proposed for insertion, as `onConflictDoUpdate`'s SET and WHERE
- * read it. Postgres (and SQLite) write `excluded."col"`. A dialect that reads
- * it otherwise, such as MySQL's `VALUES(col)`, changes only this accessor:
- * the callback form and `excluded` / `excludedAll` all go through it.
+ * The row proposed for insertion, as `onConflictDoUpdate`'s and
+ * `onDuplicateKeyUpdate`'s SET read it. Postgres, SQLite and MySQL write
+ * `excluded.col`; MariaDB reads it as `VALUES(col)`. The callback form and
+ * `excluded` / `excludedAll` all go through this accessor.
  */
-const proposedRowAccessor = (table: Table<string, ColumnDefs>) =>
-	createQualifiedColumnAccessor("excluded", table.tenantColumn, table.columns)
+const proposedRowAccessor = (table: Table<string, ColumnDefs>, style: "qualified" | "valuesFunction" = "qualified"): ColumnAccessor<any, any> =>
+	style === "qualified" ? createQualifiedColumnAccessor(PROPOSED_ROW, table.tenantColumn, table.columns) : valuesFunctionAccessor(table.columns)
+
+/**
+ * MariaDB's proposed row: `VALUES(col)` for each column, typed as the column,
+ * so the callback form can compute with it.
+ */
+const valuesFunctionAccessor = (columns: ColumnDefs): ColumnAccessor<any, any> => {
+	const cache = new Map<string, Expr<unknown>>()
+	return new Proxy<ColumnAccessor<any, any>>({} as ColumnAccessor<any, any>, {
+		get: (_target, prop) => {
+			if (typeof prop !== "string" || !Object.hasOwn(columns, prop)) return undefined
+			let expr = cache.get(prop)
+			if (expr === undefined) {
+				const column = makeColumnRef(prop, undefined, undefined, columns[prop])
+				expr = makeExpr(known(() => `VALUES(${compileSqlFragment(column.toFragment())})`), columns[prop]!.schema)
+				cache.set(prop, expr)
+			}
+			return expr
+		},
+	})
+}
+
+/** A column target's columns, which are equal in the existing and proposed rows. */
+const targetColumnsOf = (target: ConflictTarget<any> | undefined): ReadonlyArray<string> =>
+	target !== undefined && !("constraint" in target) ? target : []
+
+/**
+ * The keys of the table's declared primary key, read from its DDL (a
+ * `MySQL.table` with `primaryKey`); none for an external table.
+ */
+const primaryKeyColumnsOf = (table: Table<string, ColumnDefs>): ReadonlyArray<string> => {
+	const ddl = (table as { readonly ddl?: { readonly table?: { readonly primaryKey?: { readonly columns: ReadonlyArray<string> } | null } } }).ddl
+	const declared = ddl?.table?.primaryKey?.columns
+	if (declared === undefined) return []
+	return Object.keys(table.columns).filter((column) => declared.includes(columnSqlName(table.columns, column)))
+}
+
+/**
+ * The proposed row, refusing a column the insert does not write: MySQL's row
+ * alias has no such column (a server error), and MariaDB's `VALUES(col)` of
+ * one is NULL, silently.
+ */
+const writtenOnly = (
+	accessor: ColumnAccessor<any, any>,
+	table: Table<string, ColumnDefs>,
+	written: ReadonlyArray<string>,
+	where: string,
+): ColumnAccessor<any, any> =>
+	new Proxy(accessor, {
+		get: (target, prop, receiver) => {
+			const value: unknown = Reflect.get(target, prop, receiver)
+			if (typeof prop === "string" && Object.hasOwn(table.columns, prop) && !written.includes(prop)) {
+				return fail(new QueryBuilderError({
+					code: "InvalidArguments",
+					message: `${where}: onDuplicateKeyUpdate reads ${JSON.stringify(prop)} of the proposed row, which the insert does not write`,
+				}), value)
+			}
+			return value
+		},
+	})
+
+/**
+ * MySQL's and MariaDB's `ON DUPLICATE KEY UPDATE`. MySQL names the VALUES rows
+ * with a row alias (8.0.19+; it deprecates `VALUES(col)`); MariaDB has no row
+ * alias and reads `VALUES(col)`. `$` is the existing row, qualified with the
+ * table name. `excludedAll` leaves out the declared primary key: the conflict
+ * may have been on another unique key, where copying the proposed row's key
+ * would change the existing row's.
+ */
+const onDuplicateKeyClause = (
+	insert: CHInsert<any, any, any, any>,
+	conflict: Extract<ConflictClause, { readonly action: "duplicateKeyUpdate" }>,
+	cell: (column: string, value: unknown, context: string) => string,
+	wrote: (column: string, value: unknown, sql: string) => void,
+	columns: ReadonlyArray<string>,
+): string => {
+	const { table } = insert._state
+	const where = `insertInto(${table.name})`
+	const dialect = currentDialect()
+	const style = dialect.clauses.onDuplicateKey
+	if (style === undefined) {
+		return fail(new QueryBuilderDefect({
+			message: `${where}: onDuplicateKeyUpdate has no meaning for the ${dialect.name} dialect, which has no ON DUPLICATE KEY UPDATE clause${
+				dialect.clauses.onConflict === true ? "; use onConflictDoUpdate" : ""
+			}`,
+		}), "")
+	}
+	if (insert._state.selectQuery !== undefined) {
+		return fail(new QueryBuilderDefect({ message: `${where}: onDuplicateKeyUpdate takes values() rows, not select()` }), "")
+	}
+	// MySQL compares table aliases without case on some platforms.
+	if (style === "rowAlias" && table.name.split(".").at(-1)?.toLowerCase() === PROPOSED_ROW) {
+		return fail(new QueryBuilderDefect({
+			message: `${where}: onDuplicateKeyUpdate names the proposed row ${PROPOSED_ROW}, which is also this table's name`,
+		}), "")
+	}
+	const existing = createQualifiedColumnAccessor(table.name, table.tenantColumn, table.columns)
+	const excluded = writtenOnly(proposedRowAccessor(table, style === "rowAlias" ? "qualified" : "valuesFunction"), table, columns, where)
+	const set =
+		typeof conflict.set === "function"
+			? conflict.set(existing, excluded)
+			: isExcludedSet(conflict.set)
+				? excludedSetRecord(table, conflict.set, excluded, columns, primaryKeyColumnsOf(table), where)
+				: conflict.set
+	const assignments = setAssignments(table, set as Record<string, unknown>, cell, wrote, where, "onDuplicateKeyUpdate")
+	return `${style === "rowAlias" ? ` AS ${quoteIdent(PROPOSED_ROW)}` : ""}\nON DUPLICATE KEY UPDATE ${assignments.join(", ")}`
+}
 
 /**
  * The SET record of `excluded(columns)` / `excludedAll(except)`. A column
@@ -2015,7 +2129,8 @@ const excludedSetRecord = (
 	set: ExcludedSet,
 	excluded: Record<string, unknown>,
 	written: ReadonlyArray<string>,
-	target: ConflictTarget<any> | undefined,
+	/** Columns `excludedAll` leaves out besides its exceptions. */
+	skipped: ReadonlyArray<string>,
 	where: string,
 ): Record<string, unknown> => {
 	// Checked here, not in setAssignments: a mistyped exception would otherwise widen the SET.
@@ -2026,19 +2141,15 @@ const excludedSetRecord = (
 			message: `${where}: excludedAll excepts ${JSON.stringify(unknown)}, which is not a column of the table`,
 		}), {})
 	}
-	const columns = set._tag === "ExcludedColumns" ? set.columns : allButSkipped(written, set.except, target)
+	const columns = set._tag === "ExcludedColumns" ? set.columns : allButSkipped(written, [...set.except, ...skipped])
 	return Object.fromEntries(
 		columns.map((column) => [column, Object.hasOwn(table.columns, column) ? excluded[column] : null]),
 	)
 }
 
-/** `excludedAll`'s columns. The target's are equal in both rows, so setting them changes nothing. */
-const allButSkipped = (
-	written: ReadonlyArray<string>,
-	except: ReadonlyArray<string>,
-	target: ConflictTarget<any> | undefined,
-): ReadonlyArray<string> => {
-	const skip = new Set<string>([...except, ...(target !== undefined && !("constraint" in target) ? target : [])])
+/** `excludedAll`'s columns: those the insert writes, but the skipped ones. */
+const allButSkipped = (written: ReadonlyArray<string>, skipped: ReadonlyArray<string>): ReadonlyArray<string> => {
+	const skip = new Set<string>(skipped)
 	return written.filter((column) => !skip.has(column))
 }
 
@@ -2345,6 +2456,9 @@ function compileInsert(insert: CHInsert<any, any, any, any>, params: Record<stri
 				? "single-tenant"
 				: "cross-tenant"
 	const conflict = insert._state.conflict
+	// ON DUPLICATE KEY UPDATE fires on any unique key, which need not hold the
+	// tenant column, and has no WHERE: it can update another tenant's row.
+	if (tenant !== undefined && conflict?.action === "duplicateKeyUpdate") tenantScope = "cross-tenant"
 	if (tenant !== undefined && tenantScope === "single-tenant" && conflict?.action === "update") {
 		const bound = [...bounds][0]!
 		const existingColumn = `${table.name}.${tenant}`

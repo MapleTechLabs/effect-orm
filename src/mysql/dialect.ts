@@ -129,6 +129,7 @@ export const mysqlDialect: Dialect<"mysql"> = {
 		selectedNumberCast: { integer: "SIGNED", float: "DOUBLE" },
 		returning: false,
 		onConflict: false,
+		onDuplicateKey: "rowAlias",
 		defaultInValues: true,
 		distinctOn: false,
 		fromlessSelect: "DUAL",
@@ -152,6 +153,8 @@ export const mariadbDialect: Dialect<"mysql"> = {
 	clauses: {
 		...mysqlDialect.clauses,
 		locking: { strengths: ["UPDATE", "SHARE"], of: false, shareSyntax: "LOCK IN SHARE MODE" },
+		// MariaDB has no row alias on VALUES; its SET reads the proposed row with VALUES(col).
+		onDuplicateKey: "valuesFunction",
 		// A parenthesized branch cannot start with WITH; a derived table can.
 		parenthesizeUnionBranches: false,
 		wrapUnionBranches: true,

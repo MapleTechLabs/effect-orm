@@ -226,10 +226,29 @@ export interface OnConflictDoUpdate<
 	readonly where?: ($: ColumnAccessor<Cols>, excluded: ColumnAccessor<Cols>) => Condition<W>
 }
 
+export interface OnDuplicateKeyUpdate<
+	Cols extends ColumnDefs,
+	Computed extends string = never,
+	S extends ConflictSet<Cols, Computed> = ConflictSet<Cols, Computed>,
+> {
+	/**
+	 * The columns to write into the existing row. As a callback, `$` is the
+	 * existing row and `excluded` the row that was proposed for insertion:
+	 * `(($, excluded) => ({ count: $.count.add(excluded.count) }))`. Or
+	 * `excluded(columns)` / `excludedAll(except)`, to copy columns from the
+	 * proposed row; `excludedAll` leaves out the table's declared primary key.
+	 */
+	readonly set:
+		| ExcludedSet<WritableColumns<Cols, Computed>>
+		| (S & OnlyColumns<S, WritableColumns<Cols, Computed>>)
+		| (($: ColumnAccessor<Cols>, excluded: ColumnAccessor<Cols>) => S & OnlyColumns<S, WritableColumns<Cols, Computed>>)
+}
+
 /** @internal — what an insert does on conflict. */
 export type ConflictClause =
 	| ({ readonly action: "nothing" } & OnConflictDoNothing<any>)
 	| ({ readonly action: "update" } & OnConflictDoUpdate<any, any, any, any>)
+	| ({ readonly action: "duplicateKeyUpdate" } & OnDuplicateKeyUpdate<any, any, any>)
 
 /** @internal — runtime insert state */
 export interface CHInsertState {
@@ -242,7 +261,7 @@ export interface CHInsertState {
 	readonly settings?: Readonly<Record<string, InsertSettingValue>>
 	/** Set by `returning`: the RETURNING list, as a select callback. */
 	readonly returningFn?: ($: any) => Record<string, Expr<any>>
-	/** Set by `onConflictDoNothing` / `onConflictDoUpdate`. */
+	/** Set by `onConflictDoNothing` / `onConflictDoUpdate` / `onDuplicateKeyUpdate`. */
 	readonly conflict?: ConflictClause
 	/** Set by `crossTenant()`. */
 	readonly crossTenant?: boolean
@@ -314,18 +333,30 @@ export interface CHInsert<
 
 	/**
 	 * `ON CONFLICT DO NOTHING`: skip a row that conflicts. With `returning`, a
-	 * skipped row returns nothing. Postgres only; replaces any earlier
-	 * `onConflict*`.
+	 * skipped row returns nothing. Postgres and SQLite; replaces any earlier
+	 * `onConflict*` or `onDuplicateKeyUpdate`.
 	 */
 	onConflictDoNothing(options?: OnConflictDoNothing<Cols>): CHInsert<Cols, Defaulted, Computed, Output, Params, Req>
 
 	/**
-	 * `ON CONFLICT (target) DO UPDATE SET ...`: an upsert. Postgres only;
-	 * replaces any earlier `onConflict*`.
+	 * `ON CONFLICT (target) DO UPDATE SET ...`: an upsert. Postgres and SQLite
+	 * (MySQL: `onDuplicateKeyUpdate`); replaces any earlier `onConflict*` or
+	 * `onDuplicateKeyUpdate`.
 	 */
 	onConflictDoUpdate<S extends ConflictSet<Cols, Computed>, W = never>(
 		options: OnConflictDoUpdate<Cols, Computed, S, W>,
 	): CHInsert<Cols, Defaulted, Computed, Output, Params | ParamsIn<S[keyof S]> | W, Req>
+
+	/**
+	 * `ON DUPLICATE KEY UPDATE SET ...`: MySQL's and MariaDB's upsert. It fires
+	 * when a row conflicts on any unique key, the primary key or another, so
+	 * there is no target; nor is there a WHERE. The assignments run left to
+	 * right, and a later one reads the existing row as the earlier ones left it.
+	 * VALUES rows only, not `select`. Replaces any earlier `onConflict*`.
+	 */
+	onDuplicateKeyUpdate<S extends ConflictSet<Cols, Computed>>(
+		options: OnDuplicateKeyUpdate<Cols, Computed, S>,
+	): CHInsert<Cols, Defaulted, Computed, Output, Params | ParamsIn<S[keyof S]>, Req>
 
 	/**
 	 * Declare that this insert, such as a batch of rows from many tenants, deliberately spans tenants, forcing
@@ -376,6 +407,8 @@ const makeInsert = <Cols extends ColumnDefs, Defaulted extends string, Computed 
 	onConflictDoNothing: (options = {}) => makeInsert({ ...state, conflict: { action: "nothing", ...options } }),
 	onConflictDoUpdate: (options: OnConflictDoUpdate<any, any, any, any>) =>
 		makeInsert({ ...state, conflict: { action: "update", ...options } }),
+	onDuplicateKeyUpdate: (options: OnDuplicateKeyUpdate<any, any, any>) =>
+		makeInsert({ ...state, conflict: { action: "duplicateKeyUpdate", set: options.set } }),
 	crossTenant: () => makeInsert({ ...state, crossTenant: true }),
 })
 

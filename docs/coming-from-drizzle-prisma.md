@@ -5,7 +5,7 @@ use Postgres. SQLite and Cloudflare D1 (`@maple-dev/effect-orm/sqlite`) have the
 `RETURNING` and `ON CONFLICT`; where a row differs on them, it says so, and
 [SQLite and Cloudflare D1](./sqlite.md) has the details. MySQL and MariaDB
 (`@maple-dev/effect-orm/mysql`) have the same builder too, but no `RETURNING` and no
-`ON CONFLICT`; see [MySQL and MariaDB](./mysql.md). Each row says where effect-orm has the
+`ON CONFLICT` (it has `onDuplicateKeyUpdate`); see [MySQL and MariaDB](./mysql.md). Each row says where effect-orm has the
 operation today.
 
 Two things change for every operation:
@@ -26,7 +26,7 @@ Two things change for every operation:
 | `_count: { select: { posts: true } }` | `db.$count(posts, eq(...))` | `_count: { posts: true }` in `Db.findMany` ([Count relations](./relations.md#count-relations)); or `leftJoin` + `PG.countDistinct` + `groupBy` |
 | `where: { posts: { some / none / every } }` | `exists(...)` | `r.posts.some(where)`, `none`, `every` in a `findMany` `where` ([Filter by relations](./relations.md#filter-by-relations)); or `PG.exists`, `PG.inSubquery` ([Subquery conditions](./joins-and-subqueries.md#subquery-conditions)) |
 | `create`, `createMany({ data })` | `db.insert(t).values([...])` | `PG.insertInto(T).values(row or rows)`, `.returning()` ([Inserting rows](./inserts.md)); MySQL has no `RETURNING`: `Db.runWrite` returns the `insertId` and `affectedRows` Drizzle's `$returningId()` and result header gave ([Write results](./database.md#write-results)) |
-| `upsert` | `.onConflictDoUpdate({ target, set })` | `.onConflictDoUpdate({ target, set })`; `set: PG.excluded([...])` or `PG.excludedAll()` copies the proposed row ([On conflict](./inserts.md#on-conflict), [recipe](./recipes.md#insert-or-update-a-row)). Postgres, SQLite and D1; not MySQL |
+| `upsert` | `.onConflictDoUpdate({ target, set })`; MySQL `.onDuplicateKeyUpdate({ set })` | `.onConflictDoUpdate({ target, set })`; `set: PG.excluded([...])` or `PG.excludedAll()` copies the proposed row ([On conflict](./inserts.md#on-conflict), [recipe](./recipes.md#insert-or-update-a-row)). Postgres, SQLite and D1. On MySQL and MariaDB, `.onDuplicateKeyUpdate({ set })` with the same `set` forms; it fires on any unique key ([On duplicate key update](./inserts.md#on-duplicate-key-update)) |
 | `update`, `updateMany` | `db.update(t).set().where()` | `PG.update(T).set(...).where(...)`; a write with no `where` or `allRows()` does not compile ([Updating and deleting](./updates-and-deletes.md)) |
 | `delete`, `deleteMany` | `db.delete(t).where()` | `PG.deleteFrom(T).where(...)` |
 | `$transaction(async (tx) => ...)` | `db.transaction(async (tx) => ...)` | `effect.pipe(Db.transaction())`; no `tx` handle, nesting is a savepoint ([Transactions](./database.md#transactions)). D1 has no interactive transactions: there `Db.transaction` fails with `TransactionUnsupported` |

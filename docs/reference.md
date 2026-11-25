@@ -55,10 +55,10 @@ Everything in this section is exported, identically, from `/clickhouse`, `/postg
 | `update`     | `(table) => CHUpdateStart`, then `CHUpdate`: `.from(source, alias)` (before `set`, once, giving a `CHUpdateFromStart`; Postgres and SQLite, `UpdateFromClause` elsewhere), `.set(record \| fn)`, `.where(fn)` or `.allRows()`, `.returning(...)`, `.settings(record)`. See [Updating and deleting](./updates-and-deletes.md) |
 | `deleteFrom` | `(table) => CHDelete`: `.where(fn)` or `.allRows()`, `.returning(...)`, `.settings(record)` |
 | `tableSchemas` | `(table) => TableSchemas`: the `select`, `insert`, `update`, `json`, `jsonCreate` and `jsonUpdate` row Schemas. See [Row Schemas](./tables-and-types.md#row-schemas) |
-| `insertInto` | `(table) => CHInsertStart`, then `CHInsert`; `.values(row \| rows)` or `.select(query)` sets its rows, `.settings(record)` ClickHouse `SETTINGS`, `.returning(...)` the RETURNING list, `.onConflictDoNothing(options?)` / `.onConflictDoUpdate(options)` the ON CONFLICT clause (Postgres and SQLite). See [Inserting rows](./inserts.md) |
+| `insertInto` | `(table) => CHInsertStart`, then `CHInsert`; `.values(row \| rows)` or `.select(query)` sets its rows, `.settings(record)` ClickHouse `SETTINGS`, `.returning(...)` the RETURNING list, `.onConflictDoNothing(options?)` / `.onConflictDoUpdate(options)` the ON CONFLICT clause (Postgres and SQLite), `.onDuplicateKeyUpdate({ set })` the ON DUPLICATE KEY UPDATE clause (MySQL and MariaDB). See [Inserting rows](./inserts.md) |
 | `fillDefaults` | `(write) => Effect<write, never, RequirementsOf<write>>`: runs the `defaultFn` / `onUpdate` Effects of an insert's or update's table into its rows or SET. `Database.run` calls it; call it before `compile` when you compile a write yourself. See [client-side defaults](./inserts.md#client-side-defaults) |
-| `excluded`    | `(columns) => ExcludedColumns`: an `onConflictDoUpdate` `set` that copies the named columns from the proposed row. See [On conflict](./inserts.md#on-conflict) |
-| `excludedAll` | `(except?) => ExcludedAll`: an `onConflictDoUpdate` `set` that copies every column the insert writes, except these and the target's |
+| `excluded`    | `(columns) => ExcludedColumns`: an `onConflictDoUpdate` or `onDuplicateKeyUpdate` `set` that copies the named columns from the proposed row. See [On conflict](./inserts.md#on-conflict) |
+| `excludedAll` | `(except?) => ExcludedAll`: an `onConflictDoUpdate` or `onDuplicateKeyUpdate` `set` that copies every column the insert writes, except these and the target's (`onDuplicateKeyUpdate`: the declared primary key's) |
 
 Tables come from the dialect's `table`: [`CH.table`](#tables-and-ddl),
 [`PG.table`](#tables-and-ddl-1), [`SQLite.table`](#tables-and-ddl-2) or
@@ -266,7 +266,7 @@ one), `Expr`, `ColumnRef`, `Condition`, `Comparable` (what a value of a type may
 against), `MapValueOf`, `Subquery`, `ParamMarker`, `ParamKind`, `CHQuery`, `CHUnionQuery`,
 `CHInsert`, `CHInsertStart`, `CHUpdate`, `CHUpdateStart`, `CHDelete`, `CHWrite`, `InsertValue`,
 `InsertSelectMisfits`, `InsertSelectMissing`, `InsertSettingValue`, `ConflictTarget`,
-`ConflictSet`, `ExcludedSet`, `ExcludedColumns`, `ExcludedAll`, `OnConflictDoNothing`, `OnConflictDoUpdate`, `ColumnAccessor`,
+`ConflictSet`, `ExcludedSet`, `ExcludedColumns`, `ExcludedAll`, `OnConflictDoNothing`, `OnConflictDoUpdate`, `OnDuplicateKeyUpdate`, `ColumnAccessor`,
 `JoinedColumnAccessor`, `JoinOnCallback`, `LockOptions`, `CompiledQuery`, `CompiledQueryInput`,
 `CompiledQueryRowSchema`, `RowSchemaMismatch`, `TenantScope`, `Dialect`, `DialectClauses`,
 `DialectTransactions`, `IsolationLevel`, `TransactionSettings`, `ParamStyle`, `FnResult`.

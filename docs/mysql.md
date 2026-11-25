@@ -176,6 +176,46 @@ client's `withTransaction`. `isolationLevel` (`read committed`, `repeatable read
 several statements in one; `@effect/sql-mysql2` does (it sets `multipleStatements`). An access
 mode alone is one statement. `deferrable` is refused.
 
+## Upsert with `onDuplicateKeyUpdate`
+
+MySQL has no `ON CONFLICT`; its upsert is `INSERT ... ON DUPLICATE KEY UPDATE`, which
+`onDuplicateKeyUpdate({ set })` writes. `set` is a record, a callback of the existing row and the
+proposed one, `excluded(columns)` or `excludedAll(except?)`, as for `onConflictDoUpdate`:
+
+```ts title="mysql-upsert.ts"
+import * as MySQL from "@maple-dev/effect-orm/mysql"
+
+export const Counters = MySQL.table("counters", {
+	columns: { id: MySQL.bigint, key: MySQL.varchar(32), count: MySQL.int, note: MySQL.text },
+	primaryKey: ["id"],
+})
+
+export const bump = MySQL.insertInto(Counters)
+	.values({ id: 1, key: "a", count: MySQL.param.int("n"), note: "x" })
+	.onDuplicateKeyUpdate({ set: ($, excluded) => ({ count: $.count.add(excluded.count) }) })
+
+export const mysql = MySQL.compileUnsafe(bump, { n: 1 })
+// INSERT INTO `counters` (`id`, `key`, `count`, `note`)
+// VALUES (?, ?, ?, ?) AS `excluded`
+// ON DUPLICATE KEY UPDATE `count` = `counters`.`count` + `excluded`.`count`
+
+export const mariadb = MySQL.compileUnsafe(bump, { n: 1 }, { dialect: MySQL.mariadbDialect })
+// ... ON DUPLICATE KEY UPDATE `count` = `counters`.`count` + VALUES(`count`)
+```
+
+- It fires on a conflict with **any** unique key, the primary key or a UNIQUE index, and has no
+  target and no `where`.
+- MySQL reads the proposed row through the row alias `VALUES (...) AS excluded`, which needs
+  MySQL 8.0.19 or later; MariaDB reads `VALUES(col)`.
+- `excludedAll` leaves out the declared `primaryKey`, since the conflict may be on another key.
+  On an `external` table, which declares none, put the key in `except`.
+- Assignments run left to right; a later one reads the values the earlier ones wrote.
+- An inserted row counts as 1 affected row, an updated one as 2, an unchanged one as 0.
+- VALUES rows only: with `select`, compiling is a defect. On a table with a `tenantColumn` it is
+  `"cross-tenant"`, since another tenant's row can hold the duplicate key.
+
+See [On duplicate key update](./inserts.md#on-duplicate-key-update).
+
 ## Types
 
 | Type | SQL | Decodes to |
@@ -245,7 +285,8 @@ another dialect is refused in the type and at compile time.
   or `CAST`.
 - **Not supported, and refused at compile time:** `RETURNING` (read an `AUTO_INCREMENT` key and
   the affected rows with `Db.runWrite`, [Write results](./database.md#write-results)), `ON CONFLICT` (MySQL's
-  `ON DUPLICATE KEY UPDATE` reacts to every unique key, not one target), `DISTINCT ON`, `ILIKE`,
+  `ON DUPLICATE KEY UPDATE` reacts to every unique key, not one target: use
+  [`onDuplicateKeyUpdate`](#upsert-with-onduplicatekeyupdate)), `DISTINCT ON`, `ILIKE`,
   `FOR NO KEY UPDATE` and `FOR KEY SHARE`. MariaDB has no lock `OF` at all.
 - **Row locks:** `forUpdate` and `forShare` with `skipLocked`, `noWait` and, on MySQL, `of`.
   MariaDB writes a shared lock as `LOCK IN SHARE MODE`.
